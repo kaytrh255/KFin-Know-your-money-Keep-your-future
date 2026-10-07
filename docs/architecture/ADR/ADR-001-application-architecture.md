@@ -2,7 +2,8 @@
 
 **Status:** Proposed<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Unassigned<br>
+**Decision owners:** Architecture Owner; Engineering Lead; Security Owner; Operations Owner<br>
+**Exact blocker:** `SPEC-GOV-01` — no reviewed vertical-spike evidence yet proves same-origin routing, cookie/CSRF behavior, atomic domain write + outbox + worker claim, build/deploy ergonomics, and enforceable module boundaries; the Fastify/Vite choice therefore remains a proposal.<br>
 **Related:** [Architecture specification](../ARCHITECTURE.md)
 
 ## Context

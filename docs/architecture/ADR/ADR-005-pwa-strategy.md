@@ -2,7 +2,8 @@
 
 **Status:** Proposed<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Unassigned<br>
+**Decision owners:** Web/PWA Owner; Security Owner; UX/Accessibility Owner<br>
+**Exact blocker:** `SPEC-GOV-01` — no approved browser matrix or retained install/update/offline/logout, private-cache inspection, form-interruption, and service-worker security evidence exists. The approved MVP scope fixes the installable-PWA direction but does not constitute this validation.<br>
 **Related:** [UX specification](../../ux/UX-SPEC.md), [ADR-006](ADR-006-mobile-strategy.md)
 
 ## Context

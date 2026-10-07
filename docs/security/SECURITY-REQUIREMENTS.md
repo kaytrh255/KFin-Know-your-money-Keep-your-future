@@ -1,7 +1,7 @@
 # KFin Security Requirements
 
 **Status:** Draft — review required<br>
-**Version:** 0.2<br>
+**Version:** 0.3<br>
 **Applies to:** Web/PWA, API, worker, PostgreSQL, edge, CI/CD, providers, operator access<br>
 **Risk posture:** Sensitive personal and financial data; fail closed for identity, authorization, and financial writes
 
@@ -83,6 +83,7 @@ Financial values and note text MUST NOT be sent to session replay, advertising, 
 | SEC-AUTH-12 | MFA MUST NOT be improvised into MVP; schema/interfaces MAY preserve an extension point and a future specification MUST threat-model enrollment/recovery. |
 | SEC-AUTH-13 | Plaintext OTP/reset secrets MUST NOT be stored in the ordinary outbox. Under the proposed MVP path they exist only in request-process memory for immediate provider submission after digest-only challenge commit; any asynchronous encrypted-envelope alternative requires a separate key-management review. |
 | SEC-AUTH-14 | Private Beta invitation codes MUST be high-entropy, purpose-bound, expiring, single-use, digest-only at rest, abuse-limited, and atomically consumed with pending-account creation. Invalid/expired/used/wrong-email states MUST remain generic externally. |
+| SEC-AUTH-15 | Every Private Beta registration MUST present and consume a valid invitation code. Email binding may restrict a code, but a server-side email allowlist MUST NOT grant admission or bypass code validation. |
 
 Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldown, target/IP hourly and daily caps—is pending validation and tuning. Rate-limit messages remain generic.
 
@@ -125,8 +126,6 @@ Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldo
 | SEC-APP-04 | Financial values MUST use checked integer arithmetic, currency consistency, positive magnitude rules, and overflow bounds. Client-supplied aggregate/balance is never authoritative. |
 | SEC-APP-05 | Financial create/confirm requests MUST support idempotency; same key/different payload is rejected and uncertain response can be recovered safely. |
 | SEC-APP-06 | Linked multi-record financial/security actions MUST use database transactions and version/concurrency checks. |
-| SEC-APP-14 | Balance-snapshot identity/effect MUST be server validated. Clients MUST NOT arbitrarily mark a transaction historical/current or attach it to another user/segment. Snapshot creation racing with transaction creation MUST serialize or fail safely. |
-| SEC-APP-15 | Historical-only transactions MUST never enter current-balance arithmetic; old snapshot segments MUST not be replayed into the latest balance. Snapshot/effect corrections require consequence preview, authorization, version checks, and audit. |
 | SEC-APP-07 | API request bodies, headers, query strings, uploads (if ever added), result pages, and error messages MUST have bounded sizes. File upload is not in MVP. |
 | SEC-APP-08 | API MUST use stable safe errors and correlation IDs. Production MUST NOT expose stack trace, SQL, filesystem, secret, provider credential, or another user’s data. |
 | SEC-APP-09 | Collection APIs MUST use bounded pagination; report/date ranges and occurrence generation MUST have hard limits. |
@@ -134,6 +133,11 @@ Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldo
 | SEC-APP-11 | Content types MUST be explicit; unexpected/mixed content is rejected; JSON parser/prototype pollution risks are tested. |
 | SEC-APP-12 | Redirects and return URLs MUST be local/allowlisted to prevent open redirect and secret leakage. |
 | SEC-APP-13 | Email/template output MUST escape untrusted content and prohibit header injection. User notes are not included by default. |
+| SEC-APP-14 | Balance-snapshot identity/effect MUST be server validated. Clients MUST NOT arbitrarily mark a transaction historical/current or attach it to another user/segment. Snapshot creation racing with transaction creation MUST serialize or fail safely. |
+| SEC-APP-15 | Historical-only transactions MUST never enter current-balance arithmetic; old snapshot segments MUST not be replayed into the latest balance. Snapshot/effect corrections require consequence preview, authorization, version checks, and audit. Cross-segment correction behavior remains blocked by `SPEC-FIN-01`; racing serialization remains blocked by `SPEC-FIN-02`. |
+| SEC-APP-16 | Safe-to-spend MUST use the authoritative latest-snapshot-segment balance, eligible unpaid outgoing occurrences through current user-local month-end, and active goal current amounts only. Projected income inclusion and double subtraction of already-confirmed outgoings are forbidden; negative results remain signed. |
+| SEC-APP-17 | Debt processing MUST NOT infer principal, interest, fee, accrued interest, amortization, payoff, or lender outstanding. Unsafe historical payment correction/recomputation MUST be blocked under `SPEC-DEBT-01`, not approximated. |
+| SEC-APP-18 | Reminder workers MUST recheck current occurrence state and enforce occurrence + stage uniqueness. App lifecycle cannot trigger reminders or financial state; recovery from downtime/late creation/timezone change permits no multi-stage burst and remains subject to `SPEC-REM-01` selection policy. |
 
 ## 10. Browser security headers
 

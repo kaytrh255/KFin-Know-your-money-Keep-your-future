@@ -1,8 +1,9 @@
 # ADR-002 — Authentication Strategy
 
-**Status:** Proposed<br>
+**Status:** Blocked<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Unassigned<br>
+**Decision owners:** Product Owner; Security Owner; Architecture Owner<br>
+**Exact blocker:** OQ-11’s mandatory single-use expiring invitation-code mechanism is Accepted, and email-allowlist admission is rejected. ADR acceptance remains blocked by `SPEC-AUTH-01` (post-verification session outcome), `SPEC-AUTH-02` (invitation, OTP, password, abuse, and recovery values), and `RC-PROV-01` (email-provider review); required auth race/threat/UX evidence does not exist.<br>
 **Related:** [Security requirements](../../security/SECURITY-REQUIREMENTS.md), [ADR-004](ADR-004-session-management.md)
 
 ## Context
@@ -15,7 +16,7 @@ Private Beta uses expiring, single-use invitation codes and a Vietnamese-first U
 
 Use first-party **verified email + password** authentication with these boundaries:
 
-- Private Beta registration requires a high-entropy, expiring, single-use invitation code stored only as a digest; it may be bound to a normalized recipient email, and invitation consumption plus pending-account creation are atomic.
+- Private Beta registration requires a high-entropy, expiring, single-use invitation code stored only as a digest; it may be bound to a normalized recipient email, and invitation consumption plus pending-account creation are atomic. A server-side email allowlist is not an admission mechanism or fallback.
 - Normalize email consistently while preserving a presentation form.
 - Hash passwords using Argon2id with unique salts and parameters benchmarked to current OWASP guidance on production hardware. Store the encoded hash only.
 - Enforce a reviewed password policy, permit paste/password managers, reject common/known-compromised passwords through a privacy-safe mechanism, and do not force arbitrary periodic password changes.

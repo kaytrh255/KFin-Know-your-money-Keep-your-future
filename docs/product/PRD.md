@@ -2,7 +2,7 @@
 
 **Product:** KFin — Know your money, Keep your future<br>
 **Status:** Draft — review required<br>
-**Version:** 0.2<br>
+**Version:** 0.3<br>
 **Date:** 2026-10-07<br>
 **Target release:** Private Beta, at most 50 real users
 
@@ -98,6 +98,8 @@ Outcome targets are validation goals, not claims that testing has passed.
 | PRD-AUTH-09 | Basic profile settings MUST include display name, locale, timezone, and base currency subject to MVP currency policy. |
 | PRD-AUTH-10 | An identity-verified account-deletion request MUST enter a 7-day cancellable pending state, then invoke the legally approved active-data purge process. The beta request channel remains subject to privacy/legal review. |
 
+OQ-11 is final: the invitation code is mandatory for every Private Beta registration. A server-side email allowlist MUST NOT replace the code or operate as an alternate registration mode.
+
 ### 7.2 Aggregate account, balance snapshots, and transactions
 
 MVP exposes exactly one aggregate liquid-money account per user. Multiple accounts and transfers are not available. Current balance is anchored by an authoritative user-entered snapshot so users may backfill older history without unexpectedly changing the current amount.
@@ -145,9 +147,10 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 |---|---|
 | PRD-DEBT-01 | A debt MUST support name, original principal, current outstanding balance, optional informational annual rate with as-of/source context, expected payment amount/frequency, next due date, status, and payment history. |
 | PRD-DEBT-02 | A debt payment MUST remain due until the user confirms it. Confirmation records cash outflow and any user-provided principal/interest/fee split, visibly identifying a partial/unclassified remainder. If principal or a new lender-reported balance is unavailable, KFin MUST leave outstanding balance unchanged and visibly retain its prior as-of date; it MUST NOT assume the full payment reduced principal. |
-| PRD-DEBT-03 | The product MUST NOT calculate or claim authoritative accrued interest, amortization, payoff date, or lender balance until those methods are separately specified. |
+| PRD-DEBT-03 | The product MUST NOT calculate, allocate, or claim authoritative principal, interest, fee, accrued interest, amortization, payoff date, or lender outstanding. Omitted values and unclassified remainder remain unknown until explicitly supplied. |
 | PRD-DEBT-04 | The product MUST visibly identify upcoming, due-today, and overdue debt obligations. |
-| PRD-DEBT-05 | Users MUST be able to correct a payment while preserving a security/audit event and consistent outstanding balance. |
+| PRD-DEBT-05 | A supported payment correction MUST preserve linked old/new payment and cash-transaction evidence, separately preview cash and outstanding effects, and alter outstanding only from explicit principal or a new lender-reported balance. |
+| PRD-DEBT-06 | Automatic correction/recomputation MUST be unavailable when later outstanding-affecting records, reordered as-of dates, missing prior state, or an inferred component would make the result unsafe. The historical correction/rebase/rejection workflow is blocked by `SPEC-DEBT-01`. |
 
 ### 7.6 Savings goals
 
@@ -185,6 +188,9 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 | PRD-REM-07 | A cash-flow warning MUST identify the relevant month-end window, obligations included, available amount used, shortfall, and calculation time. |
 | PRD-REM-08 | Cash-flow warnings MUST be presented as estimates based on user-entered data, not guarantees or financial advice. |
 | PRD-REM-09 | Schedules MUST support one-off plus every-N-week, every-N-month, and every-N-year patterns. Missing monthly day 29/30/31 MUST use that month’s final local date; daily and arbitrary RRULE patterns are excluded. Yearly 29-February behavior and hard bounds require approval before implementation. |
+| PRD-REM-10 | Reminder evaluation MUST be server-side and independent of whether the Web/PWA is open. Closing or returning to the app MUST NOT replay elapsed stages, create a burst, or alter financial state; the app displays persisted notification state. |
+| PRD-REM-11 | If worker downtime, late occurrence creation, or a timezone change makes multiple stages already elapsed, one recovery evaluation MUST NOT create more than one catch-up notification for that occurrence. The exact single stage, or whether none is emitted, is **BLOCKER `SPEC-REM-01`** for Product Owner decision. |
+| PRD-REM-12 | Before catch-up insertion, the worker MUST recheck current occurrence state and uniqueness. Confirmed, skipped, or cancelled occurrences receive no new payment stage, and delayed app return never creates a notification itself. |
 
 ### 7.9 Dashboard and reporting
 
@@ -196,6 +202,7 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 | PRD-DASH-04 | Users MUST be able to inspect the records behind an aggregate. |
 | PRD-DASH-05 | Charts MUST be limited to those that answer a defined user question; decorative or redundant charts are prohibited. |
 | PRD-DASH-06 | Empty/incomplete data MUST produce honest setup guidance rather than fabricated zero-confidence conclusions. |
+| PRD-DASH-07 | Safe-to-spend MUST equal authoritative current balance minus unpaid outgoing occurrences due through the end of the current user-local calendar month minus current amounts on active savings goals. Projected income MUST be excluded, paid outgoings MUST NOT be double-subtracted, and a negative result MUST NOT be clamped. |
 
 ## 8. Approved financial definitions
 
@@ -207,7 +214,7 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 - **Current balance:** Latest balance-snapshot amount plus posted current-impact inflows minus posted current-impact outflows attached to that snapshot segment.
 - **Monthly income/outflow:** All posted transactions whose user-local occurrence date falls in the selected calendar month, including labelled historical-only records.
 - **Savings reserve:** The current amount manually declared on an active savings goal. It is neither a cash account nor income/expense and is not independently verified.
-- **Safe-to-spend estimate:** Current balance minus unpaid outgoing occurrences due through the end of the current local calendar month minus current amounts on active savings goals. Future income is excluded until received. The UI exposes components, anchor, horizon, as-of time, and any negative result.
+- **Safe-to-spend estimate (`safe_to_spend.v1`):** Authoritative current balance minus unpaid outgoing occurrences due through the end of the current user-local calendar month, including unresolved overdue occurrences, minus current amounts on active savings goals. Projected income is excluded until explicitly received and posted; confirmed outgoings are not double-subtracted. The UI exposes components, anchor, horizon, as-of time, formula version, exclusions, and any unclamped negative result.
 - **Cash-flow warning:** A warning when current balance is below outgoing obligations due through month end. It recalculates after relevant mutation/snapshot change and at least daily.
 
 A snapshot boundary means monthly net movement and current balance may not reconcile through a simple all-history sum. Calculation disclosure MUST explain the anchor and historical-only records.
@@ -269,14 +276,17 @@ OQ-01 through OQ-19 have recorded dispositions in the [Product Decision Log](DEC
 
 The following still require specification review or explicit owner approval; they are not silently resolved by the OQ dispositions:
 
-- post-verification session behavior and approved authentication/session policy values;
-- exact transaction correction/void semantics at and across balance-snapshot boundaries, plus historical debt-payment correction/outstanding recomputation;
-- yearly recurrence behavior for 29 February in a non-leap year, bounded interval/end limits, series-edit semantics, and reminder multi-stage catch-up behavior after downtime/timezone/late creation;
-- which security events are user-visible versus operator-only;
-- legally approved deletion map, independent restore-exclusion register, retained pseudonymous evidence, and user request/cancellation channel;
-- RLS and snapshot/transaction serialization design;
-- RPO/RTO, incident/support ownership, and OQ-17 provider selection at its stated gate;
-- representative scenario validation for snapshot backfill, manual goal reserve, and safe-to-spend.
+- `SPEC-AUTH-01` and `SPEC-AUTH-02`: post-verification session behavior and approved authentication/session policy values;
+- `SPEC-FIN-01` and `SPEC-FIN-02`: exact cross-segment correction/void/link/report semantics and snapshot/transaction serialization/retry behavior, represented by blocked snapshot scenario J;
+- `SPEC-DEBT-01`: historical debt-payment correction/outstanding behavior when later explicit events exist;
+- `SPEC-SCH-01`: yearly 29-February behavior, bounded interval/end limits, and series-edit semantics;
+- `SPEC-REM-01`: which one missed stage, if any, catch-up emits after downtime/timezone/late creation; multi-stage burst remains prohibited;
+- `SPEC-SEC-01`: RLS or accepted compensating controls;
+- `SPEC-SEC-02`: which security events are user-visible versus operator-only, with safe detail/notification/display behavior;
+- `SPEC-DEL-01`: legally approved deletion map, independent restore-exclusion register, retained pseudonymous evidence, and request/cancellation channel;
+- `SPEC-UX-01`: separate visual-prototype, Vietnamese-content, usability, and accessibility evidence;
+- `SPEC-GOV-01`: named accountable approvers and retained validation for `STS-01`–`STS-15`, snapshot A–J, debt, reminder, flow, prototype, and architecture scenarios;
+- RPO/RTO, incident/support ownership, and `RC-PROV-01` provider selection at its stated gate.
 
 ## 14. Approval criteria
 

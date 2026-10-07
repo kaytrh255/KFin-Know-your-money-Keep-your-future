@@ -1,11 +1,11 @@
 # KFin Specification Foundation
 
-**Status:** Draft — updated decisions require cross-document review<br>
-**Version:** 0.2<br>
+**Status:** Draft — Round 1 specification edits complete; owner approval/evidence blocked<br>
+**Version:** 0.3<br>
 **Date:** 2026-10-07<br>
-**Implementation gate:** Closed
+**Implementation gate:** CLOSED
 
-This directory is the specification source of truth for the KFin Private Beta. It describes the intended product, user experience, architecture, security posture, data model, and verification approach. It does **not** authorize implementation. Product decisions OQ-01 through OQ-19 were captured on 2026-10-07; the affected specifications and proposed ADRs must now be reviewed for acceptance.
+This directory is the specification source of truth for the KFin Private Beta. It describes the intended product, user experience, architecture, security posture, data model, and verification approach. It does **not** authorize implementation. Product decisions OQ-01 through OQ-19 were captured on 2026-10-07. Round 1 consistency edits do not constitute owner approval or evidence; Proposed/Blocked ADRs and open blocker decisions must be resolved before acceptance.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are normative unless a section is explicitly labelled as a proposal, assumption, example, or open decision.
 
@@ -23,7 +23,7 @@ The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are no
 | UX | [Screen inventory](ux/SCREEN-INVENTORY.md) | Initial screen map and route proposal |
 | Architecture | [Architecture](architecture/ARCHITECTURE.md) | Proposed stack, modular monolith, runtime and deployment views |
 | Architecture | [Database](architecture/DATABASE.md) | Proposed relational model, invariants, ownership and lifecycle |
-| Architecture | [ADRs](architecture/ADR/README.md) | Proposed architecture decisions awaiting approval |
+| Architecture | [ADRs](architecture/ADR/README.md) | Audited Proposed/Blocked decisions, owner roles, and exact acceptance blockers |
 | Security | [Security requirements](security/SECURITY-REQUIREMENTS.md) | Normative application and operational controls |
 | Security | [Threat model](security/THREAT-MODEL.md) | Assets, boundaries, abuse cases, mitigations and residual risk |
 | Testing | [Test strategy](testing/TEST-STRATEGY.md) | Verification levels, environments, quality gates and evidence |
@@ -58,7 +58,7 @@ The full rationale and consequences are in the [Product Decision Log](product/DE
 | OQ-08 | Accepted | Savings goal current amount is manually maintained; no contribution ledger |
 | OQ-09 | Accepted | Cloudflare + managed PaaS + managed PostgreSQL topology |
 | OQ-10 | Accepted baseline | 7-day deletion cancellation grace, then active-system purge; legal review required |
-| OQ-11 | Accepted | Single-use expiring invitation codes |
+| OQ-11 | Accepted | Single-use expiring invitation codes; no server-side email-allowlist mode |
 | OQ-12 | Accepted | Eligible outgoing-obligation reminder evaluation at 09:00 user-local time |
 | OQ-13 | Accepted | Balance snapshot anchors; pre-snapshot backfill is historical-only for balance |
 | OQ-14 | Accepted | One-off plus interval weekly/monthly/yearly; short month uses last day |
@@ -70,27 +70,38 @@ The full rationale and consequences are in the [Product Decision Log](product/DE
 
 ## Review and implementation gate
 
+**Implementation Gate: CLOSED**
+
 The OQ review is complete, but implementation remains blocked until:
 
 1. all affected specifications are consistent with the decision log;
 2. PRD, MVP scope, UX, architecture, database, security, and test specifications are formally reviewed;
-3. relevant proposed ADRs are accepted;
-4. financial formulas and snapshot/backfill scenarios are validated with representative examples;
-5. implementation work is traceable to requirements and tests.
+3. every required Proposed/Blocked ADR is genuinely Accepted with role-based approvers and evidence;
+4. required financial formula, snapshot A–J, debt correction, and reminder catch-up matrices are fully decided and validated;
+5. implementation work is traceable to requirements, flows, invariants, ADRs, and tests.
 
 ### Remaining blocker register
 
-| Due gate | Unresolved approval/evidence |
-|---|---|
-| Before affected implementation | Post-verification session behavior; final invitation/password/challenge/session policy values |
-| Before financial schema/API implementation | Snapshot/transaction serialization and same-day contract; correction/void semantics across snapshot segments; historical debt-payment correction/outstanding recomputation; RLS decision |
-| Before schedule/reminder implementation | Yearly 29-February fallback; bounded interval/end/window limits; series-edit semantics; multi-stage catch-up behavior after downtime, timezone change, or late occurrence creation |
-| Before deletion implementation | Approved table/provider deletion map, request/cancellation authentication, independent restore-exclusion register design/key/expiry, pseudonymized retained fields, and legal owner |
-| Before specification/ADR acceptance | Named product, architecture, security, UX/accessibility, QA, operations, incident, and support approvers; representative formula/flow validation |
-| Before Release Candidate | OQ-17 providers/domain/final region/budget, provider ADR addendum, production-like staging, subprocessors, measured RPO/RTO, and cost/residency review |
-| Before external Private Beta | Vietnamese legal/privacy approval, retention automation, restore/rollback/deletion evidence, security/accessibility/usability evidence, incident/support readiness, and release sign-off |
+Every open `SPEC-*` row keeps the Implementation Gate CLOSED. `RC-PROV-01` and `BETA-LEGAL-01` are additional later-phase gates under the accepted OQ-17 deferral; they do not waive any earlier blocker.
 
-A blocker may be resolved only by an approved specification/ADR update or linked evidence; implementation must not choose silently.
+| Blocker ID | Status | Due gate | Exact decision or evidence required |
+|---|---|---|---|
+| SPEC-AUTH-01 | OPEN | Before authentication implementation | Product Owner must choose whether successful email verification creates a newly rotated authenticated session or requires an explicit sign-in. |
+| SPEC-AUTH-02 | OPEN | Before authentication/session implementation | Security and Product owners must approve invitation expiry/binding/provisioning values, password/OTP/reset limits, session lifetimes, token-rotation cadence, and prior-token grace/replay response. The invitation-code mechanism itself is already Accepted. |
+| SPEC-FIN-01 | OPEN | Before transaction correction implementation | Product, Engineering, and Security owners must define correction/void behavior across snapshot segments, including linked occurrences, report effects, audit chain, and idempotent retry result. |
+| SPEC-FIN-02 | OPEN | Before financial schema/API implementation | Engineering and Security owners must select and validate the per-account snapshot/transaction serialization mechanism and retryable-conflict API contract while preserving the linearizable invariant. |
+| SPEC-DEBT-01 | OPEN | Before debt-payment correction implementation | Product and Engineering owners must choose how a corrected historical payment affects current outstanding when later payments or lender adjustments exist: deterministic replay from explicit facts or mandatory fresh lender-reported outstanding. |
+| SPEC-SCH-01 | OPEN | Before recurrence implementation | Product Owner must choose yearly 29-February fallback, maximum recurrence interval/horizon, and supported `this occurrence` versus `this and future` edit behavior. |
+| SPEC-REM-01 | OPEN | Before reminder implementation | Product Owner must choose which single stage, if any, is emitted when stages were missed after downtime, late occurrence creation, or timezone change; define the recovery window and how non-selected elapsed stages are recorded. Burst delivery remains prohibited. |
+| SPEC-SEC-01 | OPEN | Before database authorization implementation | Engineering and Security owners must accept PostgreSQL RLS with trusted request/worker context or approve documented compensating controls and risk. |
+| SPEC-SEC-02 | OPEN | Before security-history implementation | Product and Security owners must decide which authentication/session/account events are user-visible versus operator-only, their safe detail, notification behavior, and retention/display limits. |
+| SPEC-DEL-01 | OPEN | Before deletion implementation | Privacy, Product, Security, and Operations owners must approve request/cancellation authentication, table/provider deletion map, retained pseudonymous fields, restore-exclusion storage/key/expiry, legal-hold handling, and request channel. |
+| SPEC-UX-01 | OPEN | Before UX acceptance | Product and UX/Accessibility owners must approve compact/expanded prototypes and Vietnamese content, then retain representative usability-task, keyboard, screen-reader, zoom/reflow, contrast, touch-target, and state-coverage evidence. Specification review alone cannot close this blocker. |
+| SPEC-GOV-01 | OPEN | Before specification/ADR approval | Name accountable Product, Engineering, Security, UX/accessibility, QA, Operations, Privacy/legal, incident, support, and release approvers; review each ADR status; approve remaining physical safety bounds (money, note, page, and job-batch limits); and retain formula/flow/prototype/architecture validation evidence. |
+| RC-PROV-01 | OPEN | Before Release Candidate | Resolve OQ-17 with providers, domain, final region, budget, provider ADR addendum, subprocessors, production-like staging, measured RPO/RTO, and cost/residency evidence. |
+| BETA-LEGAL-01 | OPEN | Before external Private Beta | Complete Vietnamese legal/privacy approval, enforce retention/deletion, and provide restore/rollback/deletion, security, accessibility, usability, incident/support, and release evidence. |
+
+A blocker may be resolved only by an approved specification/ADR update or linked evidence; implementation must not choose silently. Documentation consistency does not close any blocker by itself.
 
 ## Governance and change control
 

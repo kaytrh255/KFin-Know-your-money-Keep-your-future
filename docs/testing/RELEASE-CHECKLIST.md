@@ -25,7 +25,7 @@
 
 - [ ] PRD, MVP scope, user flows, UX, screen inventory, architecture, database, security, threat model, and test strategy are approved at recorded versions. Evidence: _link_
 - [ ] OQ-01 through OQ-19 decisions are reflected consistently; OQ-17 provider deferral has been resolved before this Release Candidate. Evidence: _link_
-- [ ] Required ADRs are `Accepted`; no implementation silently depends on a `Proposed`/rejected decision. Evidence: _link_
+- [ ] Required ADRs are `Accepted` with role-based approvers; no implementation silently depends on a `Proposed`, `Blocked`, or rejected decision, and every centralized `SPEC-*` blocker is closed. Evidence: _link_
 - [ ] Implemented scope matches MVP; future items have not entered release accidentally. Evidence: _link_
 - [ ] Every release item maps to requirements, tests, and user-visible release notes where applicable. Evidence: _link_
 - [ ] Known limitations and manual-data/estimate language are accurate. Evidence: _link_
@@ -34,16 +34,18 @@
 
 - [ ] Current balance reconciles to the latest immutable snapshot plus only current-impact transactions in that segment. Evidence: _link_
 - [ ] Historical-only backfill appears in period/category reports, is visibly labelled, and never silently changes current balance. Evidence: _link_
-- [ ] Snapshot creation versus transaction creation/correction race tests yield one deterministic segment/result. Evidence: _link_
+- [ ] Balance-snapshot scenarios A–G pass; `SPEC-FIN-01` is resolved for H–I and `SPEC-FIN-01`/`SPEC-FIN-02` are resolved for J before those correction/race paths are implemented and tested. Evidence: _link_
+- [ ] Snapshot creation versus transaction creation/correction race tests yield one approved deterministic segment/result without implicit re-anchoring. Evidence: _link_
 - [ ] Monthly income/outflow respects user-local month, status, currency, and exact integer arithmetic. Evidence: _link_
 - [ ] The 4,000,000 + 350,000 + 280,000 VND income scenario produces 4,630,000 VND only under approved confirmation semantics. Evidence: _link_
 - [ ] Scheduled income/obligations never become actual/paid solely because time passes. Evidence: _link_
 - [ ] Global Add retry/parallel/timeout cases create exactly one transaction. Evidence: _link_
 - [ ] Transaction edit/correction/removal policy updates aggregates and linked records consistently. Evidence: _link_
-- [ ] Debt payment split, no-split, outstanding correction, and history reconcile; a no-split payment never silently reduces principal. Evidence: _link_
+- [ ] Debt cases `DCT-01`–`DCT-09` pass under the approved `SPEC-DEBT-01` disposition; no path infers principal, interest, fee, accrued interest, amortization, payoff, or lender outstanding. Evidence: _link_
 - [ ] Manual savings current amount/as-of changes safe-to-spend but not cash/monthly flow; every update has one old/new audit record. Evidence: _link_
 - [ ] Planned purchase completion applies at most one user-confirmed linked-goal scalar deduction within bounds and never auto-archives/zeroes the goal. Evidence: _link_
-- [ ] Spendable estimate and cash-flow warning show approved inputs, horizon, exclusions, and as-of time. Evidence: _link_
+- [ ] Safe-to-spend cases `STS-01`–`STS-15` pass: authoritative balance minus eligible unpaid outgoings through user-local month-end minus active-goal current amounts; projected income is excluded, payment is not double-subtracted, and negative result remains signed. Evidence: _link_
+- [ ] Safe-to-spend and cash-flow warning show approved inputs, formula version, local horizon, exclusions, snapshot/as-of time, and source drill-down. Evidence: _link_
 - [ ] Dashboard aggregates drill down exactly to source records; zero/no-data/not-calculated states differ. Evidence: _link_
 - [ ] Monthly 29/30/31 uses last-day fallback; yearly 29-February, interval/end/window bounds, and timezone changes meet separately approved rules. Evidence: _link_
 
@@ -63,7 +65,7 @@
 
 ## 4. Authentication and session security
 
-- [ ] Single-use invitation digest, expiry/revoke/wrong-email/replay/parallel-use, generic errors, and atomic account creation tests pass. Evidence: _link_
+- [ ] Mandatory single-use invitation-code digest, expiry/revoke/wrong-email/replay/parallel-use, generic errors, and atomic account creation tests pass; registration without a valid code fails even for an email present in operator data, proving no email-allowlist admission path. Evidence: _link_
 - [ ] Registration eligibility, email normalization, and post-verification sign-in/session behavior match approved policy. Evidence: _link_
 - [ ] Argon2id parameters are benchmarked, encoded correctly, and rehash policy is tested. Evidence: _link_
 - [ ] Password policy supports managers/paste and common/compromised-password control is privacy reviewed. Evidence: _link_
@@ -118,7 +120,8 @@
 - [ ] Eligible outgoing-obligation stages occur at 09:00 user-local time for 7-day/3-day/due-today/first-overdue with one occurrence + stage notification; scheduled income has none. Evidence: _link_
 - [ ] First-overdue does not repeat, while Schedule remains visibly overdue until resolved. Evidence: _link_
 - [ ] No payment-reminder email, push, SMS, quiet-hour/channel preference, or permission path exists in MVP. Evidence: _link_
-- [ ] Worker lease/retry/crash/dead-letter, approved multi-stage downtime/timezone/late-creation catch-up suppression, and notification deduplication tests pass. Evidence: _link_
+- [ ] Reminder cases `RCT-01`–`RCT-10` pass for worker downtime, closed app, late occurrence creation, timezone change, delayed return, retries, and multiple missed stages. Evidence: _link_
+- [ ] Approved `SPEC-REM-01` policy selects at most one catch-up stage, if any, per occurrence/recovery evaluation; no multi-stage burst occurs and suppressed-stage handling is evidenced. Evidence: _link_
 - [ ] Confirmation/skip/cancel races do not create stale authoritative state or mark financial truth. Evidence: _link_
 - [ ] Vietnamese authentication/security email templates are escaped, accessibility reviewed, and minimize sensitive subject/preview content. Evidence: _link_
 - [ ] SPF, DKIM, DMARC, sender domain, bounce handling, provider sandbox/production credentials, and quotas are configured. Evidence: _link_

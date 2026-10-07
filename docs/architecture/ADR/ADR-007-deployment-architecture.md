@@ -2,7 +2,8 @@
 
 **Status:** Proposed<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Unassigned<br>
+**Decision owners:** Architecture Owner; Operations Owner; Security Owner; Privacy/Legal Owner<br>
+**Exact blocker:** The vendor-neutral topology/provider-deferral direction is accepted by OQ-09/OQ-17, but `SPEC-GOV-01` lacks the required logical-architecture spike and owner/cost/RPO/RTO evidence. `RC-PROV-01` and `BETA-LEGAL-01` separately block provider-specific Release Candidate and beta approval; no deployed readiness is claimed.<br>
 **Related:** [Architecture specification](../ARCHITECTURE.md), OQ-09, OQ-10, OQ-16, OQ-17, OQ-18
 
 ## Context

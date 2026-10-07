@@ -1,8 +1,9 @@
 # ADR-004 — Session Management
 
-**Status:** Proposed<br>
+**Status:** Blocked<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Unassigned<br>
+**Decision owners:** Security Owner; Product Owner; Architecture Owner<br>
+**Exact blocker:** `SPEC-AUTH-01` and `SPEC-AUTH-02` leave post-verification behavior, idle/absolute/recent-auth values, known-password-change revocation, rotation cadence, and prior-token grace/replay response unapproved; `SPEC-SEC-02` leaves user-visible versus operator-only session/security events unapproved. Browser/PWA cookie, CSRF, tab-race, and lookup-load evidence is also absent.<br>
 **Related:** [ADR-002](ADR-002-authentication-strategy.md), [Security requirements](../../security/SECURITY-REQUIREMENTS.md)
 
 ## Context

@@ -1,6 +1,7 @@
 # KFin Initial Screen Inventory
 
-**Status:** Draft — review required<br>
+**Status:** Draft — specification review required<br>
+**Evidence status:** Screen-list review is not visual prototype, usability, or accessibility acceptance<br>
 **Purpose:** Define the minimum screen map before visual design and implementation.<br>
 **Note:** Routes are proposals for Web/PWA navigation, not API contracts.
 
@@ -53,7 +54,7 @@ Authenticated
 | ID | Proposed route | Screen | Primary purpose | Critical states/actions |
 |---|---|---|---|---|
 | AUTH-01 | `/sign-in` | Sign in | Start/resume secure access | Email/password, password manager, generic error, rate limit, Forgot password, Register |
-| AUTH-02 | `/register` | Accept invite and register | Consume a valid single-use beta invitation and create an eligible account | Invite code; generic behavior for invalid/expired/used/revoked/wrong-email states; email; password policy; terms/privacy acknowledgement; enumeration resistance |
+| AUTH-02 | `/register` | Accept invite and register | Consume a mandatory valid single-use beta invitation and create an eligible account; no email-allowlist fallback | Invite code; generic behavior for invalid/expired/used/revoked/wrong-email states; email; password policy; terms/privacy acknowledgement; enumeration resistance |
 | AUTH-03 | `/verify-email` | Verify email | Enter/resend OTP | Masked destination, expiry, paste/autofill, attempts, resend cooldown, safe support path for a wrong address; no implicit email-change feature |
 | AUTH-04 | `/forgot-password` | Forgot password | Request recovery | Generic response, rate limit, return to sign-in |
 | AUTH-05 | `/reset-password` | Reset password | Validate challenge and set password | Invalid/expired/replayed challenge, policy, success and sign-in |
@@ -75,17 +76,17 @@ The accepted one-account MVP does not expose account taxonomy in ONB-02; the und
 
 | ID | Proposed route | Screen | Primary purpose | Critical states/actions |
 |---|---|---|---|---|
-| HOME-01 | `/` | Home | Answer the four core questions | Current balance/as-of, spendable estimate/disclosure, needs attention, month summary, goals, incomplete data |
+| HOME-01 | `/` | Home | Answer the four core questions | Authoritative balance/anchor/as-of; signed safe-to-spend through user-local month-end with balance, unpaid outgoing, active-goal, and projected-income-exclusion disclosure; needs attention; month summary; goals; incomplete data |
 | ACT-01 | `/activity` | Activity | Inspect posted current-impact and historical-only records | Date grouping, month/type/classification/balance-effect filters, snapshot-boundary markers, pagination, empty states |
 | ACT-02 | `/activity/:transactionId` | Transaction detail | Explain one actual record and its balance effect | Current-impact/historical-only label, latest versus prior snapshot segment, present-balance consequence, ownership-safe not found, linked occurrence/debt/purchase, correct/void |
-| ACT-03 | `/activity/:transactionId/edit` | Correct transaction | Correct one record without hiding anchor impact | Balance/report consequence preview, linked records, validation, unsaved change, conflict/version error |
+| ACT-03 | `/activity/:transactionId/edit` | Correct transaction | Correct one record without hiding anchor impact | Fixed no-history-erasure/current-balance safety; balance/report/link consequence preview; conflict/version error; `SPEC-FIN-01`/`SPEC-FIN-02` blocked states for unsupported cross-segment/racing actions |
 | ADD-01 | overlay / `/add` fallback | Global Add | Record routine current income/expense quickly | Amount-first, implicit account, defaults, unexpected flag, pre-snapshot historical switch, offline, idempotent save |
 | ADD-02 | overlay / `/add/history` fallback | Add historical record | Backfill a record already represented by the balance snapshot | Historical-only explanation, same-day inclusion choice, current balance unchanged preview |
 | SCH-01 | `/schedule` | Schedule agenda | Understand expected inflows/outflows | Date groups, upcoming/due/overdue/projected/paid filters, exact dates, empty state |
 | SCH-02 | `/schedule/:occurrenceId` | Occurrence detail | Review and confirm/skip one occurrence | Expected vs actual, mark paid/received, skip, linked source/history |
 | SCH-03 | `/schedule/new` and `/schedule/:scheduleId/edit` | Schedule form | Define recurring income/obligation | Kind, amount, cadence, date, end rule, occurrence preview, fixed-stage reminder explanation for eligible outgoings |
 | PLAN-01 | `/plan` | Plan overview | Navigate debts, savings, purchases | Prioritized summaries, no combined misleading total |
-| NOTIF-01 | `/notifications` | Notification center | Review actionable product/security messages | Unread/read, type, exact time, deep link, mark read/all read, empty state |
+| NOTIF-01 | `/notifications` | Notification center | Review persisted actionable product/security messages | Unread/read, type, exact time, deep link, mark read/all read, empty state; delayed return does not replay elapsed reminder stages; no catch-up burst or external-channel controls |
 
 ## 5. Debt screens
 
@@ -95,8 +96,11 @@ The accepted one-account MVP does not expose account taxonomy in ONB-02; the und
 | DEBT-02 | `/plan/debts/new` | Add debt | Capture a user-reported debt and schedule | Principal, outstanding/as-of, informational annual rate/as-of/source, payment/frequency/due date |
 | DEBT-03 | `/plan/debts/:debtId` | Debt detail | Understand one debt and history | Outstanding/as-of, next due, schedule, payments, correction/archive |
 | DEBT-04 | `/plan/debts/:debtId/edit` | Edit debt | Change future settings/correct profile | Historical impact disclosure, future schedule behavior |
-| DEBT-05 | overlay / nested route | Record debt payment | Confirm actual outflow/payment split | Total, principal/interest/fee reconciliation, outstanding impact, linked occurrence |
-| DEBT-06 | overlay / nested route | Correct outstanding balance | Reconcile with lender-reported value | New amount, as-of date, reason, audit consequence |
+| DEBT-05 | overlay / nested route | Record debt payment | Confirm actual outflow and user-supplied split | Total, explicit principal/interest/fee, visible unclassified remainder, explicit outstanding impact, linked occurrence |
+| DEBT-06 | overlay / nested route | Correct outstanding balance | Reconcile with an explicit lender-reported value | New amount, as-of date, reason, audit consequence; no inferred difference |
+| DEBT-07 | overlay / nested route | Correct debt payment | Preserve evidence while correcting explicit facts only | Old/new cash effect separated from outstanding effect; split/unclassified values; later-record safety check; `SPEC-DEBT-01` blocked state with no guessed preview |
+
+Debt screens must not imply that KFin calculates or allocates authoritative principal, interest, fee, lender outstanding, amortization, or payoff.
 
 ## 6. Savings screens
 
@@ -187,7 +191,7 @@ Every MVP screen must be reviewed against applicable states before it is impleme
 
 ## 13. Screen readiness gate
 
-A screen can enter implementation only when it has:
+This is a necessary per-screen evidence list, not visual/UX acceptance or permission to bypass the globally CLOSED Implementation Gate. After all centralized blockers and the global gate are resolved, a screen can enter implementation only when it has:
 
 1. linked requirements and flow IDs;
 2. approved compact and expanded interaction design;

@@ -1,9 +1,10 @@
 # KFin UX Specification
 
 **Status:** Draft — review required<br>
-**Version:** 0.2<br>
+**Version:** 0.3<br>
 **Platforms:** Responsive Web and installable PWA<br>
-**Accessibility target:** WCAG 2.2 AA for all MVP core flows
+**Accessibility target:** WCAG 2.2 AA for all MVP core flows<br>
+**Evidence status:** Specification review only — no visual prototype, usability study, or accessibility validation has passed
 
 ## 1. Experience intent
 
@@ -34,7 +35,7 @@ KFin should feel calm, precise, private, and useful every day. It is not a gener
 
 ### Primary destinations
 
-1. **Home** — current position, spendable estimate, urgent obligations, month summary, goal progress.
+1. **Home** — current position, safe-to-spend estimate, urgent obligations, month summary, goal progress.
 2. **Activity** — actual posted income and outflow, searchable/filterable and grouped by date.
 3. **Schedule** — expected inflows and obligations, including due/overdue status.
 4. **Plan** — debts, savings goals, and planned purchases.
@@ -84,7 +85,7 @@ The default compact-screen order is:
 
 1. Header with greeting/context, notification entry, and profile.
 2. **Money snapshot** — current balance, latest authoritative snapshot/as-of time, and activity since snapshot.
-3. **Spendable estimate** — conservative month-end amount, horizon, status, and `How calculated` disclosure.
+3. **Safe-to-spend estimate** — signed conservative amount through current user-local month-end, status, and `How calculated` disclosure.
 4. **Needs attention** — at most the most urgent few due/overdue/shortfall items, with `View schedule`.
 5. **This month** — confirmed income, grouped outflow, and net movement; projected values are separate.
 6. **Goals** — top active goals with progress and next contribution.
@@ -98,8 +99,9 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - Prefer labelled numbers, progress bars, and ranked category rows to multiple charts.
 - Any chart has a textual summary and accessible data representation.
 - Totals link to a filtered Activity/Schedule view.
-- Calculation disclosure identifies the latest balance anchor and explains why historical-only backfill appears in monthly totals without changing current balance.
-- A transaction from a prior snapshot segment remains visible, but detail must explain that even a record originally marked current-impact no longer enters today’s balance after a newer authoritative snapshot.
+- Calculation disclosure identifies the latest balance anchor and states the complete formula: authoritative current balance minus unpaid outgoing occurrences due through current user-local month-end minus active savings-goal current amounts. It labels projected income as excluded and exposes included records.
+- A confirmed outgoing is shown through current-balance impact and is not also presented as an unpaid subtraction. Negative safe-to-spend remains signed and receives an accessible shortfall explanation rather than being clamped to zero.
+- Historical-only backfill appears in monthly totals without changing current balance. A transaction from a prior snapshot segment remains visible, but detail explains that even a record originally marked current-impact no longer enters today’s balance after a newer authoritative snapshot.
 - Amounts use tabular numerals and cannot be truncated without an accessible full value.
 - `0`, `No data`, and `Not calculated` are distinct states.
 
@@ -140,7 +142,9 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - `Mark paid` and `Mark received` open a review sheet showing actual amount/date; the one aggregate account is implicit.
 - `Dismiss notification` and `Mark paid` are never adjacent look-alike actions.
 - Overdue state is derived and uses icon + label + text contrast, not red alone.
-- Eligible outgoing-obligation notifications are evaluated at 09:00 user-local time. Each 7-day, 3-day, due-today, and first-overdue stage appears at most once; overdue does not repeat.
+- Eligible outgoing-obligation notifications are evaluated server-side at 09:00 user-local time. Each 7-day, 3-day, due-today, and first-overdue stage appears at most once; overdue does not repeat.
+- Closing or returning to the app only changes when persisted in-app notifications are viewed; it never replays elapsed stages or changes payment state.
+- Downtime, late occurrence creation, and timezone changes must never surface a multi-stage burst. At most one catch-up notification may appear for an occurrence per recovery evaluation; no copy/design may imply which stage wins while `SPEC-REM-01` remains unresolved.
 - No payment-reminder email, push, SMS, or permission prompt appears in MVP.
 - Editing a series asks `This occurrence` versus `This and future occurrences` only when both behaviors are supported and specified.
 
@@ -151,7 +155,8 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - Lead with user-reported outstanding amount and its `as of` date.
 - Label the optional annual rate, as-of date, and source as informational while automatic accrual is out of scope.
 - Show next due payment and recent history before configuration fields.
-- Payment review clearly separates total cash outflow and optional principal/interest/fee split, visibly labelling any partial/unclassified remainder.
+- Payment review clearly separates total cash outflow and optional user-supplied principal/interest/fee split, visibly labelling any partial/unclassified remainder. KFin never fills an omitted component or lender outstanding from the total, rate, or elapsed time.
+- Correction review separates cash/snapshot consequences from outstanding consequences and preserves old/new evidence. When later outstanding-affecting records or missing explicit state make recomputation unsafe, the UI blocks automatic correction and cites the need for an explicit current lender-reported amount; it must not preview a guessed result while `SPEC-DEBT-01` is open.
 
 ### Savings
 
@@ -210,6 +215,7 @@ Every data surface must specify these states before implementation:
 - Motion respects `prefers-reduced-motion`; no essential information depends on animation.
 - At 200% zoom, controls remain reachable; at narrow reflow, no two-dimensional scrolling is required except truly tabular content.
 - Authentication supports password managers, paste, and platform autofill. OTP fields must not obstruct paste or screen readers.
+- Private Beta registration requires an invitation-code field and valid code state. UI copy MUST NOT imply that an email address or server-side email allowlist can replace the invitation code.
 - Automated checks are necessary but manual screen-reader, keyboard, zoom, and touch testing are release requirements.
 
 ## 12. Language and content design
@@ -259,6 +265,13 @@ Before Private Beta, moderated tests should include representative compact and d
 
 Capture completion, errors, time, comprehension, accessibility barriers, and trust concerns. Targets in the PRD are hypotheses until tested.
 
-## 16. UX review blockers
+## 16. UX evidence statuses and blocker
 
-OQ-01 through OQ-19 have recorded dispositions. UX cannot be approved until Vietnamese content, balance-snapshot/backfill interaction, manual savings amount, month-end safe-to-spend disclosure, in-app reminder behavior, and deletion communication are validated in low/high-fidelity prototypes with accessibility and usability review. The token values in the design system are a coherent proposal, not evidence of visual acceptance.
+These reviews are separate and none may be inferred from another:
+
+1. **UX specification review** evaluates completeness and cross-document consistency of flows, states, content requirements, and interaction constraints.
+2. **Visual prototype acceptance** requires dated compact/expanded low- and high-fidelity artifacts covering critical states and approved design-token application.
+3. **Usability acceptance** requires representative moderated-task evidence, observed errors/comprehension, agreed thresholds, and owner sign-off.
+4. **Accessibility acceptance** requires dated keyboard, screen-reader, zoom/reflow, contrast, touch-target, reduced-motion, and automated-check evidence against WCAG 2.2 AA scope.
+
+This document can receive specification review without satisfying items 2–4. No visual prototype, usability study, or accessibility validation currently exists, so none is Accepted. `SPEC-UX-01` remains OPEN until Vietnamese content, balance-snapshot/backfill interaction, safe-to-spend disclosure, debt correction blocked states, in-app catch-up behavior, manual savings amount, and deletion communication receive the required separate evidence. Design-system tokens are a coherent proposal, not visual acceptance.

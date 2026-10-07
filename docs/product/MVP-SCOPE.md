@@ -2,7 +2,7 @@
 
 **Status:** Draft — review required<br>
 **Release:** Private Beta (maximum 50 real users)<br>
-**Implementation gate:** Closed until specification approval
+**Implementation gate:** CLOSED until specification approval and blocker resolution
 
 ## 1. Scope rule
 
@@ -14,7 +14,7 @@ An item is in scope only when it is listed here and supported by approved produc
 
 ### 2.1 Account and security
 
-- Registration with a single-use, expiring Private Beta invitation code.
+- Registration with a mandatory single-use, expiring Private Beta invitation code; no server-side email-allowlist alternative.
 - Email verification by OTP.
 - Email/password login.
 - Persistent, revocable authenticated session.
@@ -57,9 +57,10 @@ An item is in scope only when it is listed here and supported by approved produc
 
 - Debt profile with principal, user-maintained outstanding amount, optional informational annual rate/as-of/source, payment amount/frequency, due date, status, and history.
 - Generated/one-off due payment occurrences.
-- Explicit payment confirmation with optional principal/interest/fee allocation.
+- Explicit payment confirmation with optional user-supplied principal/interest/fee allocation; omitted and unclassified values remain unknown.
 - Upcoming/due/overdue communication.
-- No authoritative interest accrual engine.
+- No authoritative principal/interest/fee inference, interest accrual, amortization, payoff, or lender-outstanding engine.
+- Safe cash-only/latest-explicit correction boundaries; historical correction with later outstanding-affecting records remains blocked by `SPEC-DEBT-01`.
 
 ### 2.6 Savings
 
@@ -79,13 +80,15 @@ An item is in scope only when it is listed here and supported by approved produc
 
 - Current balance.
 - Selected-month confirmed income and grouped outflow.
-- Transparent conservative month-end safe-to-spend estimate.
+- Transparent conservative safe-to-spend estimate: authoritative current balance minus unpaid outgoing occurrences due through current user-local month-end minus current amounts on active savings goals; projected income is excluded and negative results remain visible.
 - Urgent upcoming obligations.
 - Savings-goal progress from manual current amounts.
 - Unified schedule for expected inflows and outflows using one-off/every-N-week/every-N-month/every-N-year patterns; missing monthly dates use the month’s last day.
 - In-app notification center only; no payment-reminder email/push/SMS/chat.
-- Eligible outgoing obligations receive 7-day, 3-day, due-today, and first-overdue stages evaluated at 09:00 user-local time; scheduled income has no fixed-stage notification.
+- Eligible outgoing obligations receive 7-day, 3-day, due-today, and first-overdue stages evaluated server-side at 09:00 user-local time; scheduled income has no fixed-stage notification.
 - One first-overdue notification per occurrence; no daily/weekly repeat.
+- Closed app and delayed return only affect viewing persisted notification state; they never replay stages or change money state.
+- Downtime, late occurrence creation, or timezone change may yield at most one catch-up notification per occurrence in a recovery evaluation; exact stage selection remains blocked by `SPEC-REM-01`, and no burst is permitted.
 - Simple, deduplicated month-end cash-flow shortfall warning.
 
 ### 2.9 Product quality
@@ -101,16 +104,17 @@ An item is in scope only when it is listed here and supported by approved produc
 
 | Capability | Outcome required before Private Beta |
 |---|---|
-| Registration | An eligible person can create and verify one account without revealing whether arbitrary emails are registered. |
+| Registration | A person with a valid mandatory single-use expiring invitation code can create and verify one account without revealing arbitrary email/code state; email presence alone never grants admission. |
 | Session | A returning user resumes securely; revoked/expired sessions cannot be replayed. |
 | Account deletion | A verified request is cancellable for 7 days, then active data is purged under the approved map and a restore cannot resurrect it. |
 | Quick expense | A user can record a valid basic expense on one mobile surface with clear success/failure and no duplicate on retry. |
 | Balance snapshot | Current balance reconciles to the latest snapshot segment; historical backfill is labelled and cannot silently change it. |
 | Monthly overview | Aggregates reconcile exactly to all posted transactions for the selected timezone/month, including labelled historical-only records. |
+| Safe-to-spend | `STS-01`–`STS-15` prove authoritative current balance minus eligible unpaid outgoings through current user-local month-end minus active goal current amounts, with projected income excluded and negative result preserved. |
 | Recurrence | Occurrences are generated idempotently and remain projected until explicitly confirmed. |
 | Payment status | Due date passage yields due/overdue, never paid. |
-| Reminders | Each eligible outgoing occurrence/stage creates at most one 09:00 in-app notification; first-overdue never repeats and scheduled income gets no fixed-stage notification. |
-| Debt | Payment history and displayed outstanding amount remain consistent after create/edit/reversal paths supported by the specification. |
+| Reminders | `RCT-01`–`RCT-10` prove one 09:00 in-app occurrence/stage notification, closed-app independence, no repeated overdue, no scheduled-income stage, and no catch-up burst under the approved `SPEC-REM-01` policy. |
+| Debt | `DCT-01`–`DCT-09` prove explicit-only payment/correction effects and consistent history/outstanding without inferred principal, interest, fee, or lender balance under the approved `SPEC-DEBT-01` policy. |
 | Savings | Goal current amount matches the latest explicit user update/as-of date, retains old/new audit metadata, and is not counted as cash income/outflow. |
 | Authorization | Automated tests prove User A cannot read or mutate User B’s records across every object API. |
 | Recovery | Backup restoration and release rollback are performed and evidenced in a production-like environment. |
@@ -138,7 +142,7 @@ The following are expressly excluded unless a new specification promotes them:
 ## 5. Product boundaries and caveats
 
 - KFin is a user-maintained record and can be incomplete or stale.
-- “Safe to spend” is an estimate based on entered balances and confirmed/upcoming records, not a guarantee.
+- “Safe to spend” is an estimate based on the authoritative entered balance, unpaid outgoing occurrences through current user-local month-end, and active goal current amounts; projected income is excluded. It is not a guarantee.
 - KFin does not verify lender statements or bank balances.
 - Financial summaries must communicate their as-of time and scope.
 - Account deletion uses a 7-day cancellation grace followed by active-system purge; the request channel, deletion map, retained pseudonymous evidence, and legal basis must be approved before beta.

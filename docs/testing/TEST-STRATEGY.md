@@ -1,7 +1,7 @@
 # KFin Test Strategy
 
 **Status:** Draft — review required<br>
-**Version:** 0.2<br>
+**Version:** 0.3<br>
 **Release target:** Private Beta, at most 50 users<br>
 **Current evidence:** None; no application has been implemented or tested
 
@@ -43,6 +43,76 @@ A release traceability report must show every normative MVP requirement as:
 
 Missing mapping is not implicitly passing.
 
+### 3.1 Safe-to-spend requirement → flow → invariant → test matrix
+
+All amounts below are exact integer VND units and validate `safe_to_spend.v1`. Each case uses a fixed evaluation instant and the user’s persisted IANA timezone. These are required cases, not current test evidence.
+
+| Requirement → | Flow → | Invariant → | Test case | Fixture / action | Required result |
+|---|---|---|---|---|---|
+| PRD-DASH-07, PRD-FIN-02 | UF-DASH-01 | FIN-STS-INV-01, FIN-STS-INV-06 | STS-01 — balance only | Authoritative balance `B = 1,000,000`; no eligible outgoing or active goal | `1,000,000` |
+| PRD-DASH-07, PRD-REM-01 | UF-DASH-01, UF-SCH-03 | FIN-STS-INV-02 | STS-02 — unpaid this month | `B = 1,000,000`; one unpaid outgoing `300,000` due before local month-end | `700,000`; occurrence appears in drill-down |
+| PRD-DASH-07, PRD-REM-04 | UF-DASH-01, UF-SCH-04 | FIN-STS-INV-02 | STS-03 — unresolved overdue | `B = 1,000,000`; one unpaid overdue outgoing `200,000` from a prior month | `800,000`; overdue is not dropped at month rollover |
+| PRD-DASH-07 | UF-DASH-01 | FIN-STS-INV-02, FIN-STS-INV-07 | STS-04 — horizon boundary | `B = 1,000,000`; `300,000` due on local month-end and `400,000` due next local day | `700,000`; month-end item included and next-month item excluded |
+| PRD-DASH-07, PRD-INC-03 | UF-DASH-01, UF-SCH-01 | FIN-STS-INV-05 | STS-05 — projected income | `B = 1,000,000`; unreceived scheduled income `500,000` due this month | `1,000,000`; projected income is disclosed as excluded |
+| PRD-DASH-07, PRD-INC-03 | UF-SCH-02, UF-DASH-01 | FIN-STS-INV-01, FIN-STS-INV-05 | STS-06 — received income | The `500,000` income in STS-05 is explicitly received and posted current-impact, making `B = 1,500,000` | `1,500,000`; effect comes only through authoritative balance |
+| PRD-DASH-07, PRD-EXP-05 | UF-SCH-03, UF-DASH-01 | FIN-STS-INV-03 | STS-07 — paid outgoing transition | Before confirmation: `B = 1,000,000`, unpaid `O = 300,000`; after atomic confirmation: `B = 700,000`, `O = 0` | `700,000` before and after; never `400,000` |
+| PRD-DASH-07, PRD-REM-03 | UF-SCH-04, UF-DASH-01 | FIN-STS-INV-02 | STS-08 — skipped/cancelled | `B = 1,000,000`; `300,000` outgoing is skipped or cancelled | `1,000,000`; neither terminal non-payment state is subtracted |
+| PRD-DASH-07, PRD-SAV-05 | UF-SAV-01, UF-DASH-01 | FIN-STS-INV-04 | STS-09 — active reserve sum | `B = 1,000,000`; two active goal current amounts are `100,000` and `150,000` | `750,000`; both reserves sum while balance/monthly flow remain unchanged |
+| PRD-DASH-07, PRD-SAV-07 | UF-SAV-01, UF-DASH-01 | FIN-STS-INV-04 | STS-10 — archived reserve exclusion | `B = 1,000,000`; active goal `100,000`; archived goal retaining `150,000` | `900,000`; archived history is retained but not reserved |
+| PRD-DASH-07 | UF-DASH-01 | FIN-STS-INV-02, FIN-STS-INV-04 | STS-11 — combined deductions | `B = 1,000,000`; eligible `O = 300,000`; active `G = 250,000` | `450,000`, with both component lists inspectable |
+| PRD-DASH-07, PRD-FIN-08 | UF-FIN-02, UF-DASH-01 | FIN-STS-INV-01, FIN-SNAP-INV-03 | STS-12 — historical-only backfill | `B = 1,000,000`; historical-only income `500,000` is added to selected-month reporting | `1,000,000`; month income changes, safe-to-spend does not |
+| PRD-DASH-07, PRD-FIN-09 | UF-FIN-03, UF-DASH-01 | FIN-STS-INV-01, FIN-SNAP-INV-04 | STS-13 — newer authoritative anchor | Prior segment has current-impact income `200,000`; user creates newer snapshot `800,000` | `800,000`; prior-segment delta is not re-summed |
+| PRD-DASH-07 | UF-DASH-01 | FIN-STS-INV-06 | STS-14 — negative result | `B = 200,000`; eligible `O = 300,000`; active `G = 50,000` | `-150,000`; signed shortfall is not clamped |
+| PRD-DASH-07 | UF-DASH-01 | FIN-STS-INV-02, FIN-STS-INV-07 | STS-15 — timezone/month rollover | At one fixed UTC instant, an `April 15` outgoing is outside the horizon when the stored local month is March and inside it when the approved timezone change makes the local month April | Recalculation follows the persisted timezone/local month, produces one deterministic result, and exposes the changed horizon |
+
+### 3.2 Balance-snapshot scenario matrix A–J
+
+Scenarios A–G define complete required results. H–I define only non-negotiable safety outcomes and explicitly retain unknown correction behavior under `SPEC-FIN-01`; J retains both correction and concurrency unknowns. A `BLOCKER` cell is not permission for an implementer to choose a convenient result.
+
+| Scenario | Requirement → Flow | Invariants | Fixture / action | Required result / status |
+|---|---|---|---|---|
+| A — initial anchor | PRD-FIN-01 → UF-FIN-01 | FIN-SNAP-INV-01, FIN-SNAP-INV-02 | Onboarding snapshot is `1,000,000`; no transaction | Current balance is `1,000,000`; anchor/as-of visible |
+| B — latest-segment income | PRD-FIN-02 → UF-FIN-05 | FIN-SNAP-INV-02 | Add posted current-impact income `200,000` to the latest segment | Current balance is `1,200,000` |
+| C — latest-segment expense | PRD-FIN-02 → UF-FIN-04 | FIN-SNAP-INV-02 | Add posted current-impact expense `300,000` to the latest segment | Current balance is `700,000` |
+| D — pre-anchor backfill | PRD-FIN-08 → UF-FIN-02 | FIN-SNAP-INV-03, FIN-SNAP-INV-07 | Add historical-only expense `300,000` before the anchor | Current balance remains `1,000,000`; selected-month outflow includes `300,000` with historical label |
+| E — same local date | PRD-FIN-10 → UF-FIN-02 | FIN-SNAP-INV-05 | On the anchor’s local date, test explicit `already included = yes` and `no` choices | `yes` is historical and does not move balance; `no` is current-impact and moves it; omission is rejected |
+| F — new segment | PRD-FIN-09 → UF-FIN-03 | FIN-SNAP-INV-04, FIN-SNAP-INV-06 | After snapshot `1,000,000` and current income `200,000`, create new authoritative snapshot `900,000` | Current balance is exactly `900,000`; prior delta remains evidence and is not added again |
+| G — no whole-history reconciliation | PRD-DASH-03, PRD-FIN-08 → UF-DASH-01 | FIN-SNAP-INV-03, FIN-SNAP-INV-07 | Select a month containing current and historical-only records across a snapshot boundary | Monthly totals include eligible posted records; current balance uses latest segment only; disclosure explains why the figures do not reconcile by all-history summation |
+| H — correction within latest segment | PRD-FIN-04, PRD-FIN-11 → UF-FIN-06 | FIN-SNAP-INV-02, FIN-SNAP-INV-08 | Request correction of latest-segment expense `300,000` to `250,000` with no anchor race | Mathematical safety condition: an approved correction must yield one `250,000` effect and balance `750,000`, never both old and new effects. **BLOCKER `SPEC-FIN-01`** decides correction/void records, linked occurrence, audit chain, and idempotent API result. |
+| I — correction concerning a closed prior segment | PRD-FIN-04, PRD-FIN-11 → UF-FIN-06 | FIN-SNAP-INV-04, FIN-SNAP-INV-08, FIN-SNAP-INV-10 | After a newer snapshot, request amount/classification correction for a prior-segment record | Fixed safety condition: authoritative current balance cannot change from rewriting the closed segment. **BLOCKER `SPEC-FIN-01`** decides whether/how the action is supported and its period-report, link, void/replacement, audit, and retry effects. |
+| J — crossing/racing an anchor | PRD-FIN-11 → UF-FIN-03, UF-FIN-06 | FIN-SNAP-INV-09, FIN-SNAP-INV-10 | Move a record across segments/effects, or race transaction correction/creation against a new snapshot | **BLOCKER — `SPEC-FIN-01` + `SPEC-FIN-02`:** correction/link/report and serialization/retry/re-anchor semantics are not approved. No behavior may be inferred and this path may not be implemented. |
+
+### 3.3 Debt-payment correction safety matrix
+
+| Requirement → | Flow → | Invariant → | Test case | Explicit facts | Required result / status |
+|---|---|---|---|---|---|
+| PRD-DEBT-02, PRD-DEBT-03 | UF-DEBT-02 | DEBT-INV-01, DEBT-INV-02, DEBT-INV-03, DEBT-INV-04 | DCT-01 — no split | Total payment `300,000`; no split and no lender-reported balance | Cash outflow posts; outstanding amount/as-of remain unchanged; no component is inferred |
+| PRD-DEBT-02, PRD-DEBT-03 | UF-DEBT-02 | DEBT-INV-02, DEBT-INV-03, DEBT-INV-04 | DCT-02 — partial without principal | Total `300,000`; explicit interest `50,000`; `250,000` unclassified | Outstanding remains unchanged; remainder is visibly unclassified, not principal or fee |
+| PRD-DEBT-02 | UF-DEBT-02 | DEBT-INV-03, DEBT-INV-04 | DCT-03 — explicit principal | Prior outstanding `1,000,000`; explicit principal `200,000`; no later event | Outstanding becomes `800,000`; interest/fee remain only as explicitly entered |
+| PRD-DEBT-02 | UF-DEBT-02 | DEBT-INV-04 | DCT-04 — lender-reported balance | User explicitly selects new lender-balance mode with `750,000` and as-of date | Outstanding becomes exactly `750,000`; principal deduction is not also applied and no difference is labelled as inferred interest/principal/fee |
+| PRD-DEBT-03 | UF-DEBT-02 | DEBT-INV-02, DEBT-INV-03 | DCT-05 — invalid/complete split | Components exceed total, or a `complete` split omits explicit zero/value | Write is rejected; KFin does not repair or redistribute components |
+| PRD-DEBT-05 | UF-DEBT-03 | DEBT-INV-05, DEBT-INV-07 | DCT-06 — cash-only correction | Old/replacement payments have no outstanding effect; total/date changes | Linked old/new cash records are preserved; outstanding amount/as-of remain unchanged |
+| PRD-DEBT-05 | UF-DEBT-03 | DEBT-INV-05, DEBT-INV-06 | DCT-07 — latest explicit-effect correction | No later outstanding event; exact pre-state, old effect, and replacement principal or lender balance are all explicit | Atomic old/new evidence and exact consequence preview; only explicit replacement facts can affect outstanding |
+| PRD-DEBT-06 | UF-DEBT-03 | DEBT-INV-08 | DCT-08 — later payment/adjustment | Correction/void target has a later outstanding-affecting payment or balance adjustment | **BLOCKER — `SPEC-DEBT-01`:** no automatic recomputation, rebase, or guessed preview; exact workflow requires Product Owner approval |
+| PRD-DEBT-06 | UF-DEBT-03 | DEBT-INV-02, DEBT-INV-08 | DCT-09 — missing state/reordered as-of | Pre-state is absent, dates would reorder, or result requires deriving any omitted component/outstanding | Operation is blocked; only a separately explicit lender-reported balance adjustment is safe; no inferred value |
+
+### 3.4 Reminder downtime and catch-up matrix
+
+These cases establish the safe boundary. Rows marked with `SPEC-REM-01` cannot receive a fabricated expected stage until the Product Owner resolves the selection policy.
+
+| Requirement → | Flow → | Invariant → | Test case | Condition | Required result / status |
+|---|---|---|---|---|---|
+| PRD-REM-02, PRD-REM-04 | UF-REM-01 | REM-INV-01, REM-INV-02, REM-INV-03, REM-INV-04 | RCT-01 — normal stage | Worker runs at one stage’s 09:00 local target for unresolved outgoing | One durable occurrence + stage notification; no scheduled-income stage; no duplicate first-overdue |
+| PRD-REM-10 | UF-REM-01 | REM-INV-05, REM-INV-06 | RCT-02 — app closed | Web/PWA is closed at evaluation and remains closed | Eligible server evaluation is unchanged; no financial state change or external reminder channel |
+| PRD-REM-10 | UF-REM-01 | REM-INV-06, REM-INV-07 | RCT-03 — delayed app return | User returns after persisted notifications already exist | Existing read/unread list appears; return creates no event, replay, stage burst, transaction, or paid state |
+| PRD-REM-06, PRD-REM-11 | UF-REM-01 | REM-INV-03, REM-INV-08, REM-INV-09 | RCT-04 — one missed stage | Worker recovers after one target elapsed | At most one catch-up event and no duplicate; exact recovery-window/emit policy remains part of `SPEC-REM-01` |
+| PRD-REM-11 | UF-REM-01 | REM-INV-08, REM-INV-09 | RCT-05 — multiple missed stages | Downtime spans 7-day, 3-day, and due-today targets | Never more than one catch-up notification for the occurrence in one recovery evaluation; **BLOCKER `SPEC-REM-01`** decides which stage, if any, and suppression records |
+| PRD-REM-11, PRD-REM-12 | UF-REM-01 | REM-INV-04, REM-INV-08, REM-INV-09 | RCT-06 — late occurrence creation | Occurrence is created after one or several stage targets elapsed | State is rechecked and no burst occurs; **BLOCKER `SPEC-REM-01`** decides the one stage, if any |
+| PRD-REM-06, PRD-REM-11 | UF-REM-01 | REM-INV-02, REM-INV-03, REM-INV-04, REM-INV-08, REM-INV-09 | RCT-07 — timezone change | Forward change makes stages elapsed; backward change revisits a local target | Recompute from persisted IANA timezone, never duplicate occurrence + stage, and emit at most one catch-up; **BLOCKER `SPEC-REM-01`** decides selection after a forward jump |
+| PRD-REM-12 | UF-SCH-04, UF-REM-01 | REM-INV-04, REM-INV-05 | RCT-08 — resolved during delay | Occurrence becomes confirmed, skipped, or cancelled before claimed catch-up insert | No new reminder; no stale worker action changes financial state |
+| PRD-REM-04, PRD-REM-06 | UF-REM-01 | REM-INV-03, REM-INV-04, REM-INV-05 | RCT-09 — retry/crash/concurrency | Retry, lease reclaim, or parallel workers evaluate same stage | One occurrence + stage notification, idempotent completion, and no payment mutation |
+| PRD-REM-05 | UF-REM-01 | REM-INV-10 | RCT-10 — channel boundary | Any normal or catch-up path executes | In-app record only; no payment-reminder email, push, SMS, chat, or permission prompt |
+
 ## 4. Test environments
 
 | Environment | Purpose | Data | External services |
@@ -77,7 +147,7 @@ Priority units:
 
 - integer-money addition/subtraction/bounds/format-contract conversion;
 - current-balance calculation by latest immutable snapshot segment, historical-only exclusion, and selected-month inclusion of labelled backfill;
-- spendable-estimate formula/version after approval;
+- safe-to-spend formula/version through mandatory cases `STS-01`–`STS-15`;
 - classification and no-double-counting rules;
 - recurrence next-date generation including 29/30/31, leap day, end date, timezone policy;
 - due/due-today/overdue derived state;
@@ -145,7 +215,7 @@ Security automation and manual review map directly to [the threat model](../secu
 
 - Credential-stuffing/brute-force patterns across IP/account/global dimensions.
 - Registration/login/reset/OTP/invitation enumeration content/status/timing/rate behavior.
-- Invitation expiry, wrong-email binding, revoke/use/replay, parallel consumption, digest-only storage, and atomic account creation.
+- Invitation expiry, wrong-email binding, revoke/use/replay, parallel consumption, digest-only storage, atomic account creation, and rejection of registration without a valid code even if the email appears in any operator dataset; no email-allowlist bypass.
 - OTP/reset expiry, attempt, resend, supersession, replay, concurrency, immediate secret-delivery uncertainty, and provider failures; verify no secret enters the ordinary outbox.
 - Argon2id parameter benchmark and maximum concurrent hashing behavior.
 - Password reset/change session invalidation.
@@ -192,13 +262,13 @@ Critical journeys:
 3. Forgot/reset password → all old sessions rejected.
 4. Global Add current expense on compact viewport → retry after simulated timeout → one current-impact record.
 5. Add pre-snapshot historical expense → selected month changes but current balance remains fixed and labelled.
-6. Create a manual known-balance snapshot while a transaction races → one deterministic segment/result.
+6. After `SPEC-FIN-01`/`SPEC-FIN-02` resolve scenario J, create a manual known-balance snapshot while a transaction races → the approved deterministic conflict/segment result.
 7. Flexible income + recurring salary explicit confirmation → exact monthly 4,630,000 VND example.
 8. Recurring rent reaches 09:00 due/first-overdue stages but not paid → one notification/stage and explicit confirmation.
-9. Debt create/payment/correction with split and no-split paths; no automatic interest.
+9. After `SPEC-DEBT-01` resolves blocked historical paths, debt create/payment/correction covers `DCT-01`–`DCT-09`; no component, interest, or outstanding is inferred.
 10. Savings goal absolute current-amount update changes safe-to-spend but not cash/monthly flow.
 11. Planned purchase completion creates exactly one expense and one user-confirmed goal scalar deduction (including zero/partial path).
-12. Dashboard aggregates drill down and explain snapshot anchor, historical-only records, month-end formula, and goal reserve.
+12. Dashboard passes `STS-01`–`STS-15`, drills into source components, and explains snapshot anchor, historical-only records, projected-income exclusion, local month-end, and active goal reserve.
 13. Cash-flow warning for 1,000,000 VND due versus 700,000 VND available.
 14. Session revocation from another context.
 15. Deletion request → authenticated cancellation race, or post-7-day purge/tombstone in accelerated test time.
@@ -299,10 +369,11 @@ For each release with schema changes:
 - Secret-bearing immediate delivery uncertainty and non-secret outbox atomicity/idempotency.
 - Email webhook signature/timestamp/replay/schema/idempotency where the selected provider uses callbacks.
 - Eligible outgoing-obligation 7-day/3-day/due-today/first-overdue calculation at 09:00 user-local time; scheduled income receives no fixed-stage notification.
-- Timezone change, late occurrence creation, and worker downtime follow the approved multi-stage catch-up/suppression policy, never duplicate occurrence + stage, and never accidentally burst stale notifications.
+- `RCT-01`–`RCT-10` cover worker downtime, app closed at evaluation, delayed app return, late occurrence creation, timezone forward/backward changes, multiple missed stages, state resolution, retries, and channel boundaries.
+- `SPEC-REM-01` must approve the one-stage-or-none catch-up/suppression policy; recovery never duplicates occurrence + stage and never creates a multi-stage burst.
 - First-overdue does not repeat during long unresolved periods.
 - Confirm/skip/cancel racing with reminder evaluation creates no stale authoritative state.
-- Reading/dismissing notification or any email delivery result does not alter financial state.
+- Reading/dismissing, app close/reopen, or any email delivery result does not alter financial state or create reminder events.
 - Unchanged month-end cash-flow warning is not spammed.
 - No payment-reminder email, push, SMS, or permission path exists in MVP.
 
@@ -426,9 +497,12 @@ Monitoring can reveal defects but does not replace pre-release tests. Cohort exp
 
 ## 13. Strategy approval blockers
 
-- Approved MVP requirements/formulas and consistent OQ-01 through OQ-19 implementation semantics.
-- Selected stack and provisional browser support; explicit test plan for OQ-17’s pre-Release-Candidate provider selection.
-- Decisions on post-verification session behavior/policy values, RLS, snapshot concurrency/correction, historical debt-payment correction/outstanding recomputation, yearly 29-February recurrence, bounded recurrence/series-edit limits, multi-stage reminder catch-up, and deletion restore-exclusion design.
-- Vietnamese legal/privacy review plan for retention/deletion/residency and evidence that the fixed in-app reminder boundary is testable.
-- Named security, QA, accessibility, operations, and release owners.
-- Agreed provisional performance, RPO/RTO, and vulnerability SLA values; measured provider-specific values remain an RC gate.
+- `SPEC-AUTH-01`/`SPEC-AUTH-02`: post-verification and authentication/session policy values.
+- `SPEC-FIN-01`/`SPEC-FIN-02`: snapshot correction and serialization behavior needed to replace scenario J’s blocked result; `STS-01`–`STS-15` already define the accepted safe-to-spend formula but have no execution evidence.
+- `SPEC-DEBT-01`: historical debt-payment correction after later outstanding-affecting events.
+- `SPEC-SCH-01`: yearly 29-February, recurrence bounds, and series-edit semantics.
+- `SPEC-REM-01`: the one catch-up stage, if any, suppression record, and recovery window; the no-burst boundary is fixed.
+- `SPEC-SEC-01`/`SPEC-SEC-02`: RLS/compensating controls and user-visible security-event policy.
+- `SPEC-DEL-01`: deletion map/request/restore-exclusion design; `SPEC-UX-01`: separate visual/usability/accessibility evidence.
+- `SPEC-GOV-01`: selected stack/provisional browser support, named Security/QA/Accessibility/Operations/Release approvers, and retained review/validation evidence.
+- `RC-PROV-01`/`BETA-LEGAL-01`: provider, residency, retention/deletion, production-like evidence, legal/privacy approval, provisional performance/RPO/RTO/vulnerability values, and measured Release Candidate evidence.

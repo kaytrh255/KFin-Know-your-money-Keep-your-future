@@ -1,13 +1,14 @@
 # ADR-008 — Notification Architecture
 
-**Status:** Proposed<br>
+**Status:** Blocked<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Unassigned<br>
+**Decision owners:** Product Owner; Architecture Owner; Operations Owner; QA Owner<br>
+**Exact blocker:** `SPEC-REM-01` leaves the one-stage-or-none catch-up selection, suppression record, and recovery window unapproved after downtime, late creation, or timezone change. Atomic intent/crash-reclaim, race, timezone, Vietnamese-content, accessibility, and channel-separation evidence also does not exist.<br>
 **Related:** [PRD reminders](../../product/PRD.md#78-schedule-reminders-and-warnings), OQ-06, OQ-12, OQ-19
 
 ## Context
 
-KFin needs required email for verification/recovery/security and in-app outgoing-obligation reminders without falsely changing financial state or creating notification spam. Product review selected in-app-only payment reminders, evaluated at 09:00 user-local time, with one notification for each 7-day, 3-day, due-today, and first-overdue stage. Push, payment-reminder email, SMS, and chat channels are future scope. At most 50 users do not justify Redis, Kafka, or a separate notification service.
+KFin needs required email for verification/recovery/security and in-app outgoing-obligation reminders without falsely changing financial state or creating notification spam. Product review selected in-app-only payment reminders, evaluated at 09:00 user-local time, with at most one notification for each 7-day, 3-day, due-today, and first-overdue stage. Push, payment-reminder email, SMS, and chat channels are future scope. At most 50 users do not justify Redis, Kafka, or a separate notification service.
 
 ## Decision
 
@@ -32,12 +33,25 @@ Use a **PostgreSQL transactional outbox/job mechanism plus a small worker**, whi
 - Confirmation, skipping, or cancellation prevents unresolved future stage creation.
 - Cash-flow warnings use a versioned month-end calculation fingerprint; unchanged warnings are deduplicated.
 
+### Reminder invariants
+
+- **REM-INV-01 — Eligible facts:** only an unresolved outgoing occurrence can receive fixed payment stages; scheduled income never receives them.
+- **REM-INV-02 — Local target:** stage targets are 7 days before, 3 days before, due today, and first overdue at 09:00 in the persisted user/occurrence IANA timezone.
+- **REM-INV-03 — Durable uniqueness:** occurrence + stage is unique across normal evaluation, retries, process crashes, worker downtime, and timezone recalculation; first-overdue never repeats while unresolved.
+- **REM-INV-04 — State recheck:** immediately before insertion, the worker rechecks ownership, current due date/timezone, occurrence version/state, and uniqueness. Confirmed, skipped, or cancelled state suppresses new stages.
+- **REM-INV-05 — No financial authority:** evaluation, creation, read, dismiss, worker retry, and app open/close never mark an occurrence paid/received and never create a transaction.
+- **REM-INV-06 — Closed-app independence:** server evaluation does not depend on Web/PWA lifecycle. A closed app does not stop eligible server evaluation, and opening/returning to the app does not itself evaluate or synthesize elapsed stages.
+- **REM-INV-07 — Delayed return:** return displays persisted unread/read state once. It does not replay worker history, duplicate delivered stages, or emit one notification per elapsed stage.
+- **REM-INV-08 — No catch-up burst:** when downtime, late occurrence creation, or timezone change makes multiple stages elapsed, one recovery evaluation creates at most one catch-up notification for that occurrence.
+- **REM-INV-09 — Catch-up selection blocker:** which single eligible stage, if any, wins; how non-selected elapsed stages are recorded; and the recovery-window boundary remain **BLOCKER `SPEC-REM-01`**, owned by the Product Owner. No implementer may infer `latest`, `earliest`, `most severe`, or `all`.
+- **REM-INV-10 — Channel boundary:** catch-up remains in-app only; it never falls back to payment-reminder email, push, SMS, or chat.
+
 ### Delivery and job behavior
 
 - Domain transaction inserts any required non-secret job/notification intent atomically.
 - Worker claims rows with a lease, rechecks current occurrence state, creates the in-app notification idempotently, and records completion.
 - Bounded exponential backoff/jitter handles transient database/runtime errors; permanent failure/dead-letter remains operator-visible.
-- Worker downtime/timezone/late-occurrence catch-up never duplicates a stage. The product policy for suppressing versus emitting multiple already-missed stages must be approved before reminder implementation; it must not produce a burst of stale notifications by accident.
+- Worker downtime, late occurrence creation, and timezone-change catch-up obey `REM-INV-08`; exact selection/suppression remains blocked by `REM-INV-09`. Closed-app or delayed-app-return behavior obeys `REM-INV-06` and `REM-INV-07`.
 - Notification read/dismiss state has no authority over payment/receipt state.
 - Email verification OTP and password-reset secrets are not placed in the ordinary outbox. Under ADR-002, they are submitted immediately from ephemeral request-process memory after digest-only challenge commit. A future encrypted asynchronous envelope requires a separate key-management decision.
 - Non-secret security email may use the outbox/provider adapter with minimum template data.

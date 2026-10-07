@@ -33,7 +33,7 @@ The policy for automatically signing in after verification is not yet approved. 
 
 ### UF-AUTH-01 — Register and verify email
 
-**Precondition:** User has an unexpired, unused Private Beta invitation code.
+**Precondition:** User has an unexpired, unused Private Beta invitation code. Presence on any operator-side email list is insufficient without the code.
 
 1. User enters invitation code, email, and a password meeting the visible policy.
 2. Client submits over TLS without logging credentials or invite material.
@@ -219,6 +219,16 @@ Passing the due date changes only derived due/overdue presentation and notificat
 
 If the lender-reported balance later differs, the user makes an explicit balance correction with as-of date; KFin does not invent accrued interest.
 
+### UF-DEBT-03 — Correct or void a debt payment
+
+1. User opens the payment and sees its cash transaction, explicit principal/interest/fee values, unclassified remainder, outstanding effect/as-of, and any later outstanding-affecting records.
+2. User supplies a reason and explicit replacement facts; omitted principal, interest, fee, or lender balance remain unknown rather than being inferred from the total or rate.
+3. Review previews the cash/snapshot effect separately from the debt-outstanding effect and identifies any preserved prior/later records.
+4. A cash-only payment with no explicit outstanding effect can be corrected without changing debt outstanding/as-of.
+5. When no later outstanding-affecting record exists and the exact pre-payment state and replacement effect are explicit, the system may atomically preserve/void the old records and apply only the explicit replacement effect under `DEBT-INV-06`.
+6. If a later payment/adjustment exists, the as-of order would change, required prior state is absent, or any principal/interest/fee/outstanding value would have to be inferred, the automatic correction path is unavailable.
+7. The exact historical correction/rebase/rejection workflow remains **BLOCKER `SPEC-DEBT-01`**. Until approved, the UI must not promise or simulate an outstanding result; the user can record a separately explicit current lender-reported balance adjustment without disguising the difference as interest.
+
 ## 7. Savings and planned-purchase flows
 
 ### UF-SAV-01 — Create and update a savings goal
@@ -251,22 +261,25 @@ MVP does not expose contribution or withdrawal ledger entries.
 ### UF-DASH-01 — Understand current position
 
 1. Home loads a skeleton that preserves layout, then values as of a visible time.
-2. User sees current balance and data freshness.
-3. Spendable estimate shows amount, horizon, and “How calculated” disclosure.
-4. Urgent obligations list shows amount, due date, and state with action.
-5. Month summary distinguishes confirmed income/outflow and projected values.
-6. Goal card shows progress and next planned contribution.
-7. Selecting any aggregate opens a filtered source list.
+2. User sees authoritative current balance, latest snapshot anchor/as-of time, and data freshness.
+3. Safe-to-spend shows the signed amount and current user-local month-end horizon. “How calculated” exposes authoritative balance minus unpaid outgoings due through that horizon minus active goal current amounts; projected income is explicitly excluded.
+4. User can inspect the included unpaid/overdue outgoing occurrences and active goal reserves. A confirmed outgoing is represented through current balance and is not also subtracted as unpaid.
+5. Urgent obligations list shows amount, due date, and state with action.
+6. Month summary distinguishes confirmed income/outflow, historical-only records, and projected values; it explains why a snapshot boundary prevents whole-history reconciliation.
+7. Goal card shows progress and next planned contribution.
+8. Selecting any aggregate opens a filtered source list.
 
-When setup is incomplete, the dashboard explains which missing data prevents a trustworthy calculation.
+When setup is incomplete, the dashboard explains which missing data prevents a trustworthy calculation. `UF-DASH-01` is the product flow traced by `PRD-DASH-07`, `FIN-STS-INV-01` through `FIN-STS-INV-07`, and test cases `STS-01` through `STS-15`.
 
 ### UF-REM-01 — Act on a reminder
 
-1. At the 09:00 user-local evaluation, the worker creates at most one in-app notification for each eligible outgoing occurrence + stage (7-day, 3-day, due-today, or first-overdue).
-2. User opens it and lands on the owned occurrence after authentication.
-3. User confirms paid, views details, or dismisses/marks read.
-4. The overdue stage is created once and does not repeat daily/weekly; Schedule continues to show overdue until resolved.
-5. Reading/dismissing a notification does not mark payment complete, and no payment-reminder email/push is sent.
+1. At the 09:00 user-local evaluation, the server worker creates at most one in-app notification for each eligible outgoing occurrence + stage (7-day, 3-day, due-today, or first-overdue), independent of whether the app is open.
+2. Before creation it rechecks current occurrence state/version and occurrence + stage uniqueness; confirmed, skipped, or cancelled items receive no new stage.
+3. User opens it and lands on the owned occurrence after authentication.
+4. User confirms paid, views details, or dismisses/marks read.
+5. The overdue stage is created once and does not repeat daily/weekly; Schedule continues to show overdue until resolved.
+6. Reading/dismissing, closing, or later reopening the app does not mark payment complete, replay elapsed stages, or send payment-reminder email/push.
+7. If worker downtime, late occurrence creation, or timezone change makes multiple stages elapsed, one recovery evaluation creates at most one catch-up notification for the occurrence. Which single stage, if any, is selected remains **BLOCKER `SPEC-REM-01`**; no burst is allowed.
 
 ### UF-REM-02 — Cash-flow warning
 
@@ -308,19 +321,18 @@ When setup is incomplete, the dashboard explains which missing data prevents a t
 
 Before approval, product/UX review must walk through at minimum:
 
-- invitation expiry/wrong-email/parallel use and one atomic account creation;
+- mandatory invitation-code expiry/wrong-email/parallel use, one atomic account creation, and no email-only admission bypass;
 - post-verification session behavior under the selected policy;
 - deletion request/cancellation race, purge, and restore-exclusion behavior;
 - fixed salary plus two daily income records in one month;
 - insufficient current funds for rent due in three days;
 - payment due date passes with no confirmation;
 - retry after an uncertain Global Add response;
-- debt payment with and without a principal/interest split;
-- pre-snapshot historical backfill appears in the month but leaves current balance fixed;
-- same-day snapshot ambiguity requires an explicit inclusion decision;
-- a manual authoritative-balance snapshot starts a new segment without rewriting history;
+- debt payment/correction cases `DCT-01`–`DCT-09`, preserving `SPEC-DEBT-01` blocked outcomes and inferring no component/outstanding;
+- snapshot scenarios A–J, including historical-only reporting, same-day explicit inclusion, new segments, non-whole-history balance, and `SPEC-FIN-01`/`SPEC-FIN-02` blockers;
+- safe-to-spend cases `STS-01`–`STS-15`, including projected-income exclusion, no paid-outgoing double subtraction, active-goal reserve, negative result, and local month boundary;
 - manual savings amount update followed by partial linked-purchase deduction without double counting;
-- timezone change near month/reminder boundary and 09:00 catch-up behavior;
+- reminder cases `RCT-01`–`RCT-10`, including worker downtime, closed app, late occurrence creation, timezone change, delayed return, multiple missed stages, no burst, and `SPEC-REM-01`;
 - recurrence on the 29th/30th/31st and leap day;
 - edit/delete of records linked to snapshots, schedules, debt, or planned purchase;
 - two users attempting the same object identifiers;

@@ -1,8 +1,9 @@
 # ADR-003 — Database Choice
 
-**Status:** Proposed<br>
+**Status:** Blocked<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Unassigned<br>
+**Decision owners:** Architecture Owner; Data Owner; Security Owner; Operations Owner<br>
+**Exact blocker:** Managed PostgreSQL is the accepted logical data store, but ADR acceptance is blocked by `SPEC-SEC-01` (RLS decision/context design), `RC-PROV-01` (provider/region/version), and `BETA-LEGAL-01` (residency/retention constraints), plus missing ORM `BIGINT`/transaction, tenant-constraint, query-plan, and restore evidence.<br>
 **Related:** [Database specification](../DATABASE.md)
 
 ## Context

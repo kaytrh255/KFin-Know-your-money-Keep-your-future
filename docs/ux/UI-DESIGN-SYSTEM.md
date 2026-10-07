@@ -1,7 +1,8 @@
 # KFin UI Design System
 
 **Status:** Draft visual proposal — review and contrast validation required<br>
-**Version:** 0.1<br>
+**Version:** 0.2<br>
+**Evidence status:** No visual prototype acceptance, usability acceptance, or accessibility validation<br>
 **Purpose:** Create one accessible, reusable visual and interaction language before feature screens proliferate.
 
 ## 1. Brand qualities

@@ -30,8 +30,8 @@
 
 - Required documents reviewed for contradictions.
 - Product owner and engineering/security reviewers approve MVP boundaries and major decisions.
-- ADRs required for Phase 1 are accepted.
-- Implementation backlog links each item to requirements and tests.
+- All required ADRs are genuinely Accepted with role-based approvers/evidence, and every centralized `SPEC-*` blocker is closed.
+- Implementation backlog links each item to requirements, flows, invariants, and tests.
 
 ### Phase 1 — Product foundation and design system
 
@@ -104,7 +104,7 @@
 **Exit gate**
 
 - Scheduled versus posted semantics are validated with users.
-- Recurrence boundary, debt correction, and savings double-counting tests pass.
+- `SPEC-SCH-01` and `SPEC-DEBT-01` are resolved; recurrence boundaries, `DCT-01`–`DCT-09`, and savings double-counting tests pass.
 
 ### Phase 5 — Decision-focused dashboard, reminders, and PWA
 
@@ -113,8 +113,8 @@
 **Candidate deliverables after approval**
 
 - Dashboard hierarchy and drill-down.
-- Approved spendable estimate and cash-flow warning.
-- In-app-only reminder center for eligible outgoing obligations: 09:00 user-local stages and one first-overdue notification.
+- Safe-to-spend implementation exactly matching `PRD-DASH-07` and `STS-01`–`STS-15`, plus the cash-flow warning.
+- In-app-only reminder center for eligible outgoing obligations: 09:00 user-local stages, one first-overdue notification, closed-app independence, and no catch-up burst. Catch-up implementation starts only after `SPEC-REM-01` is resolved.
 - Installable PWA with safe caching behavior.
 - Offline/read-only failure messaging; no offline financial writes.
 

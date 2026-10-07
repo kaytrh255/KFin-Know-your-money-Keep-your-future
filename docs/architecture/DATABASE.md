@@ -118,6 +118,7 @@ Rules:
 - Code validation, pending user creation, and invitation consumption are atomic.
 - Expired/consumed/revoked/other-email behavior must remain generic externally.
 - Invitation provisioning is operator-audited; an admin UI is not required by the schema.
+- An email match can constrain an invitation but can never grant admission by itself. No server-side email-allowlist table or bypass is an MVP registration mechanism.
 
 ### 4.3 `password_credentials`
 
@@ -301,7 +302,7 @@ Invariants:
 - Income cannot have an expense class and must set `is_unexpected = false`.
 - An expense may retain its essential/daily class while independently being unexpected.
 - Voided transactions do not affect balance or period aggregates.
-- A correction atomically voids the old transaction and creates a replacement. Crossing snapshot segment/effect requires an explicit correction action and audit event.
+- Any approved correction/void action must be atomic, preserve old/new-or-void effect plus actor/reason/relationship/idempotency evidence, and obey `FIN-SNAP-INV-08`. Whether the API uses void + replacement for each case, how linked occurrences/reports change, and which prior/cross-segment transitions are supported remain blocked by `SPEC-FIN-01`; racing snapshot creation is blocked by `SPEC-FIN-02`. An audit row alone is not permission to guess either the model or new anchor.
 - Link tables/columns below prevent one posted transaction from satisfying multiple incompatible domain actions.
 
 ### 6.2 Balance and monthly calculation
@@ -322,7 +323,21 @@ Rules:
 - Monthly income/outflow includes every posted transaction by `occurred_on`, both `current` and visibly labelled `historical`, and excludes voided records.
 - Current balance therefore cannot be reconstructed from an unbounded all-history transaction sum across snapshot boundaries. Reporting APIs must expose the snapshot anchor and components.
 - Use checked integer arithmetic and a database view/query; do not maintain a mutable balance cache in MVP.
-- Snapshot creation and concurrent transaction creation require serialization/version policy so a transaction cannot attach ambiguously to the segment being closed.
+- Snapshot creation and concurrent transaction creation require serialization/version policy so a transaction cannot attach ambiguously to the segment being closed. The exact stale-write retry/re-anchor/user-choice behavior is `SPEC-FIN-02` and remains a blocker.
+- These rules implement `FIN-SNAP-INV-01` through `FIN-SNAP-INV-10`; scenarios A–J in the test strategy are mandatory acceptance evidence.
+
+### 6.3 Safe-to-spend query contract
+
+The database/reporting query implements formula version `safe_to_spend.v1`, `PRD-DASH-07`, and `FIN-STS-INV-01` through `FIN-STS-INV-07` without a mutable source-of-truth cache:
+
+```text
+safe_to_spend
+= latest-snapshot-segment current balance
+- sum(unpaid outgoing occurrences where due_on <= current user-local month-end)
+- sum(current_amount_minor of active savings goals)
+```
+
+Unresolved overdue outgoings are included. Scheduled/projected income, paid/confirmed/skipped/cancelled outgoings, archived goals, historical-only transactions, and prior snapshot segments are excluded from their respective terms. Confirmation moves one outgoing from the unpaid term to a posted current-balance effect atomically, preventing double subtraction. The query returns its formula version, evaluation instant, user timezone, local month-end, snapshot ID/as-of time, signed result, and drill-down identifiers. Test cases `STS-01` through `STS-15` are mandatory.
 
 ## 7. Schedules and occurrences
 
@@ -380,7 +395,7 @@ One-off obligations may be represented by a non-recurring scheduled item with on
 - `status` — `active | paid_off | archived`
 - `created_at`, `updated_at`, `version`
 
-The current outstanding amount is explicitly user-maintained/lender-reported. Its as-of date cannot be in the user’s future. MVP intentionally has no interest-accrual or amortization engine. Updating outstanding requires a payment with known principal, an explicit new lender-reported value, or a separate balance adjustment.
+The current outstanding amount is explicitly user-maintained/lender-reported. Its as-of date cannot be in the user’s future. MVP has no authoritative interest-accrual, principal-allocation, fee-allocation, amortization, payoff, or lender-balance engine. Updating outstanding requires user-supplied principal, an explicit new lender-reported value, or a separate explicit balance adjustment; KFin never reconstructs any of them.
 
 ### 8.2 `debt_payments`
 
@@ -397,9 +412,18 @@ The current outstanding amount is explicitly user-maintained/lender-reported. It
 - `status` — `posted | voided`; `voided_at`, `supersedes_debt_payment_id NULL`
 - `created_at`
 
-Provided split components are non-negative and their sum cannot exceed total. `complete` requires principal + interest + fee (with explicit zeroes where applicable) to equal total; `partial` preserves the visible unclassified remainder. All rows/currency/user ownership must agree. Only an explicitly supplied principal amount or new lender-reported balance may change outstanding. If neither is known, the prior outstanding amount/as-of date remains unchanged; the full payment must never be silently treated as principal.
+#### Debt-payment and correction invariants
 
-A correction preserves the old payment/transaction as voided evidence and creates linked replacements atomically. Recomputing current outstanding may use only explicit principal deltas or user-entered lender-reported balances; the exact behavior when later payments/adjustments exist is a pre-debt-implementation blocker and must never invent interest.
+- **DEBT-INV-01 — Separate facts:** the posted expense is authoritative only for cash outflow. A debt-payment link/split is a user statement about that outflow and is not lender-verified amortization.
+- **DEBT-INV-02 — No inference engine:** KFin never derives principal, interest, fee, accrued interest, amortization, payoff date, or lender outstanding from rate, elapsed time, expected payment, unclassified remainder, or total paid.
+- **DEBT-INV-03 — Explicit split:** provided split components are non-negative and their sum cannot exceed total. `complete` requires explicit principal + interest + fee (including explicit zeroes) to equal total; `partial` preserves a visible unclassified remainder; `none` classifies nothing.
+- **DEBT-INV-04 — Outstanding authority:** only explicit principal supplied by the user or an explicit new lender-reported balance/as-of date may change outstanding. These are mutually exclusive outstanding-update modes for one payment; the system never both subtracts principal and applies a reported balance. With neither, the prior outstanding amount and as-of date remain exactly unchanged.
+- **DEBT-INV-05 — Preserved correction:** a supported correction atomically voids the old payment/transaction as evidence and creates linked replacement records; actor, reason, time, idempotency, ownership, currency, occurrence link, and old/new effects are retained.
+- **DEBT-INV-06 — Safe deterministic boundary:** when no later outstanding-affecting payment/adjustment exists and the pre-payment state plus all old/replacement effects are explicit, a correction/void may restore the explicit pre-payment outstanding and apply only replacement explicit principal or replacement lender-reported balance. Omitted components remain unknown and are never redistributed.
+- **DEBT-INV-07 — Cash-only correction:** if the old and replacement payment have no explicit principal or lender-balance effect, correcting total/date/classification changes the posted cash record and history only; debt outstanding/as-of remain unchanged.
+- **DEBT-INV-08 — Unsafe historical boundary:** if a later payment/adjustment exists, an as-of reorder occurs, required pre-state is missing, or the result would require inferred principal/interest/fee/outstanding, automatic outstanding recomputation is forbidden. The exact historical correction/rebase/rejection workflow is **BLOCKER `SPEC-DEBT-01`**; an implementer may not select one.
+
+All rows/currency/user ownership must agree. The debt correction matrix in the test strategy is mandatory evidence after `SPEC-DEBT-01` is resolved.
 
 ### 8.3 `debt_balance_adjustments`
 
@@ -492,10 +516,13 @@ MVP has no user-configurable reminder-rule/channel table. The four fixed approve
 Rules:
 
 - Only an eligible outgoing-obligation occurrence may have a fixed-stage reminder event; scheduled-income occurrences are excluded.
-- Deduplication key uniquely represents occurrence + stage; worker downtime catch-up cannot create duplicates.
+- Deduplication key uniquely represents occurrence + stage; worker retries, downtime, timezone changes, and app lifecycle cannot create duplicates.
 - `first_overdue` is generated once and never repeats while the occurrence remains overdue.
-- Confirmed/skipped/cancelled occurrence cancels unresolved reminder events.
+- Confirmed/skipped/cancelled occurrence cancels unresolved reminder events; the worker rechecks current version/state before insertion.
 - Reminder event or notification state never changes occurrence payment state.
+- If downtime, late creation, or timezone change makes multiple stages elapsed, one recovery evaluation may create at most one event for that occurrence. Stage selection, non-selected-stage recording, and recovery-window semantics remain **BLOCKER `SPEC-REM-01`**.
+- App close/reopen/delayed return only affects when persisted notifications are viewed; it does not enqueue, replay, or regenerate reminder events.
+- These rules implement `REM-INV-01` through `REM-INV-10` in ADR-008.
 
 ### 11.2 `notifications`
 
@@ -658,15 +685,15 @@ Checks emit identifiers/counts and safe error codes, not notes or complete finan
 
 Product meaning is set by OQ-01 through OQ-19. Physical review must still resolve:
 
-- PostgreSQL RLS adoption and trusted request/worker context mechanism;
-- exact transaction-versus-snapshot serialization and same-day inclusion contract;
-- correction/void API behavior across old/current snapshot segments;
-- yearly 29-February fallback, maximum recurrence interval/end/window bounds, series-edit scope, and multi-stage reminder catch-up/suppression policy;
-- deletion table/provider map, independent restore-exclusion register storage/key/expiry design, pseudonymization, and legal-hold mechanism;
-- OTP keyed-digest construction and challenge supersession policy;
-- session rotation/grace/replay schema details;
-- exact debt-rate precision/source metadata and historical payment-correction/outstanding recomputation behavior;
-- PostgreSQL version/extensions/pooling/PITR after the OQ-17 provider selection;
-- approved upper bounds for money, notes, records/page, occurrence window, and job batches.
+- `SPEC-SEC-01`: PostgreSQL RLS adoption and trusted request/worker context mechanism;
+- `SPEC-FIN-02`: transaction-versus-snapshot serialization and retryable-conflict contract; same-day explicit inclusion is already fixed by `FIN-SNAP-INV-05`;
+- `SPEC-FIN-01`: correction/void/link/report/idempotent API behavior for latest, prior, and cross-segment records;
+- `SPEC-SCH-01`: yearly 29-February fallback, maximum recurrence interval/end/window bounds, and series-edit scope;
+- `SPEC-REM-01`: one-stage-or-none multi-stage catch-up selection, suppression record, and recovery window;
+- `SPEC-DEL-01`: deletion table/provider map, independent restore-exclusion register storage/key/expiry design, pseudonymization, and legal-hold mechanism;
+- `SPEC-AUTH-02`: OTP keyed-digest construction/challenge supersession and session rotation/grace/replay details;
+- `SPEC-DEBT-01`: historical payment-correction/outstanding behavior; exact informational debt-rate storage bounds still require review;
+- `RC-PROV-01`: PostgreSQL version/extensions/pooling/PITR after provider selection;
+- `SPEC-GOV-01`: approved upper bounds for money, notes, records/page, occurrence window, and job batches.
 
 No migration should be written until the logical model, privacy/legal constraints, and these affected physical decisions are reviewed.

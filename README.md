@@ -6,7 +6,7 @@ KFin is a production-oriented personal finance management platform being designe
 
 **Specification foundation — implementation has not started.**
 
-The current repository intentionally contains product, UX, architecture, security, database, and testing specifications only. All documents are drafts pending review; proposed architecture decisions are not yet accepted.
+The current repository intentionally contains product, UX, architecture, security, database, and testing specifications only. Documents remain drafts pending owner approval/evidence; the Round 1 ADR audit records Proposed or Blocked status and zero Accepted ADRs.
 
 Start with the [KFin Specification Foundation](docs/README.md).
 
@@ -27,11 +27,14 @@ Start with the [KFin Specification Foundation](docs/README.md).
 
 ## Implementation gate
 
+**CLOSED**
+
 Do not implement application functionality until:
 
 1. accepted product decisions in the [decision log](docs/product/DECISION-LOG.md) are reflected consistently across specifications;
 2. product/UX/security/architecture/database/test specifications are reviewed and approved;
-3. relevant proposed ADRs are accepted;
-4. implementation work is traceable to requirements and tests.
+3. every required Proposed/Blocked ADR is genuinely Accepted with owner approval and evidence;
+4. every pre-implementation `SPEC-*` blocker in the centralized register is resolved; Release Candidate and beta gates remain enforceable at their stated phases;
+5. implementation work is traceable to requirements, flows, invariants, and tests.
 
 The priority is: **correct product → excellent UX → secure architecture → maintainable implementation → reliable production system**.

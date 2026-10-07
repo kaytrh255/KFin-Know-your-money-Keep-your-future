@@ -1,7 +1,7 @@
 # KFin Product Decision Log
 
 **Status:** Active<br>
-**Version:** 0.1<br>
+**Version:** 0.2<br>
 **Decision date:** 2026-10-07<br>
 **Source:** Interactive specification review with the project owner
 
@@ -17,7 +17,7 @@ This log records product decisions made after the initial specification foundati
 | OQ-02 | Accepted | Each user has one base currency, selected during onboarding; VND is the default. No conversion or cross-currency aggregation exists in MVP. |
 | OQ-03 | Accepted | MVP exposes one aggregate liquid-money account. Multiple accounts, transfers, and bank/account-statement reconciliation workflows are future scope; OQ-13 still permits a manual authoritative balance update. |
 | OQ-04 | Accepted | Scheduled income and outgoings never auto-post. Users explicitly confirm received/paid state. |
-| OQ-05 | Accepted | Safe-to-spend is a conservative calendar-month-end estimate: current balance minus unpaid outgoing obligations due through month end minus active savings-goal current amounts. Future income is excluded until received. |
+| OQ-05 | Accepted | Safe-to-spend is authoritative current balance minus unpaid outgoing occurrences due through current user-local month-end minus active savings-goal current amounts. Projected income is excluded until explicitly received and posted. |
 | OQ-06 | Accepted | MVP reminders are in-app only. No payment reminder email, push, SMS, or chat delivery. Authentication/security email remains required. |
 | OQ-07 | Accepted | Debt interest is informational only. MVP does not accrue interest, amortize debt, or predict payoff. |
 | OQ-08 | Accepted | A savings goal has a manually maintained current amount and as-of date. It is not a cash account and has no contribution/withdrawal ledger in MVP. Changes retain audit metadata. |
@@ -90,21 +90,24 @@ This log records product decisions made after the initial specification foundati
 
 ### OQ-05 — Conservative month-end safe-to-spend
 
-**Formula**
+**Formula:** `safe_to_spend.v1`
 
 ```text
 safe-to-spend estimate
-= current aggregate balance
-- unpaid outgoing occurrences due through the end of the current local calendar month
+= authoritative current balance
+- unpaid outgoing occurrences due through the end of the current user-local calendar month
 - sum of current amounts on active savings goals
 ```
 
 **Rules**
 
-- Do not include projected income before explicit receipt.
-- Do not double-subtract an outflow already represented by the current balance.
+- Authoritative current balance is the latest immutable snapshot plus current-impact deltas in only its segment; it is never a whole-history sum.
+- Include unresolved overdue outgoings as well as unpaid outgoings due later in the current month.
+- Do not include projected income before explicit receipt and posting.
+- Do not double-subtract a confirmed outflow already represented by the current balance.
 - Do not clamp a negative result to zero; explain the shortfall.
-- Display horizon, as-of time, included values, exclusions, and source drill-down.
+- Display formula version, local horizon, snapshot anchor/as-of time, included values, exclusions, and source drill-down.
+- Normative invariant IDs are `FIN-STS-INV-01` through `FIN-STS-INV-07` in the architecture specification; `STS-01` through `STS-15` are the mandatory traced cases.
 - This is an estimate based on manual data, not advice or a guarantee.
 
 ### OQ-06 — In-app reminders only
@@ -124,12 +127,14 @@ safe-to-spend estimate
 **Decision**
 
 - Store/display an optional user-entered annual rate and its as-of/source context.
-- Do not calculate interest accrued, amortization, payoff date, lender balance, or refinancing advice.
+- Do not infer or calculate authoritative principal, interest, fee, interest accrued, amortization, payoff date, lender outstanding, or refinancing advice.
 
 **Consequences**
 
-- Principal must be user-supplied in a payment split or reconciled through a lender-reported balance.
-- A payment without known principal does not silently reduce outstanding principal.
+- Principal/interest/fee values are only what the user explicitly supplies; unclassified remainder stays unknown.
+- Outstanding changes only from explicit principal or a user-entered lender-reported balance/as-of date.
+- A payment without known principal or reported balance leaves outstanding and its as-of date unchanged.
+- Historical payment correction with later outstanding-affecting records remains **BLOCKER `SPEC-DEBT-01`**; KFin must not invent a recomputed result.
 
 ### OQ-08 — Manual savings current amount
 
@@ -183,6 +188,7 @@ safe-to-spend estimate
 - Registration requires a cryptographically random, expiring, single-use invitation code.
 - Store only its digest; bind to an invited email where operationally appropriate.
 - Code consumption and account creation are atomic.
+- A server-side email allowlist is not the Private Beta registration gate and is not an alternative MVP mode.
 
 **Consequences**
 
@@ -194,12 +200,14 @@ safe-to-spend estimate
 **Decision**
 
 - Evaluate 7-day, 3-day, due-today, and first-overdue stages for eligible outgoing obligations at 09:00 user-local time; scheduled income remains projected in Schedule without a fixed-stage notification requirement.
-- Create one notification per eligible occurrence/stage.
+- An eligible occurrence/stage can create at most one notification; normal stage evaluation and catch-up suppression remain distinct.
 - The overdue stage fires once; it does not repeat while unchanged.
 
 **Consequences**
 
-- Timezone changes and worker downtime require idempotent catch-up without duplicate notification.
+- Server evaluation continues while the app is closed; delayed app return reads persisted state and never replays stages or changes financial state.
+- Timezone changes, late occurrence creation, and worker downtime require idempotent catch-up without duplicate notification.
+- If multiple stages elapsed, one recovery evaluation may create at most one catch-up notification for the occurrence. Which stage, if any, remains **BLOCKER `SPEC-REM-01`**; burst delivery is prohibited.
 - Due/overdue status remains derived and visible continuously, independent of notification creation.
 
 ### OQ-13 — Snapshot-anchored historical backfill
@@ -218,6 +226,7 @@ safe-to-spend estimate
 - Activity/detail must label historical-only records and explain why they do not affect current balance.
 - Editing a transaction cannot silently move it between balance segments.
 - Current balance and monthly net movement may not reconcile by simple all-time summation across a snapshot boundary; calculation disclosure must show the anchor.
+- Normative behavior is `FIN-SNAP-INV-01` through `FIN-SNAP-INV-10` and snapshot scenarios A–J. Scenario J remains blocked by `SPEC-FIN-01` and `SPEC-FIN-02`; no cross-segment/race behavior is inferred.
 
 ### OQ-14 — Bounded recurrence patterns
 
@@ -269,15 +278,15 @@ This map identifies the primary normative and verification destinations. It is n
 | OQ-02 | PRD-AUTH-09, PRD-FIN-05; UF-FIN-01 | Database §§4.1, 5–6; money/currency property tests |
 | OQ-03 | PRD-FIN-01/02; UF-FIN-01/03/04 | Database §§5–6; Architecture §§6, 10; balance E2E |
 | OQ-04 | PRD-INC-03, PRD-EXP-04, PRD-REM-03; UF-SCH-02/03 | Database §7; TM-17; schedule/payment tests |
-| OQ-05 | PRD-SAV-05, PRD-DASH-01/04; UF-DASH-01 | Architecture §10; calculation unit/property/E2E tests |
+| OQ-05 | PRD-SAV-05, PRD-DASH-07; UF-DASH-01 | FIN-STS-INV-01–07; STS-01–STS-15; release financial gate |
 | OQ-06 | PRD-REM-05; UF-REM-01 | ADR-008; SEC-EMAIL-04/06; notification release gate |
-| OQ-07 | PRD-DEBT-01/02/03; UF-DEBT-01/02 | Database §8; TM-18; debt split/no-accrual tests |
+| OQ-07 | PRD-DEBT-01–06; UF-DEBT-01/02/03 | DEBT-INV-01–08; DCT-01–DCT-09; TM-18 |
 | OQ-08 | PRD-SAV-01–07; UF-SAV-01 | Database §9; Architecture §§6, 11; savings audit tests |
 | OQ-09 | Roadmap Phase 6 | ADR-007; Architecture §16; provider/deployment gates |
 | OQ-10 | PRD-AUTH-10; UF-AUTH-07 | Database §§4.8–4.9, 15, 17; SEC-DATA; deletion/restore tests |
-| OQ-11 | PRD-AUTH-01; UF-AUTH-01 | ADR-002; Database §4.2; SEC-AUTH-14; invitation tests |
-| OQ-12 | PRD-REM-02/04/06; UF-REM-01 | ADR-008; Database §11; timezone/dedup tests |
-| OQ-13 | PRD-FIN-02/08–11; UF-FIN-01/02/03/06 | Database §§5.3, 6; SEC-APP-14/15; snapshot/backfill tests |
+| OQ-11 | PRD-AUTH-01; UF-AUTH-01 | ADR-002; Database §4.2; SEC-AUTH-14/15; valid-code/no-email-allowlist-bypass tests |
+| OQ-12 | PRD-REM-02/04/06/10/11/12; UF-REM-01 | REM-INV-01–10; RCT-01–RCT-10; ADR-008; Database §11 |
+| OQ-13 | PRD-FIN-02/08–11; UF-FIN-01/02/03/06 | FIN-SNAP-INV-01–10; snapshot A–J; SEC-APP-14/15 |
 | OQ-14 | PRD-REM-09; UF-SCH flows | Database §7; recurrence boundary/property tests |
 | OQ-15 | PRD-PLAN-03–06; UF-PLAN-02 | Database §§9.2, 10; atomic/idempotent completion tests |
 | OQ-16 | Approved beta context and constraints | ADR-007; SEC-DATA-08; legal/residency release gate |
@@ -287,7 +296,7 @@ This map identifies the primary normative and verification destinations. It is n
 
 ## 4. Remaining review and release blockers
 
-The OQ choices are recorded, but implementation remains blocked until the updated specifications and relevant ADRs are reviewed and accepted. Affected implementation also awaits the recorded post-verification session policy; snapshot correction/concurrency and historical debt-payment correction rules; RLS decision; yearly 29-February and recurrence bounds/series-edit semantics; reminder multi-stage catch-up policy; and deletion/independent restore-exclusion design.
+The OQ choices are recorded, but the Implementation Gate remains CLOSED. Open specification blockers are `SPEC-AUTH-01`, `SPEC-AUTH-02`, `SPEC-FIN-01`, `SPEC-FIN-02`, `SPEC-DEBT-01`, `SPEC-SCH-01`, `SPEC-REM-01`, `SPEC-SEC-01`, `SPEC-SEC-02`, `SPEC-DEL-01`, `SPEC-UX-01`, and `SPEC-GOV-01`; exact decisions/evidence and owner roles are centralized in `docs/README.md`. `RC-PROV-01` and `BETA-LEGAL-01` remain later release gates. Documentation must not choose their outcomes silently.
 
 Private Beta release additionally remains blocked by:
 

@@ -117,7 +117,7 @@ For the smallest deployment, the API may also serve the built web assets, but br
 
 | Module | Responsibilities | Must not own |
 |---|---|---|
-| Identity | User/profile/status, invite eligibility, locale/timezone/base currency, deletion lifecycle and restore-exclusion intent | Password hashing/session token logic |
+| Identity | User/profile/status, mandatory single-use invitation-code state, locale/timezone/base currency, deletion lifecycle and restore-exclusion intent | Password hashing/session token logic; any registration path that bypasses invitation-code validation |
 | Authentication | Registration, verification, login, password recovery/change | Financial data |
 | Sessions | Create/validate/rotate/revoke sessions, active-session view | User-controlled authorization decisions |
 | Accounts | One aggregate account, immutable balance snapshots, current-balance segments, manual known-balance updates | Bank/account-statement reconciliation, schedule, or debt policy |
@@ -201,14 +201,43 @@ Object-not-found and object-not-owned responses should be indistinguishable to p
 - Monthly grouping uses user-local date and an explicit selected period.
 - Recurrence generation defines 29th/30th/31st, leap-day, timezone-change, and daylight-saving behavior before implementation.
 
-### Derived values
+### Authoritative balance and snapshot invariants
 
-- Current balance derives from the latest immutable balance snapshot plus posted current-impact transactions attached to that snapshot segment.
-- Historical-only backfill participates in occurrence-month/category totals but not current balance; it is never inferred solely from client ownership/status fields.
-- Safe-to-spend equals current balance minus unpaid outgoing occurrences due through local calendar-month end minus manual current amounts on active savings goals; projected income is excluded.
-- Due/overdue derives from occurrence state + due date + user timezone; it does not mutate to paid.
-- Dashboard calculations live in one reporting service with named/versioned formulas, snapshot anchor, as-of time, and source drill-down.
-- Early beta can calculate on demand with indexed SQL. Materialized views/caches require measured evidence and an invalidation design.
+The following identifiers are normative and are traced to the A–J scenario matrix in the test strategy:
+
+- **FIN-SNAP-INV-01 — Authoritative anchor:** the latest immutable balance snapshot, selected by the database’s deterministic ordering rule, is the sole opening amount for current balance.
+- **FIN-SNAP-INV-02 — Current segment:** current balance equals that anchor plus posted `current` income deltas minus posted `current` expense deltas attached to that latest snapshot segment.
+- **FIN-SNAP-INV-03 — Historical-only:** a posted record explicitly marked `historical` participates in its user-local occurrence-month/category reports and never participates in current-balance arithmetic.
+- **FIN-SNAP-INV-04 — Closed prior segment:** after a newer snapshot becomes authoritative, transactions attached to an older snapshot remain immutable prior-segment evidence and are not added to the newer anchor.
+- **FIN-SNAP-INV-05 — Same-day inclusion:** when transaction inclusion is ambiguous on the snapshot’s user-local effective date, the server requires the user’s explicit `already included` choice and validates the corresponding balance effect; neither the client nor server silently guesses.
+- **FIN-SNAP-INV-06 — New anchor:** a manual known-balance update creates a new immutable snapshot and segment. It does not rewrite an older anchor or transaction and is not a bank/account-statement reconciliation.
+- **FIN-SNAP-INV-07 — No whole-history sum:** current balance must never be calculated as an initial balance plus every transaction in account history. Monthly net movement therefore need not reconcile to current balance across a snapshot boundary.
+- **FIN-SNAP-INV-08 — Correction evidence:** any approved correction/void behavior must preserve prior and replacement/void effects, reason, actor, time, relationship, idempotency result, and consequence preview; no in-place history erasure is permitted. The exact record/link/API semantics remain `SPEC-FIN-01`, so this invariant does not select a correction model.
+- **FIN-SNAP-INV-09 — Concurrency safety boundary:** snapshot creation and financial writes must reject or resolve stale versions atomically so one deterministic latest segment results. The exact retry, re-anchor, and user-choice behavior for a transaction racing a new snapshot is unresolved under `SPEC-FIN-02`; implementation of that path is blocked.
+- **FIN-SNAP-INV-10 — Cross-segment safety boundary:** a correction concerning a closed prior segment cannot change authoritative current balance merely by rewriting old history. Moving a transaction across snapshot segments or changing its inclusion classification across an anchor must not happen silently. Exact correction/void/link/report semantics for prior/cross-segment records are unresolved under `SPEC-FIN-01`; a concurrent snapshot race additionally remains under `SPEC-FIN-02`.
+
+### Safe-to-spend invariants
+
+**Formula version:** `safe_to_spend.v1`
+
+For an evaluation instant `t`, let `EOM(t, user_timezone)` be the last local calendar date of the current user-local month:
+
+```text
+B = authoritative current balance at t
+O = sum of unpaid outgoing occurrence amounts with due_on <= EOM(t, user_timezone)
+G = sum of current_amount for active savings goals at t
+safe_to_spend = B - O - G
+```
+
+- **FIN-STS-INV-01 — Authoritative balance input:** `B` is produced only by `FIN-SNAP-INV-01` and `FIN-SNAP-INV-02`; stale cached balance, a selected-month net, or a whole-history sum is not an input.
+- **FIN-STS-INV-02 — Outgoing horizon:** `O` includes unresolved unpaid outgoing occurrences due on or before current user-local month-end, including earlier overdue occurrences. It excludes scheduled income, paid/confirmed, skipped, and cancelled occurrences.
+- **FIN-STS-INV-03 — No outgoing double subtraction:** confirming an outgoing occurrence atomically links its posted expense, removes the occurrence from `O`, and lets the posted current-impact expense affect `B` exactly once.
+- **FIN-STS-INV-04 — Active reserves:** `G` uses each active goal’s latest explicit current amount. Archived goals are excluded; changing a goal amount does not change `B` or monthly income/outflow.
+- **FIN-STS-INV-05 — Income exclusion:** projected, scheduled, expected, or overdue income is always excluded. Income can affect the estimate only after explicit receipt creates a posted transaction that affects `B` under the snapshot rules.
+- **FIN-STS-INV-06 — Exact signed result:** arithmetic uses checked integer minor units in one base currency. A negative result is valid, remains negative, and is never clamped to zero.
+- **FIN-STS-INV-07 — Local boundary and disclosure:** timezone, evaluation instant, local month-end horizon, snapshot anchor/as-of time, `B`, included `O`, included `G`, exclusions, and formula version are inspectable. A timezone/month rollover causes deterministic recalculation.
+
+Due/overdue derives from occurrence state + due date + user timezone; it does not mutate to paid. Dashboard calculations live in one reporting service with named/versioned formulas, snapshot anchor, as-of time, and source drill-down. Early beta can calculate on demand with indexed SQL. Materialized views/caches require measured evidence and an invalidation design.
 
 ## 11. Transaction and consistency boundaries
 
@@ -218,7 +247,7 @@ The following operations must be atomic:
 - aggregate account + initial balance snapshot creation;
 - create/confirm posted transaction + balance-effect/snapshot anchor + optional schedule occurrence link + idempotency result;
 - create a manual authoritative-balance snapshot + new segment metadata + audit event;
-- debt payment + posted outflow + principal/outstanding update + occurrence link;
+- debt payment + posted outflow + occurrence link + any optional user-explicit principal or lender-reported outstanding effect;
 - savings current-amount update + old/new audit metadata;
 - planned-purchase completion + posted expense + optional linked-goal scalar deduction/audit + purchase status;
 - password reset + credential replacement + all-session revocation + challenge consumption;
@@ -252,13 +281,15 @@ Worker requirements:
 
 For 50 users, periodic polling is acceptable. A broker or Redis is explicitly not justified.
 
+Reminder jobs implement `REM-INV-01` through `REM-INV-10` in ADR-008. Evaluation continues server-side while the app is closed; returning to the app reads persisted notification state and never replays missed stages. Downtime, late occurrence creation, and timezone changes may make multiple stages elapsed, but one recovery evaluation may create at most one catch-up notification per occurrence. The exact single stage, if any, remains **BLOCKER `SPEC-REM-01`** and must not be chosen by implementation.
+
 ## 13. Authentication and session architecture
 
 Detailed decisions are in [ADR-002](ADR/ADR-002-authentication-strategy.md), [ADR-004](ADR/ADR-004-session-management.md), and the security requirements.
 
 Proposed design:
 
-- Email/password identity with verified email and a required single-use, expiring beta invitation code; invite consumption and pending-account creation are atomic.
+- Email/password identity with verified email and a mandatory single-use, expiring beta invitation code; invite consumption and pending-account creation are atomic. Email match may constrain a code but never grants admission without one.
 - Passwords hashed with Argon2id using parameters benchmarked against current OWASP guidance on production-class hardware.
 - OTP/reset challenges are purpose-bound, single-use, short-lived, attempt-limited, stored only as keyed digest/hash, and superseded on controlled resend.
 - Because a digest cannot be used to reconstruct an emailed secret, the proposed MVP sends secret-bearing OTP/reset mail immediately after committing the challenge while plaintext exists only in process memory. Provider failure produces a controlled resend path. Such secrets are never put in the ordinary outbox; a future asynchronous encrypted-envelope design needs its own review.
@@ -379,7 +410,7 @@ At 50 users, one small application instance plus one worker process and managed 
 Architecture approval requires:
 
 - confirmation that OQ-01 through OQ-19 decisions are reflected consistently;
-- accepted ADR-001 through ADR-008;
+- all required ADRs Accepted with named role approvers and evidence; the Round 1 review currently records ADR-001–ADR-008 as Proposed or Blocked, with zero Accepted;
 - a short local/ephemeral spike validating same-origin routing, secure cookies/CSRF, ORM transaction behavior, service-worker exclusions, snapshot segmentation, and PostgreSQL job claiming;
 - reviewed data-isolation strategy, including whether PostgreSQL RLS is mandatory at beta launch;
 - explicit acceptance of OQ-17’s late provider-selection risk and a dated Release Candidate provider gate;
