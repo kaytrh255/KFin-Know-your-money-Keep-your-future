@@ -93,7 +93,7 @@
 **Exit gate**
 
 - Money/date/timezone invariants and idempotency pass.
-- `SPEC-FIN-01` and `SPEC-FIN-02` have mandatory owner approvals; H–J/`FIN-COR-01`–`10` and real-PostgreSQL `FIN-RACE-01`–`08` on Supabase pass with ADR-009, rollback-before-retry, lock-release/pool-reuse, query/latency and commit-fault evidence.
+- `SPEC-FIN-01` and `SPEC-FIN-02` have mandatory owner approvals; H–J/`FIN-COR-01`–`10` and real-PostgreSQL `FIN-RACE-01`–`08` on Supabase pass with ADR-009, idle-confirmed rollback, lock release, deterministic clean reuse, unconfirmed-cleanup eviction/no-retry, query/latency and commit-fault evidence.
 - Representative users complete Global Add and correction tasks on small screens.
 - Cross-user tests pass for every resource.
 

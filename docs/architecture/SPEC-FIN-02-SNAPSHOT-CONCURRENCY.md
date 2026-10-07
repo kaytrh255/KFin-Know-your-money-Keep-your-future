@@ -36,7 +36,8 @@ This document and ADR-009 are decision candidates, not approval or runtime evide
 - **Business stale result:** a post-lock mismatch between the reviewed state and authoritative committed state.
 - **Transient database failure:** only SQLSTATE `55P03`, `40P01`, or `40001` under §8.
 - **Commit uncertainty:** the application sent `COMMIT` but did not receive a trustworthy committed/rolled-back result because the connection or request timed out.
-- **Explicit rollback:** an awaited PostgreSQL `ROLLBACK` command that returns the connection to a known idle transaction state; a failed statement or driver exception alone is not a rollback.
+- **Confirmed explicit rollback:** `ROLLBACK` is issued on the same driver-visible connection as the failed attempt and awaited through PostgreSQL `ReadyForQuery` status `I` (idle), or a documented driver-equivalent guarantee that consumes that status. Dispatching the command, receiving the original error, or resolving a client-side wrapper without confirmed idle state is insufficient.
+- **Eviction/quarantine:** an unconfirmed-clean application connection/pool handle is made unavailable to borrowers and invalidated/closed; it is not checked in, rehabilitated by a sentinel query, or used for an internal retry.
 
 `MUST`, `MUST NOT`, and `MAY` are normative.
 
@@ -118,7 +119,9 @@ Every serialized financial mutation follows this order:
 10. Increment `financial_state_version` exactly once and write the bounded idempotency result, including previous/committed version and result reference, in the same transaction.
 11. Commit. External calls, email, logging sinks, user interaction, and report rendering MUST NOT occur while locks are held.
 
-For any failed statement inside an open transaction, the handler MUST explicitly issue and await `ROLLBACK` before releasing that connection to the pool, starting any retry, or returning a mapped timeout/busy result. SQLSTATE `55P03` and `57014` explicitly require this sequence. A statement error or driver exception MUST NOT be treated as proof that PostgreSQL already rolled back the whole transaction. Rollback uses a bounded cleanup scope that remains usable after statement/request cancellation; attempting it only through an already-cancelled request context is insufficient. If explicit rollback cannot be confirmed, the connection MUST be destroyed/quarantined rather than returned to the pool, and no retry may reuse it. Loss after `COMMIT` was sent follows commit-uncertainty recovery instead of pretending rollback.
+For any failed statement inside an open transaction, the handler MUST issue `ROLLBACK` on that same connection and await confirmed idle state before releasing it to the pool, starting any retry, or returning a mapped timeout/busy result. SQLSTATE `55P03` and `57014` explicitly require this sequence. A statement error or driver exception MUST NOT be treated as proof that PostgreSQL already rolled back the whole transaction. Rollback uses a bounded cleanup scope that remains usable after statement/request cancellation; attempting it only through an already-cancelled request context is insufficient.
+
+If rollback/idle confirmation is impossible, the pool MUST invalidate/close the connection handle before any result is returned. It MUST NOT check the handle in or start an internal retry on another connection while the prior backend outcome remains unconfirmed. After eviction, a pre-`COMMIT` failure returns the safe timeout/busy result associated with its trigger; if it is not trustworthy whether `COMMIT` was sent, §7.3 commit-uncertainty recovery applies instead. A different connection does not turn unknown cleanup into a retryable attempt.
 
 A code path that writes a covered table without this protocol is a correctness defect, not an alternate optimization.
 
@@ -197,6 +200,8 @@ If `COMMIT` was not sent and the server has explicitly issued and successfully a
 
 ### 7.3 Commit uncertainty
 
+A trustworthy PostgreSQL response rejecting `COMMIT` is not commit uncertainty. If it carries an internally retryable SQLSTATE, the handler still issues and awaits `ROLLBACK`/idle confirmation—`ROLLBACK` is harmless if PostgreSQL already ended the transaction—before applying §8. If the response does not establish whether `COMMIT` took effect, it is uncertain rather than retryable.
+
 If `COMMIT` was sent but acknowledgement is lost:
 
 1. the server MUST NOT assume rollback, create a new key, or issue an uncoordinated duplicate write;
@@ -226,12 +231,12 @@ Only SQLSTATE `55P03` (`lock_not_available`/lock timeout), `40P01` (`deadlock_de
 Rules:
 
 - a business stale result, validation failure, authorization failure, or idempotency digest conflict is never internally retried;
-- SQLSTATE `55P03` MUST be followed by explicit awaited `ROLLBACK` before connection release or the one allowed retry;
-- SQLSTATE `57014`/application deadline is not internally retried and MUST use the bounded cleanup scope to await explicit `ROLLBACK` before returning HTTP `503` + `FINANCIAL_OPERATION_TIMEOUT` with safe same-key retry guidance;
+- every `55P03`, `40P01`, or `40001` attempt failure MUST complete confirmed explicit rollback before the one allowed retry or a busy result;
+- SQLSTATE `57014`/application deadline is not internally retried and MUST use the cleanup scope to complete confirmed explicit rollback before returning HTTP `503` + `FINANCIAL_OPERATION_TIMEOUT` with safe same-key retry guidance;
 - a failed statement MUST NOT be interpreted as proof that the complete transaction has already rolled back;
-- a second transient failure returns HTTP `503` + `FINANCIAL_CONCURRENCY_BUSY` and `Retry-After: 1`, but only after explicit rollback completes;
-- every retry begins with a new `BEGIN`/new PostgreSQL transaction after the prior attempt’s explicit rollback; retrying inside the failed transaction is forbidden;
-- a connection whose rollback/idle state cannot be confirmed is removed from the pool rather than released/reused;
+- a second transient failure, or a first transient failure after which the remaining budget cannot safely contain cleanup/backoff/another complete attempt, returns HTTP `503` + `FINANCIAL_CONCURRENCY_BUSY` and `Retry-After: 1` after confirmed rollback, with no new `BEGIN`;
+- every retry begins with a new `BEGIN`/new PostgreSQL transaction after the prior attempt’s confirmed rollback; retrying inside the failed transaction is forbidden;
+- if rollback/idle cannot be confirmed, the connection is evicted/closed before response, no internal retry occurs on any connection, and the trigger maps to timeout/busy unless §7.3 applies;
 - connection loss after `COMMIT` is not a normal transient retry; it follows §7.3; and
 - no retry loop may outlive the request budget or hold a database connection during backoff.
 
@@ -246,7 +251,8 @@ Required metrics, without raw account IDs/amounts/notes:
 - account-lock wait histogram and timeout count;
 - stale result count by operation code;
 - transient retry count by SQLSTATE and attempt number;
-- retry-exhausted and operation-timeout count;
+- rollback cleanup duration/outcome, idle-confirmation failure, and connection-eviction count;
+- retry-exhausted, budget-prevented-retry, and operation-timeout count;
 - commit-uncertainty recovery outcome: replayed, safely executed, stale, or unknown;
 - idempotency replay/digest-conflict count; and
 - transaction duration and pool saturation.
@@ -264,7 +270,7 @@ Every case runs against PostgreSQL using the intended driver/transaction layer. 
 | `FIN-RACE-03` — correction vs correction/void | Parallel different keys target one posted terminal source | One source transition and at most one replacement; loser stale; no branch, double reversal, partial link, or second version increment |
 | `FIN-RACE-04` — snapshot vs snapshot/stale tab | Two snapshots or a deliberately stale tab use version `N`; force both orders | Exactly one new immutable latest snapshot and version `N+1`; loser stale; no duplicate effective anchor or overwrite |
 | `FIN-RACE-05` — idempotency contention | Parallel same-key/same-digest, then same key/different digest, plus retry after committed version changed | Compatible calls return one stored result and one version increment; different digest gets `IDEMPOTENCY_KEY_REUSED`; replay is not stale |
-| `FIN-RACE-06` — rollback and transient retry bounds | Inject `55P03`, `40P01`, and `40001` on attempt one; inject `57014` with request context cancelled; inject a retryable code again on attempt two; commit a competitor between attempts | A live bounded cleanup scope completes `ROLLBACK` before pool release/result/fresh `BEGIN`; `57014` has no internal retry; at most two unchanged retryable attempts; changed state is stale; second transient is busy; no failed-transaction reuse/third attempt |
+| `FIN-RACE-06` — rollback cleanup and bounded retry | Force each of `55P03`, `40P01`, `40001` after the account lock on attempt one and, in exhaustion subcases, again on attempt two; commit a competitor between attempts in a stale subcase; force `57014` with request context cancelled; separately exhaust pre-retry budget and make rollback acknowledgement unconfirmable | Each confirmable case reaches `ReadyForQuery(I)`/driver-equivalent before check-in/result/fresh `BEGIN`; `57014`, insufficient budget, and unconfirmed cleanup start no retry; unconfirmed cleanup evicts the handle; changed state is stale; second transient is busy; no failed-transaction reuse/third attempt |
 | `FIN-RACE-07` — timeout/commit uncertainty | Cut the connection before `COMMIT`, after `COMMIT` is sent, and after commit but before response; test original commit and rollback branches | Same key recovers one result or safely executes once after rollback; unresolved budget returns `FINANCIAL_RESULT_UNKNOWN`; no duplicate row/effect/version increment |
 | `FIN-RACE-08` — scope, order, and bypass | Run covered user/worker/operator/domain writes on one account and parallel writes on distinct synthetic accounts; deliberately violate child-before-account order in test instrumentation | Same-account writes serialize; distinct accounts are not globally locked; every covered path uses account-first order; prohibited order/bypass fails architecture review/test |
 
@@ -274,9 +280,10 @@ Closure evidence MUST run on a dedicated non-production Supabase project using r
 
 - Supabase/PostgreSQL server version/configuration, driver/ORM version, pool mode, schema/spec commit, and test harness commit;
 - at least 100 deterministic repetitions of each forced winner order in `FIN-RACE-01`–`05` with zero forbidden outcome;
-- exact injected SQLSTATE and observed attempt count/timing for `FIN-RACE-06`, plus transaction/driver trace proving the cleanup scope remains live and `ROLLBACK` completes before pool release, timeout response, or a fresh retry `BEGIN`;
-- pool-state evidence that a failed/unconfirmed-rollback connection is destroyed rather than checked in;
-- a connection/proxy fault injection at each `FIN-RACE-07` cut point, not an application exception substituted for commit uncertainty;
+- exact SQLSTATE, attempt count, backoff, remaining budget, and final result for every `FIN-RACE-06` subcase, including each retryable code on attempts one/two, `57014`, budget-prevented retry, and rollback-acknowledgement loss;
+- protocol/driver trace proving same-connection `ROLLBACK` reaches `ReadyForQuery(I)` or documented driver-equivalent idle state before pool release, timeout/busy response, or a fresh retry `BEGIN`;
+- pool-state evidence that unconfirmed cleanup evicts/closes the application handle, starts no internal retry, and never checks that handle in; deterministic clean-reuse evidence uses a one-slot application pool or equivalent connection correlation;
+- a connection/proxy fault injection at each `FIN-RACE-07` cut point, not an application exception substituted for commit uncertainty; the pre-`COMMIT` cut must confirm backend/session termination before same-key re-execution;
 - account/version/snapshot/result counts before and after, using synthetic data and no retained private payload;
 - proof that version increments once for a logical winner and zero times for loser/replay/rollback;
 - lock-order/query review and sanitized `pg_locks`/database diagnostics for `FIN-RACE-08`;
@@ -290,15 +297,18 @@ A probabilistic run without forced order, an in-memory database, a mocked lock, 
 
 The Supabase PostgreSQL harness MUST make transaction cleanup observable rather than infer it from an error response:
 
-1. Begin attempt A, acquire the account lock, then force `55P03` on a later test lock; separately force `57014` and request-context cancellation after the account lock is held.
-2. Confirm the failed transaction rejects ordinary follow-up work until cleanup; this demonstrates that statement failure did not roll back the whole transaction automatically.
-3. Record the still-live bounded cleanup scope and explicit `ROLLBACK` start/completion. Before completion, no retry `BEGIN`, pool check-in, timeout/busy response, or application success/failure result is allowed.
-4. After rollback, an independent observer MUST immediately acquire every lock held by attempt A within the expected bound.
-5. A clean returned connection MUST be checked out by a subsequent synthetic borrower and execute a sentinel query/new transaction without `25P02`, inherited locks, local settings, or prior request context.
-6. If rollback is deliberately made unconfirmable by connection fault, the pool MUST evict that connection; it cannot be the backend reused by the next borrower.
-7. A permitted retry MUST show a new transaction identity/`BEGIN` after rollback completion and must re-run the full account-lock/version/idempotency protocol.
+1. Begin attempt A, acquire the account lock, then force each retryable SQLSTATE on a later test action; separately force `57014` and request-context cancellation after the account lock is held.
+2. For statement failures, observe failed transaction status `E`/`25P02` before cleanup. This proves the original error is not accepted as idle-state confirmation.
+3. On the same driver-visible connection, record the still-live cleanup scope, `ROLLBACK` dispatch, and receipt of `ReadyForQuery(I)` or the documented driver-equivalent idle acknowledgement. Before idle confirmation, no retry `BEGIN`, pool check-in, timeout/busy response, or application result is allowed.
+4. After cleanup, an independent observer MUST acquire every known account/child lock from attempt A within the expected bound; evidence must show no lock remains, without assuming the original statement error itself released it.
+5. Using a one-slot application pool or equivalent handle/session correlation, return the confirmed-clean connection and force the next synthetic borrower to execute a sentinel query/new transaction without `25P02`, inherited locks, local settings, or prior request context.
+6. Deliberately lose the rollback acknowledgement. The application pool MUST invalidate/close that handle before response, MUST NOT check it in or rehabilitate it with a query, and MUST start no internal retry on another connection.
+7. The next borrower MUST NOT receive the evicted application handle. If a Supabase-managed pooler multiplexes backend sessions, evidence MUST distinguish application-handle eviction from provider backend reuse and prove an idle/new transaction boundary rather than rely only on backend PID change.
+8. A permitted retry MUST show a new transaction identity/`BEGIN` after confirmed rollback and must re-run the full account-lock/version/idempotency protocol. A budget-prevented retry MUST show no second `BEGIN` and the stable busy result.
 
-Artifacts retain ordered timestamps, safe backend/transaction correlation tokens, pool checkout/check-in/eviction events and lock observations—never real user IDs, amounts, notes or raw idempotency keys.
+Artifacts retain ordered timestamps, safe handle/backend/transaction correlation tokens, protocol or driver transaction-status events, pool checkout/check-in/eviction events and lock observations—never real user IDs, amounts, notes or raw idempotency keys.
+
+The oracle follows PostgreSQL’s documented [`ROLLBACK`](https://www.postgresql.org/docs/current/sql-rollback.html) behavior and [`ReadyForQuery`](https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-READYFORQUERY) statuses: `I` is idle, `T` is in a transaction block, and `E` is in a failed transaction block.
 
 ## 11. Acceptance trace
 
@@ -306,7 +316,7 @@ Artifacts retain ordered timestamps, safe backend/transaction correlation tokens
 |---|---|
 | PostgreSQL per-account linearization | §§3–5; owner-scoped account row `FOR UPDATE` at `READ COMMITTED` |
 | Lock/isolation/version mechanism | §§3–5; account-first order plus `financial_state_version` and latest-snapshot check |
-| Bounded retry | §§4/8; explicit rollback before pool release/fresh transaction, exact retryable SQLSTATEs, one retry, fixed budgets and stable exhaustion result |
+| Bounded retry | §§4/8; confirmed idle rollback before pool release/fresh transaction, exact retryable SQLSTATEs, one retry, no retry after unconfirmed cleanup, fixed budgets and stable exhaustion result |
 | Timeout-after-commit behavior | §7.3 and `FIN-RACE-07`; same-key recovery, never blind duplicate execution |
 | One-winner/stale-loser race | §6 and `FIN-RACE-01`–`04`; one version increment and operation-specific stale codes |
 | Test/evidence matrix | §10; deterministic PostgreSQL barriers, fault injection, repetitions, metadata and reviewers |
@@ -318,7 +328,7 @@ Artifacts retain ordered timestamps, safe backend/transaction correlation tokens
 
 1. the Data Owner and mandatory Architecture, Security, and Financial Integrity co-approvers approve this exact policy/version and bounds;
 2. ADR-009 is accepted with names, date, rationale, rejected alternatives, and linked evidence;
-3. `FIN-RACE-01`–`FIN-RACE-08` execute against real PostgreSQL on the dedicated Supabase evidence project with intended driver/pool behavior and satisfy every required result, including rollback-before-retry and clean pool reuse;
+3. `FIN-RACE-01`–`FIN-RACE-08` execute against real PostgreSQL on the dedicated Supabase evidence project with intended driver/pool behavior and satisfy every required result, including idle-confirmed rollback-before-retry, clean reuse, and eviction/no-retry after unconfirmed cleanup;
 4. query/lock review proves every covered user, worker, operator, and owning-domain write uses the account-first boundary;
 5. timeout-after-commit fault injection proves same-key recovery with no duplicate effect;
 6. the Approval and Evidence Register records source commit, PR, artifact versions/digests, observed results, reviewers, defects, and disposition; and
