@@ -9,13 +9,13 @@
 
 KFin stores highly sensitive personal financial information. Private Beta needs registration, email OTP verification, password login, recovery/change, persistent access, abuse protection, and future MFA compatibility. It must avoid permanent tokens, account enumeration, plaintext/reversible passwords, and unnecessary identity-provider dependence.
 
-The exact invitation policy, UI language, email provider, legal terms, and MFA roadmap are unresolved.
+Private Beta uses expiring, single-use invitation codes and a Vietnamese-first UI. Invitation operating values/provisioning, the email provider, legal terms, and MFA roadmap still require their stated reviews or due gates.
 
 ## Decision
 
 Use first-party **verified email + password** authentication with these boundaries:
 
-- Private Beta registration is invite-controlled if OQ-11 accepts the recommendation.
+- Private Beta registration requires a high-entropy, expiring, single-use invitation code stored only as a digest; it may be bound to a normalized recipient email, and invitation consumption plus pending-account creation are atomic.
 - Normalize email consistently while preserving a presentation form.
 - Hash passwords using Argon2id with unique salts and parameters benchmarked to current OWASP guidance on production hardware. Store the encoded hash only.
 - Enforce a reviewed password policy, permit paste/password managers, reject common/known-compromised passwords through a privacy-safe mechanism, and do not force arbitrary periodic password changes.
@@ -42,7 +42,7 @@ Limits are centrally configurable within secure bounds, monitored, and tuned wit
 ### Managed identity provider
 
 **Benefits:** mature MFA/social login/risk tools, lower cryptographic implementation burden.<br>
-**Not selected yet because:** cost, data residency, provider lock-in, UI/session integration, and beta requirements are unknown. This may become preferable after provider/legal review and should be fairly reassessed before implementation.
+**Not selected yet because:** cost, data residency, provider lock-in, UI/session integration, and beta requirements are unknown. It must be fairly reassessed when ADR-002 is reviewed; accepting this ADR selects first-party authentication for MVP.
 
 ### Passwordless email magic links only
 
@@ -94,7 +94,8 @@ Rejected categorically: compromise would expose credentials and violates securit
 
 ## Validation before acceptance
 
-- Decide invite model and email provider/residency.
+- Approve invitation expiry/issuance/revocation/email-binding values and the audited provisioning procedure; select and review the email provider/residency before Release Candidate under OQ-17.
+- Test invitation wrong-email, expiry, revoke, replay, parallel consumption, digest-only storage, generic-error, and transaction-rollback paths.
 - Benchmark Argon2id under intended runtime and concurrency.
 - Threat review all auth state transitions and race conditions.
 - Test password manager, autofill, OTP paste, screen reader, rate-limit, and email failure behavior.

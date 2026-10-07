@@ -1,7 +1,7 @@
 # KFin Security Requirements
 
 **Status:** Draft — review required<br>
-**Version:** 0.1<br>
+**Version:** 0.2<br>
 **Applies to:** Web/PWA, API, worker, PostgreSQL, edge, CI/CD, providers, operator access<br>
 **Risk posture:** Sensitive personal and financial data; fail closed for identity, authorization, and financial writes
 
@@ -59,7 +59,7 @@ Financial values and note text MUST NOT be sent to session replay, advertising, 
 | SEC-NET-01 | Production MUST use HTTPS for every public request; HTTP redirects safely to HTTPS and no sensitive endpoint is served in plaintext. |
 | SEC-NET-02 | TLS MUST use currently supported secure protocol/ciphers (minimum TLS 1.2, prefer TLS 1.3) with automated certificate renewal and expiry alerting. |
 | SEC-NET-03 | HSTS MUST be enabled after domain/subdomain readiness is verified; preload requires separate review to avoid irreversible outage. |
-| SEC-NET-04 | Cloudflare (or approved equivalent) MUST provide DDoS protection, WAF baseline, request/body limits, and coarse abuse controls; edge controls do not replace app controls. |
+| SEC-NET-04 | Cloudflare MUST provide DDoS protection, WAF baseline, request/body limits, and coarse abuse controls; edge controls do not replace app controls. Replacing it requires a dated decision change. |
 | SEC-NET-05 | Origin bypass MUST be prevented where practical through private networking, firewall/allowlist, authenticated origin pull, or equivalent. Trusted proxy headers MUST be accepted only from trusted hops. |
 | SEC-NET-06 | PostgreSQL MUST NOT be publicly exposed. App-to-database traffic MUST use private/restricted network paths and TLS. |
 | SEC-NET-07 | Egress to email/telemetry/package/deployment providers SHOULD be constrained to required destinations where platform capability permits. |
@@ -82,6 +82,7 @@ Financial values and note text MUST NOT be sent to session replay, advertising, 
 | SEC-AUTH-11 | Account status and verified-email requirements MUST be checked during session use, not only login. |
 | SEC-AUTH-12 | MFA MUST NOT be improvised into MVP; schema/interfaces MAY preserve an extension point and a future specification MUST threat-model enrollment/recovery. |
 | SEC-AUTH-13 | Plaintext OTP/reset secrets MUST NOT be stored in the ordinary outbox. Under the proposed MVP path they exist only in request-process memory for immediate provider submission after digest-only challenge commit; any asynchronous encrypted-envelope alternative requires a separate key-management review. |
+| SEC-AUTH-14 | Private Beta invitation codes MUST be high-entropy, purpose-bound, expiring, single-use, digest-only at rest, abuse-limited, and atomically consumed with pending-account creation. Invalid/expired/used/wrong-email states MUST remain generic externally. |
 
 Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldown, target/IP hourly and daily caps—is pending validation and tuning. Rate-limit messages remain generic.
 
@@ -124,6 +125,8 @@ Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldo
 | SEC-APP-04 | Financial values MUST use checked integer arithmetic, currency consistency, positive magnitude rules, and overflow bounds. Client-supplied aggregate/balance is never authoritative. |
 | SEC-APP-05 | Financial create/confirm requests MUST support idempotency; same key/different payload is rejected and uncertain response can be recovered safely. |
 | SEC-APP-06 | Linked multi-record financial/security actions MUST use database transactions and version/concurrency checks. |
+| SEC-APP-14 | Balance-snapshot identity/effect MUST be server validated. Clients MUST NOT arbitrarily mark a transaction historical/current or attach it to another user/segment. Snapshot creation racing with transaction creation MUST serialize or fail safely. |
+| SEC-APP-15 | Historical-only transactions MUST never enter current-balance arithmetic; old snapshot segments MUST not be replayed into the latest balance. Snapshot/effect corrections require consequence preview, authorization, version checks, and audit. |
 | SEC-APP-07 | API request bodies, headers, query strings, uploads (if ever added), result pages, and error messages MUST have bounded sizes. File upload is not in MVP. |
 | SEC-APP-08 | API MUST use stable safe errors and correlation IDs. Production MUST NOT expose stack trace, SQL, filesystem, secret, provider credential, or another user’s data. |
 | SEC-APP-09 | Collection APIs MUST use bounded pagination; report/date ranges and occurrence generation MUST have hard limits. |
@@ -218,16 +221,29 @@ Application-level encryption of selected fields may be added only with a complet
 | SEC-EMAIL-01 | Sending domain MUST configure SPF, DKIM, and DMARC and monitor deliverability/abuse. |
 | SEC-EMAIL-02 | Email provider credentials/webhooks MUST be least-privilege, authenticated, rotated, and environment-separated. |
 | SEC-EMAIL-03 | Provider callbacks MUST verify signature/timestamp, prevent replay, validate schema, and be idempotent. |
-| SEC-EMAIL-04 | Email subjects/previews MUST minimize sensitive content; secrets expire and are single-use; reminder amount inclusion requires privacy approval. |
+| SEC-EMAIL-04 | Email subjects/previews MUST minimize sensitive content; secrets expire and are single-use. Payment-reminder email is prohibited in MVP. |
 | SEC-EMAIL-05 | Provider message/log retention and subprocessor region MUST align with approved privacy/residency policy. |
 | SEC-EMAIL-06 | Delivery status MUST never be treated as proof of payment or user action. |
+
+### 16.1 Privacy, deletion, and retention
+
+| ID | Requirement |
+|---|---|
+| SEC-DATA-01 | An account-deletion request MUST require recent authentication/identity verification, enter a 7-day cancellable pending state, and record no reusable authentication secret. |
+| SEC-DATA-02 | Post-deadline purge MUST be idempotent, resumable, operator-observable, and driven by an approved first-party/provider deletion map. |
+| SEC-DATA-03 | Maximum baselines are 90 days for encrypted backups, 90 days for application logs, and 24 months for minimized security/audit evidence. Legal review MAY shorten them; any extension requires a dated replacement of OQ-18 plus legal, privacy, product, and security approval before collection under the longer period. |
+| SEC-DATA-04 | Retained security/audit evidence after purge MUST remove direct identity/financial payload where lawful and use minimum pseudonymous correlation under an approved legal basis. |
+| SEC-DATA-05 | A protected restore-exclusion/tombstone register MUST be available independently of the application restore point and MUST prevent backup restoration from reactivating purged users. Restore tests MUST prove use of the current register before activation. |
+| SEC-DATA-06 | A deletion cancellation before the deadline MUST be authenticated, audited, race-safe against purge claiming, and produce one unambiguous account state. |
+| SEC-DATA-07 | Legal hold/incident exceptions MUST record authority, scope, access, review date, and expiry; they MUST NOT become indefinite informal retention. |
+| SEC-DATA-08 | Vietnam-first processing, Southeast Asia region preference, cross-border transfer, and provider retention MUST receive Vietnamese legal/privacy review before external beta. |
 
 ## 17. Backup, recovery, and operational security
 
 | ID | Requirement |
 |---|---|
-| SEC-OPS-01 | Production database MUST have automated encrypted backups with failure alerting and provider/account access controls. |
-| SEC-OPS-02 | Restore MUST be tested in an isolated production-like environment before beta and on an approved recurring schedule; a backup is not considered valid without restore evidence. |
+| SEC-OPS-01 | Production database MUST have automated encrypted backups with failure alerting, provider/account access controls, and enforced maximum 90-day retention under the accepted baseline. |
+| SEC-OPS-02 | Restore MUST be tested in an isolated production-like environment before beta and on an approved recurring schedule, using the current independently protected restore-exclusion register before activation; a backup is not considered valid without restore evidence. |
 | SEC-OPS-03 | Proposed beta RPO ≤ 24h and RTO ≤ 8h require product approval and measured validation. |
 | SEC-OPS-04 | Deployment MUST use immutable identified artifacts, gated CI, dependency lockfile, staging smoke/security checks, and a tested rollback/forward plan. |
 | SEC-OPS-05 | Control-plane/production operator accounts MUST use MFA, least privilege, no sharing, periodic review, and audit logs. |
@@ -270,6 +286,7 @@ Private Beta MUST NOT start unless:
 
 - No MFA in MVP increases residual account-takeover risk; controls and beta invitation limit exposure but do not eliminate it.
 - Manual financial data cannot be independently verified.
-- Cloudflare/email/hosting/observability provider risks remain until selected and reviewed.
-- RLS, exact auth/session thresholds, retention, reminder privacy, and native security are not accepted decisions yet.
+- Cloudflare/email/hosting/observability provider risks remain because specific vendors are intentionally deferred until before Release Candidate.
+- The extended 90-day backup/log and 24-month security/audit baseline increases privacy/breach impact and remains subject to legal approval and automated deletion tests.
+- RLS and exact auth/session thresholds remain architecture/security review decisions; payment reminders are in-app only and native security remains future scope.
 - This document is not evidence of compliance with a regulation or security standard.

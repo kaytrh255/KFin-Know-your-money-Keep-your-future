@@ -24,7 +24,7 @@
 - Architecture, data model, and proposed ADRs.
 - Security requirements and threat model.
 - Test strategy and release checklist.
-- Resolution log for OQ-01 through OQ-15.
+- Product decision log for OQ-01 through OQ-19 and cross-document consistency review.
 
 **Exit gate**
 
@@ -44,7 +44,7 @@
 - Database migration baseline and ownership safeguards.
 - Responsive application shell, tokens, core components, state patterns.
 - Structured logging, health/readiness checks, error boundary, correlation IDs.
-- Staging deployment and backup automation.
+- Vendor-neutral local/ephemeral deployment smoke and synthetic backup/restore harness. Provider-specific staging and backup automation remain Phase 6 work under OQ-17.
 
 **Exit gate**
 
@@ -61,12 +61,14 @@
 - Login, persistent opaque sessions, logout, session management.
 - Forgot/reset/change password.
 - Security history and abuse protections.
+- Approved account-deletion request/cancel/purge state machine plus vendor-neutral restore-exclusion contract/harness; selected-provider deletion/storage integration remains Phase 6 work.
 - Authorization test harness and audit event baseline.
 
 **Exit gate**
 
 - Auth integration, abuse, CSRF, session rotation/revocation, enumeration, and security E2E tests pass.
-- Email delivery failure and recovery behavior is exercised.
+- Email delivery failure and recovery behavior is exercised through the vendor-neutral adapter/fault harness; selected-provider validation remains a Phase 6 gate.
+- Deletion cancellation/purge races and restore-exclusion contract behavior pass against the approved design using deterministic adapters.
 
 ### Phase 3 — Financial core and fast entry
 
@@ -74,12 +76,12 @@
 
 **Candidate deliverables after approval**
 
-- Onboarding/opening balance.
-- Manual financial accounts under the approved OQ-03 decision.
-- Posted income/expense transaction model.
+- Onboarding with one aggregate account and initial balance snapshot.
+- Manual authoritative-balance snapshot updates and explicitly labelled historical backfill.
+- Posted current-impact/historical-only income/expense transaction model.
 - Amount-first Global Add and activity history.
 - Default categories/classifications.
-- Monthly aggregation and reconciliation tests.
+- Monthly aggregation and snapshot-anchor consistency tests.
 
 **Exit gate**
 
@@ -96,8 +98,8 @@
 - Recurring definitions and idempotent occurrence generation.
 - Unified schedule and explicit receipt/payment confirmation.
 - Debts and payment history.
-- Savings goals and allocation history.
-- Planned purchases and completion flow.
+- Savings goals with manual current amount/as-of date and old/new audit metadata.
+- Planned purchases with atomic expense plus user-confirmed goal amount deduction.
 
 **Exit gate**
 
@@ -112,7 +114,7 @@
 
 - Dashboard hierarchy and drill-down.
 - Approved spendable estimate and cash-flow warning.
-- In-app reminder center and approved email delivery.
+- In-app-only reminder center for eligible outgoing obligations: 09:00 user-local stages and one first-overdue notification.
 - Installable PWA with safe caching behavior.
 - Offline/read-only failure messaging; no offline financial writes.
 
@@ -127,6 +129,9 @@
 
 **Deliverables**
 
+- Resolve OQ-17: select specific PaaS, PostgreSQL, email, observability providers, domain, region, and budget through a deployment/provider ADR addendum.
+- Deploy production-like staging and verify private networking, IAM, backups, origin controls, email, observability, deletion/provider purge, independent restore-exclusion storage, rollback, residency, and cost.
+- Complete Vietnamese legal/privacy review of cross-border processing, deletion, and the OQ-18 retention baseline.
 - Full regression and threat-model verification.
 - Performance and database exhaustion tests at a defined multiple of beta load.
 - Dependency, SAST, DAST, and manual security review.
@@ -163,7 +168,7 @@ Candidates may include:
 - Custom categories.
 - “Quick Add” presets, one-tap shortcuts, or widgets beyond the MVP Global Add form.
 - Advanced month comparison.
-- Push notifications.
+- Payment-reminder email, push notifications, SMS, or other external channels.
 - User data export/import.
 - Shared and household finance.
 - Advanced analytics and projections.

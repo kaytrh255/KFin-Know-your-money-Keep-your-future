@@ -5,13 +5,13 @@ All records are currently **Proposed**. They describe recommendations for review
 | ADR | Decision | Status |
 |---|---|---|
 | [ADR-001](ADR-001-application-architecture.md) | Modular monolith and TypeScript monorepo | Proposed |
-| [ADR-002](ADR-002-authentication-strategy.md) | Email/password, email verification, and recovery strategy | Proposed |
+| [ADR-002](ADR-002-authentication-strategy.md) | Invitation-gated email/password, verification, and recovery strategy | Proposed |
 | [ADR-003](ADR-003-database-choice.md) | PostgreSQL as the transactional source of truth | Proposed |
 | [ADR-004](ADR-004-session-management.md) | Opaque revocable server-side sessions | Proposed |
 | [ADR-005](ADR-005-pwa-strategy.md) | Installable PWA with restricted caching | Proposed |
 | [ADR-006](ADR-006-mobile-strategy.md) | Web-first with future Capacitor reuse | Proposed |
 | [ADR-007](ADR-007-deployment-architecture.md) | Cloudflare + managed application + private managed PostgreSQL | Proposed |
-| [ADR-008](ADR-008-notification-architecture.md) | PostgreSQL outbox/worker for in-app and email notifications | Proposed |
+| [ADR-008](ADR-008-notification-architecture.md) | PostgreSQL worker/outbox for in-app reminders and required security email | Proposed |
 
 ## Status lifecycle
 

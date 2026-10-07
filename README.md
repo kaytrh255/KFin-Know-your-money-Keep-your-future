@@ -14,6 +14,7 @@ Start with the [KFin Specification Foundation](docs/README.md).
 
 - [Product](docs/product/PRD.md)
 - [MVP scope](docs/product/MVP-SCOPE.md)
+- [Product decision log](docs/product/DECISION-LOG.md)
 - [UX](docs/ux/UX-SPEC.md)
 - [UI design system](docs/ux/UI-DESIGN-SYSTEM.md)
 - [Architecture](docs/architecture/ARCHITECTURE.md)
@@ -28,8 +29,8 @@ Start with the [KFin Specification Foundation](docs/README.md).
 
 Do not implement application functionality until:
 
-1. review-blocking open decisions in [`docs/README.md`](docs/README.md#review-blocking-open-decisions) are resolved;
-2. product/UX/security/architecture/database/test specifications are approved;
+1. accepted product decisions in the [decision log](docs/product/DECISION-LOG.md) are reflected consistently across specifications;
+2. product/UX/security/architecture/database/test specifications are reviewed and approved;
 3. relevant proposed ADRs are accepted;
 4. implementation work is traceable to requirements and tests.
 

@@ -14,7 +14,7 @@ An item is in scope only when it is listed here and supported by approved produc
 
 ### 2.1 Account and security
 
-- Invite-controlled registration policy for the Private Beta, subject to OQ-11.
+- Registration with a single-use, expiring Private Beta invitation code.
 - Email verification by OTP.
 - Email/password login.
 - Persistent, revocable authenticated session.
@@ -23,14 +23,18 @@ An item is in scope only when it is listed here and supported by approved produc
 - Basic profile: display name, locale, timezone, base currency.
 - Active-session list and individual revocation.
 - Concise security history for successful/failed sensitive events.
+- Identity-verified deletion request handling with 7-day cancellation grace and approved active-data purge procedure; the request channel requires legal/privacy approval.
 - Abuse controls, audit events, secure error handling, and user-data isolation.
 
 ### 2.2 Manual money position
 
-- One user-visible aggregate liquid-money account with opening balance under the recommended OQ-03 decision; the underlying account boundary remains extensible.
-- Current balance derived from posted transactions.
-- One base currency per user; VND is the proposed beta default.
-- No currency conversion, multi-account transfers, or reconciliation in MVP unless OQ-03 is resolved differently and those semantics are separately specified.
+- One user-visible aggregate liquid-money account; no account picker or transfers.
+- One base currency per user, VND default, immutable after financial data exists.
+- Authoritative balance snapshots with visible as-of time.
+- Current balance derived from the latest snapshot plus current-impact posted transactions in that snapshot segment.
+- Historical backfill that remains visible in reports but does not alter current balance when already included in the snapshot.
+- Deliberate manual authoritative-balance snapshot update and old/new anchor disclosure.
+- No currency conversion, multi-account breakdown, transfers, or bank/account-statement reconciliation workflow.
 
 ### 2.3 Income
 
@@ -51,7 +55,7 @@ An item is in scope only when it is listed here and supported by approved produc
 
 ### 2.5 Debt
 
-- Debt profile with principal, user-maintained outstanding amount, optional disclosed rate, payment amount/frequency, due date, status, and history.
+- Debt profile with principal, user-maintained outstanding amount, optional informational annual rate/as-of/source, payment amount/frequency, due date, status, and history.
 - Generated/one-off due payment occurrences.
 - Explicit payment confirmation with optional principal/interest/fee allocation.
 - Upcoming/due/overdue communication.
@@ -60,31 +64,34 @@ An item is in scope only when it is listed here and supported by approved produc
 ### 2.6 Savings
 
 - Multiple goals.
-- Target, allocated amount, planned contribution, optional target date, and progress.
-- Contribution, withdrawal, and correction history.
-- Proposed virtual-reserve behavior, pending OQ-08.
+- Target, manually maintained current amount/as-of date, planned contribution, optional target date, and progress.
+- Absolute `Update current amount` action; no contribution/withdrawal cash ledger.
+- Old/new amount audit metadata for corrections and linked-purchase use.
+- Active current amounts reduce safe-to-spend but do not change aggregate cash or monthly income/outflow.
 
 ### 2.7 Planned purchases
 
 - Purchase name, target price/date, status, and optional savings-goal relationship.
 - Explicit conversion/link to an actual expense when purchased.
-- Approved linked-goal release behavior that prevents a completed purchase from leaving already-spent money reserved (OQ-15).
+- User-confirmed deduction from a linked goal’s current amount, committed atomically with the actual expense and purchase completion.
 
 ### 2.8 Dashboard, schedule, and reminders
 
 - Current balance.
 - Selected-month confirmed income and grouped outflow.
-- Transparent spendable estimate after its formula is approved.
+- Transparent conservative month-end safe-to-spend estimate.
 - Urgent upcoming obligations.
-- Savings-goal progress.
-- Unified schedule for expected inflows and outflows.
-- In-app reminder center; opt-in email reminders are proposed.
-- 7-day, 3-day, due-today, and overdue reminder stages.
-- Simple, deduplicated cash-flow shortfall warning.
+- Savings-goal progress from manual current amounts.
+- Unified schedule for expected inflows and outflows using one-off/every-N-week/every-N-month/every-N-year patterns; missing monthly dates use the month’s last day.
+- In-app notification center only; no payment-reminder email/push/SMS/chat.
+- Eligible outgoing obligations receive 7-day, 3-day, due-today, and first-overdue stages evaluated at 09:00 user-local time; scheduled income has no fixed-stage notification.
+- One first-overdue notification per occurrence; no daily/weekly repeat.
+- Simple, deduplicated month-end cash-flow shortfall warning.
 
 ### 2.9 Product quality
 
 - Responsive Web application and installable PWA.
+- Vietnamese-first product content with English-ready message architecture.
 - Accessible, reusable KFin design system.
 - Honest loading, empty, offline, validation, success, and error states.
 - Production telemetry without financial payloads.
@@ -96,12 +103,15 @@ An item is in scope only when it is listed here and supported by approved produc
 |---|---|
 | Registration | An eligible person can create and verify one account without revealing whether arbitrary emails are registered. |
 | Session | A returning user resumes securely; revoked/expired sessions cannot be replayed. |
+| Account deletion | A verified request is cancellable for 7 days, then active data is purged under the approved map and a restore cannot resurrect it. |
 | Quick expense | A user can record a valid basic expense on one mobile surface with clear success/failure and no duplicate on retry. |
-| Monthly overview | Aggregates reconcile exactly to the underlying posted transactions for the selected timezone/month. |
+| Balance snapshot | Current balance reconciles to the latest snapshot segment; historical backfill is labelled and cannot silently change it. |
+| Monthly overview | Aggregates reconcile exactly to all posted transactions for the selected timezone/month, including labelled historical-only records. |
 | Recurrence | Occurrences are generated idempotently and remain projected until explicitly confirmed. |
 | Payment status | Due date passage yields due/overdue, never paid. |
+| Reminders | Each eligible outgoing occurrence/stage creates at most one 09:00 in-app notification; first-overdue never repeats and scheduled income gets no fixed-stage notification. |
 | Debt | Payment history and displayed outstanding amount remain consistent after create/edit/reversal paths supported by the specification. |
-| Savings | Goal amount is explainable from allocation history and is not double-counted as cash. |
+| Savings | Goal current amount matches the latest explicit user update/as-of date, retains old/new audit metadata, and is not counted as cash income/outflow. |
 | Authorization | Automated tests prove User A cannot read or mutate User B’s records across every object API. |
 | Recovery | Backup restoration and release rollback are performed and evidenced in a production-like environment. |
 
@@ -112,11 +122,11 @@ The following are expressly excluded unless a new specification promotes them:
 - Bank, wallet, card, payroll, or payment-provider integration.
 - Payment initiation or automatic verified payment status.
 - Multi-currency conversion and exchange-rate services.
-- Multiple exposed money accounts, transfers, and reconciliation unless separately promoted after OQ-03 review.
+- Multiple exposed money accounts, account transfers, and bank/account reconciliation.
 - Household/shared finance and delegated access.
 - Category customization beyond supplied defaults.
 - Data import/export (legal access requirements still need a policy decision).
-- Push notifications, SMS, chat-app notifications.
+- Payment-reminder email, push notifications, SMS, and chat-app notifications. Authentication/security email remains required.
 - Native Android/iOS store packages; Capacitor remains a future packaging path.
 - Offline transaction mutation/synchronization.
 - Advanced comparison, forecasting, recommendation, or AI.
@@ -131,7 +141,8 @@ The following are expressly excluded unless a new specification promotes them:
 - “Safe to spend” is an estimate based on entered balances and confirmed/upcoming records, not a guarantee.
 - KFin does not verify lender statements or bank balances.
 - Financial summaries must communicate their as-of time and scope.
-- User-facing deletion, retention, and export behaviors are blocked by OQ-10; backend design must avoid making an eventual compliant policy impossible.
+- Account deletion uses a 7-day cancellation grace followed by active-system purge; the request channel, deletion map, retained pseudonymous evidence, and legal basis must be approved before beta.
+- Baseline maximum retention is 90 days for backups, 90 days for application logs, and 24 months for security/audit evidence, subject to legal reduction.
 - Supporting data correction does not permit silently rewriting security audit history.
 
 ## 6. Definition of MVP complete

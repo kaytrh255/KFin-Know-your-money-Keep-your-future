@@ -1,7 +1,7 @@
 # KFin UX Specification
 
 **Status:** Draft — review required<br>
-**Version:** 0.1<br>
+**Version:** 0.2<br>
 **Platforms:** Responsive Web and installable PWA<br>
 **Accessibility target:** WCAG 2.2 AA for all MVP core flows
 
@@ -83,8 +83,8 @@ Requirements:
 The default compact-screen order is:
 
 1. Header with greeting/context, notification entry, and profile.
-2. **Money snapshot** — current balance, as-of time, visibility control if approved.
-3. **Spendable estimate** — amount, horizon, status, and `How calculated` disclosure.
+2. **Money snapshot** — current balance, latest authoritative snapshot/as-of time, and activity since snapshot.
+3. **Spendable estimate** — conservative month-end amount, horizon, status, and `How calculated` disclosure.
 4. **Needs attention** — at most the most urgent few due/overdue/shortfall items, with `View schedule`.
 5. **This month** — confirmed income, grouped outflow, and net movement; projected values are separate.
 6. **Goals** — top active goals with progress and next contribution.
@@ -98,6 +98,8 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - Prefer labelled numbers, progress bars, and ranked category rows to multiple charts.
 - Any chart has a textual summary and accessible data representation.
 - Totals link to a filtered Activity/Schedule view.
+- Calculation disclosure identifies the latest balance anchor and explains why historical-only backfill appears in monthly totals without changing current balance.
+- A transaction from a prior snapshot segment remains visible, but detail must explain that even a record originally marked current-impact no longer enters today’s balance after a newer authoritative snapshot.
 - Amounts use tabular numerals and cannot be truncated without an accessible full value.
 - `0`, `No data`, and `Not calculated` are distinct states.
 
@@ -108,8 +110,10 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - Global Add opens a bottom sheet on compact screens and a compact dialog/popover on expanded screens.
 - The amount field receives focus only when doing so will not disorient assistive-technology users.
 - Expense/Income is an explicit segmented control; last choice may be remembered locally only if safe and understandable.
-- Required data: type, amount, category, date, and the approved account. Under the recommended one-account MVP, account is implicit and need not consume a control; if multiple accounts are approved later, the default remains visible and changeable.
+- Required data: type, amount, category, and date. The accepted one aggregate account is implicit and consumes no control in the common path.
 - Note and the orthogonal `Unexpected` flag are secondary; `Unexpected` must remain easy to choose without replacing the expense class.
+- Selecting a pre-snapshot date changes the review state to `Historical — already included in current balance`; current balance impact is previewed before save.
+- Same-day snapshot ambiguity asks whether the transaction is already included. The UI never guesses or hides the effect.
 - Submit remains in thumb reach and above the keyboard.
 
 ### Numeric input
@@ -133,9 +137,11 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - Default Schedule is an agenda list grouped by date; a dense calendar is optional and not the only representation.
 - Each row shows direction, title, expected amount, exact date, state, and source (for example Debt or Rent).
 - Paid/received items are visually secondary but still available in history.
-- `Mark paid` and `Mark received` open a review sheet showing actual amount/date/account.
+- `Mark paid` and `Mark received` open a review sheet showing actual amount/date; the one aggregate account is implicit.
 - `Dismiss notification` and `Mark paid` are never adjacent look-alike actions.
 - Overdue state is derived and uses icon + label + text contrast, not red alone.
+- Eligible outgoing-obligation notifications are evaluated at 09:00 user-local time. Each 7-day, 3-day, due-today, and first-overdue stage appears at most once; overdue does not repeat.
+- No payment-reminder email, push, SMS, or permission prompt appears in MVP.
 - Editing a series asks `This occurrence` versus `This and future occurrences` only when both behaviors are supported and specified.
 
 ## 8. Debt, savings, and plan UX
@@ -143,22 +149,24 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 ### Debt
 
 - Lead with user-reported outstanding amount and its `as of` date.
-- Label interest rate as informational while automatic accrual is out of scope.
+- Label the optional annual rate, as-of date, and source as informational while automatic accrual is out of scope.
 - Show next due payment and recent history before configuration fields.
-- Payment review clearly separates total cash outflow and optional principal/interest/fee split.
+- Payment review clearly separates total cash outflow and optional principal/interest/fee split, visibly labelling any partial/unclassified remainder.
 
 ### Savings
 
-- Lead with amount/target and a labelled progress bar.
-- Explain virtual allocation at first use and from `How it works`.
-- Contribution and withdrawal use distinct verbs; withdrawal is not called an expense.
+- Lead with manually reported current amount/target, current-amount as-of date, and a labelled progress bar.
+- Explain that the current amount is a user-declared reserve used by safe-to-spend, not a separate account or verified bank value.
+- The primary action is `Update current amount`; it edits an absolute value and previews the safe-to-spend change.
+- Do not present audit records as contributions, withdrawals, or cash transactions.
 - A target date may show required average contribution only if a separately reviewed formula is approved; otherwise show date without prescriptive projection.
 
 ### Planned purchase
 
 - Clearly label as planned, not spent.
 - Linked goal is relational context, not automatic money transfer.
-- Completion flow previews the actual expense and, under approved OQ-15 behavior, asks for and previews the linked-goal allocation release before confirmation.
+- Completion previews the actual expense and asks how much to deduct from the linked goal current amount (including zero), showing old/new goal values and safe-to-spend effect.
+- Completion never auto-archives or zeroes the goal.
 
 ## 9. Forms and validation
 
@@ -206,14 +214,15 @@ Every data surface must specify these states before implementation:
 
 ## 12. Language and content design
 
-- Use direct verbs: `Add expense`, `Mark paid`, `Record contribution`, `Revoke session`.
+- Private Beta UI and transactional/authentication email are Vietnamese-first (`vi-VN`); Vietnamese content review is required.
+- Use direct action verbs equivalent to `Add expense`, `Mark paid`, `Update current amount`, and `Revoke session` in approved Vietnamese copy.
 - Avoid accounting jargon unless explained.
 - Show exact dates (`8 Oct 2026` in English locale or locale equivalent), not only `soon`.
 - Pair relative and exact time where useful: `Due in 3 days · 10 Oct`.
 - Warnings state fact, impact, and action: `1,000,000 ₫ is due by 10 Oct. Available balance is 700,000 ₫.`
 - Never say `safe`, `guaranteed`, or `on track` without the scope and calculation.
 - Never shame spending or use celebratory animation around sensitive debt repayment.
-- Translation keys must allow Vietnamese and English word-order/length differences even if the beta launches in one language.
+- Message keys and layout must allow future English word order/length, but shipping English content is not an MVP requirement.
 
 ## 13. PWA and offline behavior
 
@@ -228,7 +237,7 @@ Every data surface must specify these states before implementation:
 
 - Explain manual-data limitations during onboarding and calculation disclosure.
 - Show session/security event details without implying exact geolocation.
-- Security communications never contain passwords, OTPs, session tokens, or full financial records.
+- No communication contains passwords, session tokens, or full financial records. Purpose-bound verification/recovery email may contain only the required short-lived OTP/reset secret and minimum context; ordinary security alerts contain no authentication secret.
 - Sensitive pages use `no-store` and are excluded from search indexing.
 - Copy/paste remains allowed for user-owned amounts and notes; do not use hostile anti-user restrictions.
 - Confirmation dialogs do not expose sensitive information to the URL or page title.
@@ -237,18 +246,19 @@ Every data surface must specify these states before implementation:
 
 Before Private Beta, moderated tests should include representative compact and desktop devices and these tasks:
 
-1. Establish opening balance and explain what it means.
-2. Add a routine expense and correct its amount.
-3. Record daily income and confirm recurring salary.
-4. Find what is due in three days and mark it paid.
-5. Explain why an overdue item is not paid automatically.
-6. Create a goal, contribute, and explain effect on total balance versus spendable estimate.
-7. Create and complete a planned purchase.
-8. Recover password and revoke another session.
-9. Explain all figures on Home without facilitator help.
+1. Establish an authoritative balance snapshot and explain its as-of meaning.
+2. Backfill a pre-snapshot expense and explain why current balance does not change.
+3. Add a routine current expense and correct its amount.
+4. Record daily income and confirm recurring salary.
+5. Find what is due in three days and mark it paid.
+6. Explain why an overdue item is not paid automatically and why no repeated reminder/email appears.
+7. Create a goal, update its absolute current amount, and explain the effect on balance versus safe-to-spend.
+8. Complete a linked planned purchase with a partial goal-amount deduction.
+9. Recover password and revoke another session.
+10. Explain all figures on Home without facilitator help.
 
 Capture completion, errors, time, comprehension, accessibility barriers, and trust concerns. Targets in the PRD are hypotheses until tested.
 
 ## 16. UX review blockers
 
-UX cannot be approved until decisions OQ-01 through OQ-08 and OQ-12 through OQ-15 are resolved, a content language is selected, representative formulas are validated, and low/high-fidelity prototypes have completed accessibility and usability review. The token values in the design system are a coherent proposal, not evidence of visual acceptance.
+OQ-01 through OQ-19 have recorded dispositions. UX cannot be approved until Vietnamese content, balance-snapshot/backfill interaction, manual savings amount, month-end safe-to-spend disclosure, in-app reminder behavior, and deletion communication are validated in low/high-fidelity prototypes with accessibility and usability review. The token values in the design system are a coherent proposal, not evidence of visual acceptance.

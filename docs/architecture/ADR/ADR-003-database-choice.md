@@ -84,7 +84,7 @@ Use a single **managed PostgreSQL** database as the transactional source of trut
 
 ## Validation before acceptance
 
-- Select provider/region/version under OQ-01/OQ-09.
+- Before Release Candidate, select provider/region/version under OQ-16/OQ-17 and validate the accepted 90-day backup maximum.
 - Validate ORM/query tool transaction and `BIGINT` behavior.
 - Prototype composite tenant constraints and RLS with connection pooling.
 - Load representative dashboard/schedule data and inspect plans.

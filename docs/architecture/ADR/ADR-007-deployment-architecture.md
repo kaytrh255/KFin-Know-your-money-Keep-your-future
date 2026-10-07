@@ -3,11 +3,11 @@
 **Status:** Proposed<br>
 **Date:** 2026-10-07<br>
 **Decision owners:** Unassigned<br>
-**Related:** [Architecture specification](../ARCHITECTURE.md), OQ-01, OQ-09, OQ-10
+**Related:** [Architecture specification](../ARCHITECTURE.md), OQ-09, OQ-10, OQ-16, OQ-17, OQ-18
 
 ## Context
 
-KFin needs production TLS, DDoS/WAF/rate controls, a Web/PWA origin, API and background work, private PostgreSQL, backups, monitoring, health checks, isolated environments, and rollback. Initial demand is small and does not justify Kubernetes or a custom platform team. Provider, region, domain, budget, data residency, and operational ownership are unresolved.
+KFin needs production TLS, DDoS/WAF/rate controls, a Web/PWA origin, API and background work, private PostgreSQL, backups, monitoring, health checks, isolated environments, and rollback. Initial demand is small and does not justify Kubernetes or a custom platform team. Product review selected a managed PaaS topology and Vietnam-first/Southeast-Asia preference, while deliberately deferring specific provider, final region, domain, and budget until before Release Candidate.
 
 ## Decision
 
@@ -20,6 +20,7 @@ Cloudflare edge
     → /api to a managed container/application runtime
     → worker/scheduler from the same immutable image
       → private managed PostgreSQL
+      → protected restore-exclusion register outside the application restore domain
     → approved email and observability providers
 ```
 
@@ -29,14 +30,17 @@ Deployment requirements:
 - Web and API are browser-visible under the same site/origin.
 - API and worker run from one immutable OCI image/release; configuration selects the process.
 - Managed PostgreSQL is reachable only through private/restricted network paths, uses TLS, encryption at rest, automated backups, and provider-supported PITR where approved.
+- The deletion restore-exclusion register uses a separately protected access/restore boundary so restoring an older application/database point cannot roll back the current tombstones with it; storage/key/expiry are selected with the provider addendum and deletion design. This is a minimal recovery-control record, not a new microservice.
 - Local/test, staging, and production have separate configuration, credentials, databases, email modes, and telemetry labels. Production data never populates lower environments.
 - GitHub Actions runs required checks, builds once, signs/identifies the artifact, and promotes that same artifact through staging to production with approval.
 - Secrets use managed secret storage and workload identities/least-privilege credentials; none are in Git, image layers, frontend bundles, or CI logs.
 - Schema migration is gated and uses expand/migrate/contract compatibility when rollback could otherwise fail.
 - Health/readiness checks and smoke tests gate rollout. Rollback selects the prior compatible artifact; data rollback/forward recovery is separately rehearsed.
 - Proposed beta targets are RPO ≤ 24 hours and RTO ≤ 8 hours, subject to business approval and provider capability.
+- Backups have a 90-day maximum baseline, application logs 90 days, and minimized security/audit evidence 24 months, subject to legal reduction.
+- Prefer a Southeast Asia region, but complete Vietnamese cross-border/data-residency review before beta.
 
-The specific compute/database/email/monitoring vendor and region cannot be accepted before OQ-01/OQ-09 are resolved.
+Under accepted OQ-17, specific compute/database/email/observability vendors, domain, final region, and budget are deferred until before Release Candidate. This ADR can approve the logical topology only; it cannot evidence production readiness before a provider addendum and deployed validation.
 
 ## Alternatives considered
 
@@ -89,6 +93,7 @@ The specific compute/database/email/monitoring vendor and region cannot be accep
 - Single-region application/database may have an outage within accepted RTO.
 - Managed egress/backup/log cost can surprise.
 - Database migrations constrain instant rollback.
+- Deferring vendor selection creates accepted late risk around networking, residency, backup/PITR, IAM, email deliverability, observability, cost, and deployment behavior.
 
 ### Required controls
 
@@ -100,12 +105,18 @@ The specific compute/database/email/monitoring vendor and region cannot be accep
 - Vendor status/incident response and data-processing terms.
 - Cost/storage/egress alerts.
 
-## Validation before acceptance
+## Validation before logical-architecture acceptance
 
-- Resolve jurisdiction/residency, provider, region, budget, domain, and owners.
-- Document provider responsibility matrix and subprocessor list.
-- Deploy staging; test TLS, origin restriction, WAF/rate control, cookies/CSRF, no-store caching, health checks, email, logs, and secrets.
-- Perform migration, rollback, backup restore, credential rotation, and application outage exercises.
+- Confirm explicit acceptance of OQ-17’s provider deferral and its Release Candidate deadline.
+- Validate locally/ephemerally that one immutable image can run API/worker, same-origin routing works, and standard PostgreSQL/provider adapters remain portable.
+- Record provisional cost, RPO/RTO, residency, and operational-owner assumptions.
+
+## Additional Release Candidate gate
+
+- Select provider, final region, budget, domain, and owners in a dated ADR addendum.
+- Complete Vietnamese legal/residency review and provider responsibility/subprocessor register.
+- Deploy production-like staging; test TLS, origin restriction, WAF/rate control, cookies/CSRF, no-store caching, health checks, email, logs, secrets, and retention automation.
+- Perform migration, rollback, backup restore with the current independently protected deletion-tombstone register, credential rotation, and application outage exercises.
 - Validate RPO/RTO against measured restore/redeploy time.
 
 ## Revisit when

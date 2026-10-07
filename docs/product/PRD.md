@@ -2,7 +2,7 @@
 
 **Product:** KFin — Know your money, Keep your future<br>
 **Status:** Draft — review required<br>
-**Version:** 0.1<br>
+**Version:** 0.2<br>
 **Date:** 2026-10-07<br>
 **Target release:** Private Beta, at most 50 real users
 
@@ -36,13 +36,14 @@ An individual who:
 - enters data manually and needs entry to be fast on a phone;
 - uses one private account and expects persistent, secure access.
 
-### Assumed context — pending OQ-01 and OQ-02
+### Approved beta context
 
-- Vietnamese-first Private Beta, commonly using VND and `Asia/Ho_Chi_Minh` time.
-- Mobile web/PWA is the most frequent interaction; desktop remains fully supported.
-- Users understand that KFin is only as accurate as the data they enter and confirm.
-
-These are proposals, not approved demographic or legal decisions.
+- Vietnam-first Private Beta with Vietnamese-first (`vi-VN`) UI; message architecture remains English-ready.
+- Each user selects one base currency during onboarding; VND is the default and cannot be changed after financial data exists.
+- `Asia/Ho_Chi_Minh` is the suggested timezone, not a forced value.
+- Mobile Web/PWA is the most frequent interaction; desktop remains fully supported.
+- Users understand that KFin is only as accurate as the data and balance snapshots they enter and confirm.
+- A Southeast Asia hosting region is preferred, but cross-border processing and retention remain subject to Vietnamese legal/privacy review before beta.
 
 ## 4. User problems
 
@@ -86,7 +87,7 @@ Outcome targets are validation goals, not claims that testing has passed.
 
 | ID | Requirement |
 |---|---|
-| PRD-AUTH-01 | A permitted user MUST be able to register with email and password under the approved beta access policy. |
+| PRD-AUTH-01 | A permitted user MUST be able to register with email, password, and a valid single-use expiring Private Beta invitation code. Code consumption and account creation MUST be atomic. |
 | PRD-AUTH-02 | The user MUST verify control of the email address with an expiring, single-use OTP before full account access. |
 | PRD-AUTH-03 | Authentication and recovery responses MUST resist account enumeration and automated abuse. |
 | PRD-AUTH-04 | A verified user MUST be able to sign in, remain signed in through a revocable persistent session, and sign out of the current session. |
@@ -95,21 +96,25 @@ Outcome targets are validation goals, not claims that testing has passed.
 | PRD-AUTH-07 | Password reset MUST revoke all existing sessions. Password change MUST revoke other sessions and rotate the current session, unless the approved security policy requires all sessions to end. |
 | PRD-AUTH-08 | Security-relevant events MUST appear in an understandable security history where doing so does not create additional leakage. |
 | PRD-AUTH-09 | Basic profile settings MUST include display name, locale, timezone, and base currency subject to MVP currency policy. |
+| PRD-AUTH-10 | An identity-verified account-deletion request MUST enter a 7-day cancellable pending state, then invoke the legally approved active-data purge process. The beta request channel remains subject to privacy/legal review. |
 
-### 7.2 Financial accounts and transactions
+### 7.2 Aggregate account, balance snapshots, and transactions
 
-A minimal account/ledger concept is required to make “current balance” mathematically meaningful. The current recommendation is one user-visible aggregate liquid-money account for MVP, because exposing multiple accounts without specified transfers would distort income/outflow. The schema may preserve an account boundary for later evolution. This proposal is review-blocked by OQ-03.
+MVP exposes exactly one aggregate liquid-money account per user. Multiple accounts and transfers are not available. Current balance is anchored by an authoritative user-entered snapshot so users may backfill older history without unexpectedly changing the current amount.
 
 | ID | Requirement |
 |---|---|
-| PRD-FIN-01 | The user MUST be able to define an opening balance for the approved manual money-account model. Under the current recommendation, MVP exposes one aggregate account. |
-| PRD-FIN-02 | Current account and total balance MUST be derived from opening balances and posted inflow/outflow transactions, not silently overwritten. |
-| PRD-FIN-03 | A transaction MUST record positive amount, currency, local occurrence date, type, category/classification, account, and creation/update timestamps. A note is optional. |
-| PRD-FIN-04 | The user MUST be able to create, inspect, edit, and delete/void their own transactions with clear recalculation. |
-| PRD-FIN-05 | The system MUST prevent cross-currency aggregation unless an explicitly specified exchange-rate policy exists. MVP MUST NOT invent exchange rates. |
+| PRD-FIN-01 | Onboarding MUST create one user-owned aggregate account and an initial balance snapshot with amount, currency, and visible as-of time. |
+| PRD-FIN-02 | Current balance MUST equal the latest balance snapshot plus posted balance-impacting inflows minus posted balance-impacting outflows attached to that snapshot segment. |
+| PRD-FIN-03 | A transaction MUST record positive amount, base currency, local occurrence date, type, category/classification, balance effect, and creation/update timestamps. A note is optional. |
+| PRD-FIN-04 | The user MUST be able to create, inspect, correct, and void their own transactions with clear effects on current balance and monthly reporting. |
+| PRD-FIN-05 | All MVP financial records MUST use the user’s one base currency. Cross-currency aggregation, conversion, and invented exchange rates are prohibited. |
 | PRD-FIN-06 | Financial writes MUST be idempotent against accidental duplicate submission where a client request identifier is supplied. |
 | PRD-FIN-07 | Mutations affecting financial values MUST be attributable in an audit trail without storing secrets or unnecessary sensitive payloads. |
-| PRD-FIN-08 | Opening-balance and backdating behavior MUST follow the approved OQ-13 cutoff. Under the current proposal, opening balance is at the start of the ledger date and earlier transactions are rejected rather than double-counted. |
+| PRD-FIN-08 | A transaction explicitly entered as pre-snapshot historical backfill MUST appear in period/category reports but MUST NOT alter current balance. It MUST be visibly labelled as already included in the snapshot. |
+| PRD-FIN-09 | Creating a new manual authoritative-balance snapshot MUST start a new balance segment without deleting or rewriting earlier transactions/snapshots. This is not a bank/account-statement reconciliation workflow. |
+| PRD-FIN-10 | If same-day timing makes snapshot inclusion ambiguous, KFin MUST ask whether the transaction is already included rather than infer silently. |
+| PRD-FIN-11 | Changing a transaction’s balance effect or anchor MUST be a deliberate correction with consequence preview, concurrency protection, and audit evidence. |
 
 ### 7.3 Income
 
@@ -121,7 +126,7 @@ A minimal account/ledger concept is required to make “current balance” mathe
 | PRD-INC-04 | Monthly views MUST distinguish confirmed income from projected income and aggregate all confirmed records in the user’s timezone. |
 | PRD-INC-05 | The example of 4,000,000 VND recurring salary plus 350,000 VND and 280,000 VND daily receipts MUST total 4,630,000 VND confirmed monthly income only after the scheduled salary is confirmed received. |
 
-PRD-INC-03 is the recommended resolution of OQ-04 and requires approval. Supported recurrence cadences and short-month behavior are review-blocked by OQ-14.
+Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to one-off plus every-N-week, every-N-month, and every-N-year schedules; a missing monthly day resolves to the final day of that month.
 
 ### 7.4 Expenses and spending
 
@@ -138,8 +143,8 @@ PRD-INC-03 is the recommended resolution of OQ-04 and requires approval. Support
 
 | ID | Requirement |
 |---|---|
-| PRD-DEBT-01 | A debt MUST support name, original principal, current outstanding balance, optional disclosed interest rate, expected payment amount/frequency, next due date, status, and payment history. |
-| PRD-DEBT-02 | A debt payment MUST remain due until the user confirms it. Confirmation records cash outflow and the user-provided principal/interest/fee split where available. If principal or a new lender-reported balance is unavailable, KFin MUST leave outstanding balance unchanged and visibly retain its prior as-of date; it MUST NOT assume the full payment reduced principal. |
+| PRD-DEBT-01 | A debt MUST support name, original principal, current outstanding balance, optional informational annual rate with as-of/source context, expected payment amount/frequency, next due date, status, and payment history. |
+| PRD-DEBT-02 | A debt payment MUST remain due until the user confirms it. Confirmation records cash outflow and any user-provided principal/interest/fee split, visibly identifying a partial/unclassified remainder. If principal or a new lender-reported balance is unavailable, KFin MUST leave outstanding balance unchanged and visibly retain its prior as-of date; it MUST NOT assume the full payment reduced principal. |
 | PRD-DEBT-03 | The product MUST NOT calculate or claim authoritative accrued interest, amortization, payoff date, or lender balance until those methods are separately specified. |
 | PRD-DEBT-04 | The product MUST visibly identify upcoming, due-today, and overdue debt obligations. |
 | PRD-DEBT-05 | Users MUST be able to correct a payment while preserving a security/audit event and consistent outstanding balance. |
@@ -148,13 +153,13 @@ PRD-INC-03 is the recommended resolution of OQ-04 and requires approval. Support
 
 | ID | Requirement |
 |---|---|
-| PRD-SAV-01 | A user MUST be able to create multiple goals with name, target amount, starting/current allocated amount, planned contribution, optional cadence, and optional target date. |
+| PRD-SAV-01 | A user MUST be able to create multiple goals with name, target amount, manually maintained current amount, current-amount as-of date, planned contribution, optional cadence, and optional target date. |
 | PRD-SAV-02 | Progress MUST show both amount and percentage; overfunded and no-target-date states MUST remain valid. |
-| PRD-SAV-03 | Contributions, withdrawals, and corrections MUST have dated entries so current allocated amount is explainable. |
-| PRD-SAV-04 | Savings allocations MUST NOT be double-counted as either income or expense. Their effect on the spendable estimate MUST be explicit. |
-| PRD-SAV-05 | Archiving a goal MUST preserve its history. |
-
-The proposed “virtual allocation” interpretation is review-blocked by OQ-08.
+| PRD-SAV-03 | The user MUST update an absolute current amount rather than create contribution/withdrawal ledger entries in MVP. |
+| PRD-SAV-04 | Each current-amount update MUST retain previous value, new value, as-of date, actor, reason/source, and timestamp as audit/correction metadata. It MUST NOT be presented as a cash transaction. |
+| PRD-SAV-05 | Active goal current amounts reduce safe-to-spend but MUST NOT change aggregate balance or monthly income/outflow. |
+| PRD-SAV-06 | The UI MUST explain that a goal amount is a user-declared reserve estimate, not proof of money held in a separate bank account. |
+| PRD-SAV-07 | Archiving a goal MUST preserve its latest value and amount-change audit history while removing it from active reserves. |
 
 ### 7.7 Planned purchases
 
@@ -163,19 +168,23 @@ The proposed “virtual allocation” interpretation is review-blocked by OQ-08.
 | PRD-PLAN-01 | A planned purchase MUST support name, target price, optional target date, status, and optional savings-goal relationship. |
 | PRD-PLAN-02 | A planned purchase MUST NOT be included as ordinary spending before it is actually purchased. |
 | PRD-PLAN-03 | Marking a purchase complete MUST require explicit confirmation and either create or link a posted expense. |
-| PRD-PLAN-04 | If the purchase uses a linked goal under the recommended OQ-15 policy, the user MUST confirm the allocation amount to release; expense creation and savings release MUST commit atomically so reserved money is not double-counted. |
-| PRD-PLAN-05 | Cancelling or archiving a purchase MUST preserve relevant history and MUST NOT silently delete a linked goal. |
+| PRD-PLAN-04 | If a linked goal funded the purchase, the user MUST confirm how much to deduct from its manual current amount. The deduction cannot exceed either the actual purchase amount or current goal amount. |
+| PRD-PLAN-05 | Posted expense, old/new goal amount audit record, and purchase completion MUST commit atomically and idempotently so the goal is not reduced twice. |
+| PRD-PLAN-06 | Cancelling, completing, or archiving a purchase MUST NOT automatically archive, zero, or delete a linked goal. |
 
 ### 7.8 Schedule, reminders, and warnings
 
 | ID | Requirement |
 |---|---|
 | PRD-REM-01 | The schedule MUST combine upcoming fixed expenses, debt payments, and scheduled income while preserving each item’s direction and state. |
-| PRD-REM-02 | Outgoing occurrences MUST support 7-days-before, 3-days-before, due-today, and overdue states. Exact delivery preferences are subject to OQ-06 and OQ-12. |
+| PRD-REM-02 | Outgoing occurrences MUST support in-app notification stages at 7 days before, 3 days before, due today, and first overdue, evaluated at 09:00 in the user’s timezone. |
 | PRD-REM-03 | Reaching a due date MUST NOT mark an occurrence paid. Only explicit confirmation or a future verified integration may do so. |
-| PRD-REM-04 | Notifications MUST be deduplicated, actionable, dismissible/readable, and rate controlled. |
-| PRD-REM-05 | A cash-flow warning MUST identify the relevant time window, obligations included, available amount used, shortfall, and calculation time. |
-| PRD-REM-06 | Cash-flow warnings MUST be presented as estimates based on user-entered data, not guarantees or financial advice. |
+| PRD-REM-04 | Each eligible outgoing occurrence/stage MUST create at most one notification. First-overdue notification MUST NOT repeat daily or weekly while state is unchanged. |
+| PRD-REM-05 | Payment reminders MUST be in-app only in MVP. Push, SMS, chat, and payment-reminder email are excluded; required authentication/security email remains separate. |
+| PRD-REM-06 | Notifications MUST be actionable, readable/dismissible, and deduplicated across worker retries, downtime catch-up, and timezone changes. |
+| PRD-REM-07 | A cash-flow warning MUST identify the relevant month-end window, obligations included, available amount used, shortfall, and calculation time. |
+| PRD-REM-08 | Cash-flow warnings MUST be presented as estimates based on user-entered data, not guarantees or financial advice. |
+| PRD-REM-09 | Schedules MUST support one-off plus every-N-week, every-N-month, and every-N-year patterns. Missing monthly day 29/30/31 MUST use that month’s final local date; daily and arbitrary RRULE patterns are excluded. Yearly 29-February behavior and hard bounds require approval before implementation. |
 
 ### 7.9 Dashboard and reporting
 
@@ -183,24 +192,25 @@ The proposed “virtual allocation” interpretation is review-blocked by OQ-08.
 |---|---|
 | PRD-DASH-01 | The initial dashboard viewport MUST prioritize current balance, spendable estimate, urgent upcoming obligations, and goal progress. |
 | PRD-DASH-02 | The dashboard MUST distinguish actual, projected, reserved, overdue, and estimated values through text and structure, not color alone. |
-| PRD-DASH-03 | The selected month MUST show confirmed income, expense groups, debt outflow, savings allocations, and net movement without double counting. |
+| PRD-DASH-03 | The selected month MUST show confirmed income, expense groups, debt outflow, and net movement without treating manual savings-goal amount changes as income or expense. |
 | PRD-DASH-04 | Users MUST be able to inspect the records behind an aggregate. |
 | PRD-DASH-05 | Charts MUST be limited to those that answer a defined user question; decorative or redundant charts are prohibited. |
 | PRD-DASH-06 | Empty/incomplete data MUST produce honest setup guidance rather than fabricated zero-confidence conclusions. |
 
-## 8. Proposed financial definitions
+## 8. Approved financial definitions
 
-These definitions are intentionally explicit and remain subject to product review.
+- **Aggregate account:** The single MVP container representing the user’s liquid money in one base currency. It does not expose bank/cash/e-wallet subaccounts.
+- **Balance snapshot:** An authoritative user-entered aggregate balance at a visible as-of instant. The latest snapshot anchors current-balance calculation.
+- **Current-impact transaction:** A posted user-confirmed inflow/outflow recorded as a delta after its anchor snapshot. It enters current balance only while that anchor is the latest snapshot; after a newer snapshot it remains unchanged as prior-segment evidence.
+- **Historical-only transaction:** A posted pre-snapshot backfill record included in period/category reporting but excluded from current-balance arithmetic because the snapshot already includes it.
+- **Scheduled occurrence:** An expected inflow/outflow that does not affect balance until explicitly confirmed and linked to a posted transaction.
+- **Current balance:** Latest balance-snapshot amount plus posted current-impact inflows minus posted current-impact outflows attached to that snapshot segment.
+- **Monthly income/outflow:** All posted transactions whose user-local occurrence date falls in the selected calendar month, including labelled historical-only records.
+- **Savings reserve:** The current amount manually declared on an active savings goal. It is neither a cash account nor income/expense and is not independently verified.
+- **Safe-to-spend estimate:** Current balance minus unpaid outgoing occurrences due through the end of the current local calendar month minus current amounts on active savings goals. Future income is excluded until received. The UI exposes components, anchor, horizon, as-of time, and any negative result.
+- **Cash-flow warning:** A warning when current balance is below outgoing obligations due through month end. It recalculates after relevant mutation/snapshot change and at least daily.
 
-- **Posted transaction:** A user-confirmed money inflow or outflow that affects a manual account balance.
-- **Scheduled occurrence:** An expected inflow or outflow that does not affect balance until confirmed and linked to a posted transaction.
-- **Current balance:** Sum of active account opening balances plus posted inflows minus posted outflows through today, in one currency.
-- **Monthly income/outflow:** Posted transactions whose user-local occurrence date falls within the selected calendar month.
-- **Savings allocated:** Net contribution entries assigned to active savings goals. It is an envelope/reserve, not a second bank balance.
-- **Spendable estimate (proposed):** Current liquid balance minus unpaid outgoing obligations due through month end minus active savings allocations that the user has chosen to reserve. Future income is excluded until received. The UI must expose these components and allow no negative value to be disguised.
-- **Cash-flow warning:** A warning when current liquid balance is below outgoing obligations due in a displayed horizon. It is recalculated after every relevant mutation and at least daily.
-
-The formula cannot be approved until OQ-03, OQ-05, and OQ-08 are resolved.
+A snapshot boundary means monthly net movement and current balance may not reconcile through a simple all-history sum. Calculation disclosure MUST explain the anchor and historical-only records.
 
 ## 9. Non-functional product requirements
 
@@ -221,7 +231,7 @@ Detailed quality attributes are in the architecture, security, UX, and test spec
 
 Success measures will be baselined during internal testing; they are not grounds for dark-pattern analytics.
 
-- Activation: verified users who establish an opening balance and save a first transaction.
+- Activation: verified users who establish an initial authoritative balance snapshot and save a first transaction.
 - Habit: active beta users recording or reviewing finances weekly.
 - Entry usability: basic-expense completion rate and median task time in usability sessions.
 - Clarity: task-based comprehension of current balance, due obligations, and goal progress.
@@ -233,11 +243,12 @@ No financial note text, raw amount, password, token, or OTP may be sent to produ
 
 ## 11. Constraints and dependencies
 
-- At most 50 Private Beta users; scale only after evidence.
-- Manual data entry; no bank/payment integration.
-- Email delivery is required for verification and recovery and must be configured before those flows can pass.
-- Cloudflare, a managed application runtime, and managed PostgreSQL are proposed but vendors are not selected.
-- Legal/privacy terms, support ownership, incident contacts, and data retention must exist before inviting external users.
+- At most 50 invited Private Beta users; each registration requires a single-use invitation code.
+- Manual data entry and authoritative-balance snapshot updates; no bank/payment integration or account-statement matching.
+- Email delivery is required for verification, recovery, and approved security messages only—not payment reminders.
+- Cloudflare + managed PaaS + managed PostgreSQL is the accepted logical topology. Specific providers/domain/region/budget are intentionally deferred until before Release Candidate and block that gate.
+- Vietnam-first content/support and Southeast Asia hosting preference do not replace Vietnamese legal/privacy review.
+- The accepted deletion/retention baseline requires legal approval and automated enforcement before external beta.
 - PWA installability is in MVP; native Capacitor packaging is not automatically in MVP.
 
 ## 12. Explicit non-goals
@@ -246,28 +257,34 @@ No financial note text, raw amount, password, token, or OTP may be sent to produ
 - Investment, tax, credit-score, lending, insurance, or regulated advice.
 - AI recommendations or forecasting.
 - Shared, household, team, or business accounts.
+- Multiple money accounts, transfers, bank/account-statement reconciliation workflows, or account-level balances.
 - Multiple concurrent currencies, foreign exchange, or crypto assets.
 - Custom category management, data export, push notifications, advanced analytics, and native store releases unless separately promoted.
 - Automatic debt interest accrual or full double-entry accounting.
 - Social features, advertising, or sale of user financial data.
 
-## 13. Open decisions
+## 13. Decision status and remaining blockers
 
-The canonical decision list is in [the specification index](../README.md#review-blocking-open-decisions). Product approval must record an answer, owner, and date for OQ-01 through OQ-15. In addition, review must decide:
+OQ-01 through OQ-19 have recorded dispositions in the [Product Decision Log](DECISION-LOG.md). OQ-17 deliberately defers specific provider/domain/region/budget selection until before Release Candidate and is a release risk, not permission to claim deployment readiness.
 
-- whether users may create multiple financial accounts in the first UI or receive one default account;
-- what edit/delete semantics users expect for old financial records;
-- whether the dashboard period begins at calendar month start or supports a user-defined payday cycle later;
-- which events generate user-visible security history and how long that history remains available;
-- whether invite-only registration is enforced by one-time invite codes or a server-side allowlist.
+The following still require specification review or explicit owner approval; they are not silently resolved by the OQ dispositions:
+
+- post-verification session behavior and approved authentication/session policy values;
+- exact transaction correction/void semantics at and across balance-snapshot boundaries, plus historical debt-payment correction/outstanding recomputation;
+- yearly recurrence behavior for 29 February in a non-leap year, bounded interval/end limits, series-edit semantics, and reminder multi-stage catch-up behavior after downtime/timezone/late creation;
+- which security events are user-visible versus operator-only;
+- legally approved deletion map, independent restore-exclusion register, retained pseudonymous evidence, and user request/cancellation channel;
+- RLS and snapshot/transaction serialization design;
+- RPO/RTO, incident/support ownership, and OQ-17 provider selection at its stated gate;
+- representative scenario validation for snapshot backfill, manual goal reserve, and safe-to-spend.
 
 ## 14. Approval criteria
 
 This PRD may move from `Draft` to `Approved` only when:
 
-1. review-blocking open decisions have recorded dispositions;
+1. accepted OQ decisions are reflected consistently in all affected specifications;
 2. MVP scope and non-goals are accepted;
-3. proposed financial definitions are validated against representative user scenarios;
+3. financial definitions are validated against representative user scenarios;
 4. legal/privacy ownership is assigned;
 5. UX, architecture, security, database, and test documents are mutually consistent;
 6. approved reviewers and date are recorded in version control.

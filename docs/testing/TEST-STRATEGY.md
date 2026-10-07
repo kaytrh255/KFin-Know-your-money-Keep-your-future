@@ -1,7 +1,7 @@
 # KFin Test Strategy
 
 **Status:** Draft — review required<br>
-**Version:** 0.1<br>
+**Version:** 0.2<br>
 **Release target:** Private Beta, at most 50 users<br>
 **Current evidence:** None; no application has been implemented or tested
 
@@ -28,7 +28,7 @@ Each test or evidence item should reference applicable IDs:
 
 ```text
 Requirement: PRD-EXP-03, SEC-APP-05
-Flow: UF-FIN-02
+Flow: UF-FIN-04
 Threat: TM-15, TM-16
 Test: API-TXN-FASTADD-001, E2E-FASTADD-001
 Evidence: CI run / report / review record
@@ -76,16 +76,16 @@ Fast deterministic tests for domain/application logic without network or real da
 Priority units:
 
 - integer-money addition/subtraction/bounds/format-contract conversion;
-- current-balance and selected-month formula, including the approved opening-date/backdating cutoff;
+- current-balance calculation by latest immutable snapshot segment, historical-only exclusion, and selected-month inclusion of labelled backfill;
 - spendable-estimate formula/version after approval;
 - classification and no-double-counting rules;
 - recurrence next-date generation including 29/30/31, leap day, end date, timezone policy;
 - due/due-today/overdue derived state;
 - debt split reconciliation, outstanding update/correction, and no-split behavior that never assumes principal;
-- savings allocation derivation and target progress;
-- planned-purchase transition and linked-goal release rules, including partial/no release and no double counting;
-- challenge/session expiry, rotation state machine, and password policy;
-- reminder stage/dedup/cash-flow warning fingerprint;
+- manual savings current/target progress, as-of behavior, version conflicts, and old/new audit metadata;
+- planned-purchase transition and linked-goal scalar deduction, including zero/partial/full bounds, idempotency, and no double counting;
+- challenge/session/invitation expiry, rotation/consumption state machines, and password policy;
+- eligible outgoing-obligation 09:00 user-local reminder stages, scheduled-income exclusion, once-only overdue deduplication, and month-end cash-flow-warning fingerprint;
 - log/telemetry redaction helpers.
 
 Use table-driven and property-based tests for money/date/state invariants. A code-coverage percentage is a diagnostic, not the release goal; critical rules require branch and boundary coverage regardless of aggregate percentage.
@@ -109,9 +109,12 @@ Run against the supported PostgreSQL version in disposable isolated databases.
 - Migrations apply from empty and from the previous release; constraints/indexes/RLS exist as specified.
 - Money, currency, owner-composite, status/link, uniqueness, and version constraints reject invalid writes.
 - Transactions roll back fully at injected failure points.
-- Concurrent confirm/payment/correction/idempotency requests produce one valid result.
-- Session rotation/revocation and challenge consumption are race-safe.
-- Outbox insertion is atomic with domain writes.
+- Concurrent snapshot creation and transaction creation serialize/fail safely; no record attaches to an ambiguous segment.
+- Historical/current effect, old/latest segment, void/correction, and same-day inclusion constraints produce one explainable balance.
+- Concurrent confirm/payment/savings update/purchase completion/idempotency requests produce one valid result and one goal deduction.
+- Session rotation/revocation, invitation consumption/account creation, and challenge consumption are race-safe.
+- Deletion request/cancel/purge claiming and restore-tombstone behavior are race-safe and idempotent.
+- Outbox insertion is atomic with applicable domain writes.
 - Worker lease/crash/reclaim/retry/dead-letter and duplicate execution are safe.
 - Repository methods cannot omit tenant context; RLS pool context does not leak between users if accepted.
 - Dashboard/month/schedule queries reconcile to seeded source records.
@@ -141,8 +144,9 @@ Security automation and manual review map directly to [the threat model](../secu
 #### Authentication and abuse
 
 - Credential-stuffing/brute-force patterns across IP/account/global dimensions.
-- Registration/login/reset/OTP enumeration content/status/timing/rate behavior.
-- OTP/reset/invite expiry, attempt, resend, supersession, replay, concurrency, immediate secret-delivery uncertainty, and provider failures; verify no secret enters the ordinary outbox.
+- Registration/login/reset/OTP/invitation enumeration content/status/timing/rate behavior.
+- Invitation expiry, wrong-email binding, revoke/use/replay, parallel consumption, digest-only storage, and atomic account creation.
+- OTP/reset expiry, attempt, resend, supersession, replay, concurrency, immediate secret-delivery uncertainty, and provider failures; verify no secret enters the ordinary outbox.
 - Argon2id parameter benchmark and maximum concurrent hashing behavior.
 - Password reset/change session invalidation.
 
@@ -161,6 +165,13 @@ Security automation and manual review map directly to [the threat model](../secu
 - SQL injection/filter/sort/search corpus; malformed UUID/JSON/prototype fields.
 - Direct database/RLS permissions and operator role tests.
 
+#### Privacy, deletion, and retention
+
+- Request/cancel/purge state machine across the seven-day grace boundary, including recent-auth and concurrent login/write attempts.
+- Accelerated-clock expiry tests for approved maxima: encrypted backups 90 days, application logs 90 days, and minimized security/audit events 24 months.
+- Provider-side purge evidence; purpose-limited pseudonymized restore-exclusion entries; register access, key rotation, tamper/omission handling, expiry, legal-hold controls; and restored-backup re-deletion.
+- Vietnam/SEA region configuration and documented cross-border/subprocessor boundaries after OQ-17 provider selection.
+
 #### Data leakage and supply chain
 
 - Canary values injected into secrets, notes, amounts, email, and errors; scan logs/error tracking/analytics/cache/build artifacts.
@@ -176,20 +187,23 @@ Playwright (or selected equivalent) runs through the deployed browser/UI/API/dat
 
 Critical journeys:
 
-1. Invite/register → OTP verify → onboarding → opening balance.
+1. Single-use invite → registration/atomic consume → OTP verify → selected post-verification sign-in/session behavior → Vietnamese-first onboarding → aggregate account/initial snapshot.
 2. Sign in → close/reopen context → resume session → logout/replay rejected.
 3. Forgot/reset password → all old sessions rejected.
-4. Global Add expense on compact viewport → retry after simulated timeout → one record.
-5. Flexible income + recurring salary confirmation → exact monthly 4,630,000 VND example.
-6. Recurring rent reaches due/overdue but not paid → explicit confirmation.
-7. Debt create/payment/correction with split and no-split paths.
-8. Savings goal contribution/withdrawal with no cash double count.
-9. Planned purchase completion creates exactly one actual expense and the approved linked-goal release without double counting.
-10. Dashboard aggregates drill down to source records and explain calculation.
-11. Cash-flow warning for 1,000,000 VND due versus 700,000 VND available.
-12. Session revocation from another context.
-13. Network loss/session expiry during form preserves safe draft and never claims save.
-14. User A cannot reach User B data through UI/deep links.
+4. Global Add current expense on compact viewport → retry after simulated timeout → one current-impact record.
+5. Add pre-snapshot historical expense → selected month changes but current balance remains fixed and labelled.
+6. Create a manual known-balance snapshot while a transaction races → one deterministic segment/result.
+7. Flexible income + recurring salary explicit confirmation → exact monthly 4,630,000 VND example.
+8. Recurring rent reaches 09:00 due/first-overdue stages but not paid → one notification/stage and explicit confirmation.
+9. Debt create/payment/correction with split and no-split paths; no automatic interest.
+10. Savings goal absolute current-amount update changes safe-to-spend but not cash/monthly flow.
+11. Planned purchase completion creates exactly one expense and one user-confirmed goal scalar deduction (including zero/partial path).
+12. Dashboard aggregates drill down and explain snapshot anchor, historical-only records, month-end formula, and goal reserve.
+13. Cash-flow warning for 1,000,000 VND due versus 700,000 VND available.
+14. Session revocation from another context.
+15. Deletion request → authenticated cancellation race, or post-7-day purge/tombstone in accelerated test time.
+16. Network loss/session expiry during form preserves safe draft and never claims save.
+17. User A cannot reach User B snapshots, transactions, goals, or other private data through UI/deep links.
 
 E2E tests are few, critical, deterministic, and backed by lower-level coverage—not a replacement for it.
 
@@ -263,11 +277,12 @@ Before beta:
 
 1. Create a production-like encrypted backup.
 2. Restore to isolated environment with timed procedure.
-3. Verify schema/migration version, constraints, row counts, referential checks, user isolation, and representative financial reconciliations.
-4. Start the exact application artifact against restored data and execute smoke journeys.
-5. Verify backup/operator permissions and audit logs.
-6. Destroy restored data under procedure.
-7. Record actual RPO/RTO evidence and gaps.
+3. Obtain the current independently protected restore-exclusion register, reapply deletion tombstones before activation, and prove purged users/financial data cannot be resurrected.
+4. Verify schema/migration version, constraints, row counts, referential checks, user isolation, snapshot-segment balances, historical monthly reports, and representative financial reconciliations.
+5. Start the exact application artifact against restored data and execute smoke journeys.
+6. Verify backup/operator permissions, retention configuration, and audit logs.
+7. Destroy restored data under procedure.
+8. Record actual RPO/RTO evidence and gaps.
 
 For each release with schema changes:
 
@@ -277,17 +292,19 @@ For each release with schema changes:
 - rehearse app rollback and approved database roll-forward/back strategy;
 - verify no long locks/unbounded backfill.
 
-### 5.12 Email and notification tests
+### 5.12 Required email and in-app notification tests
 
-- Template content, escaping, plain-text/HTML accessibility, localization, links, minimal privacy.
-- SPF/DKIM/DMARC and provider sandbox/domain configuration.
-- Outbox atomicity and unique logical delivery.
-- Worker crash before/after provider response and retry behavior.
-- Webhook signature/timestamp/replay/schema/idempotency.
-- Schedule timezone/stage/quiet-hour policy.
-- Confirm/skip/cancel racing with reminder evaluation.
-- Delivery failure does not alter financial state.
-- Unchanged cash-flow warning is not spammed.
+- Vietnamese authentication/security email content, escaping, plain-text/HTML accessibility, links, and minimal privacy.
+- SPF/DKIM/DMARC and provider sandbox/domain configuration before Release Candidate.
+- Secret-bearing immediate delivery uncertainty and non-secret outbox atomicity/idempotency.
+- Email webhook signature/timestamp/replay/schema/idempotency where the selected provider uses callbacks.
+- Eligible outgoing-obligation 7-day/3-day/due-today/first-overdue calculation at 09:00 user-local time; scheduled income receives no fixed-stage notification.
+- Timezone change, late occurrence creation, and worker downtime follow the approved multi-stage catch-up/suppression policy, never duplicate occurrence + stage, and never accidentally burst stale notifications.
+- First-overdue does not repeat during long unresolved periods.
+- Confirm/skip/cancel racing with reminder evaluation creates no stale authoritative state.
+- Reading/dismissing notification or any email delivery result does not alter financial state.
+- Unchanged month-end cash-flow warning is not spammed.
+- No payment-reminder email, push, SMS, or permission path exists in MVP.
 
 ## 6. Test data and determinism
 
@@ -409,8 +426,9 @@ Monitoring can reveal defects but does not replace pre-release tests. Cohort exp
 
 ## 13. Strategy approval blockers
 
-- Approved MVP requirements and formulas.
-- Selected stack/provider/browser support.
-- Decisions on RLS, retention/deletion, reminder channels, locale/currency, and native scope.
+- Approved MVP requirements/formulas and consistent OQ-01 through OQ-19 implementation semantics.
+- Selected stack and provisional browser support; explicit test plan for OQ-17’s pre-Release-Candidate provider selection.
+- Decisions on post-verification session behavior/policy values, RLS, snapshot concurrency/correction, historical debt-payment correction/outstanding recomputation, yearly 29-February recurrence, bounded recurrence/series-edit limits, multi-stage reminder catch-up, and deletion restore-exclusion design.
+- Vietnamese legal/privacy review plan for retention/deletion/residency and evidence that the fixed in-app reminder boundary is testable.
 - Named security, QA, accessibility, operations, and release owners.
-- Agreed performance, RPO/RTO, and vulnerability SLA values.
+- Agreed provisional performance, RPO/RTO, and vulnerability SLA values; measured provider-specific values remain an RC gate.

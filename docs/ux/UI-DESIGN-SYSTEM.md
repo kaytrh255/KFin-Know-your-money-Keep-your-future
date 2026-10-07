@@ -255,7 +255,7 @@ Variants: information, success, warning, danger.
 
 ### Money value
 
-Contains: semantic label, formatted amount, currency, sign/direction, optional `as of`, optional privacy mask. It must handle large values without clipping.
+Contains: semantic label, formatted amount, currency, sign/direction, and optional `as of`. It must handle large values without clipping. An on-screen privacy mask is future scope unless separately promoted.
 
 ### Status badge
 
@@ -271,7 +271,7 @@ Direction icon/text, title, expected amount, date, source, and explicit state; p
 
 ### Goal card
 
-Name, current/target, labelled progress, target date if present, and contribution action. No decorative chart.
+Name, manually reported current/target, current-value as-of date, labelled progress, target date if present, and `Update current amount` action. No decorative chart.
 
 ### Sensitive confirmation
 
@@ -330,7 +330,7 @@ Before acceptance:
 
 1. Validate all color pairings with actual font weights/sizes and UI states.
 2. Produce compact and expanded prototypes for Home, Global Add, Schedule, debt payment, and authentication.
-3. Test Vietnamese text expansion/formatting if OQ-01 selects Vietnamese-first.
+3. Complete Vietnamese-first content, typography, date/amount, text-expansion, and line-break review; also test English-ready layout stress strings.
 4. Test numeric keyboard and safe-area behavior on representative iOS and Android browsers.
 5. Conduct keyboard, screen-reader, zoom, and reduced-motion reviews.
 6. Confirm brand marks/logo separately; this document defines interface style, not a final logo.

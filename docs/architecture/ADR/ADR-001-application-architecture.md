@@ -9,7 +9,7 @@
 
 KFin must serve at most 50 initial users while handling sensitive financial information and retaining clear future module boundaries. It needs one responsive Web/PWA product, an API, scheduled work, PostgreSQL, reliable testing, and low operational burden. The product explicitly rejects premature microservices and distributed infrastructure.
 
-The architecture must still keep authentication, users, transactions, schedules, debt, savings, planned purchases, notifications, audit/security, and reporting conceptually separate.
+The architecture must still keep authentication/invitations, users/deletion, aggregate-account balance snapshots and transactions, schedules, debt, savings, planned purchases, notifications, audit/security, and reporting conceptually separate.
 
 ## Decision
 

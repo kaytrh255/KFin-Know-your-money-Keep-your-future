@@ -46,8 +46,8 @@ Exact versions MUST be selected and pinned to then-supported stable/LTS releases
 | API description | REST/JSON under `/api/v1`; OpenAPI generated from authoritative server schemas | Inspectable, testable contract; future native client compatibility |
 | Data access | Drizzle ORM/query builder with reviewed SQL migrations | Typed access while retaining PostgreSQL constraints, transactions, and explainable SQL |
 | Database | Managed PostgreSQL | Transactions, relational integrity, indexing, JSON only where appropriate, mature backup tooling |
-| Background work | Same repository and modules, separate optional worker process; PostgreSQL transactional outbox/job table | Email/reminders without Redis or a message broker; atomic enqueue with state changes |
-| Email | Provider adapter selected after OQ-09 | Avoid domain coupling; required for OTP/recovery/reminders |
+| Background work | Same repository and modules, separate optional worker process; PostgreSQL transactional outbox/job table | In-app reminders and non-secret security email without Redis/broker; secret-bearing OTP/reset delivery follows the explicit request-path exception |
+| Email | Provider adapter selected before Release Candidate under OQ-17 | Required for OTP/recovery/security messages only; payment reminders are in-app |
 | Tests | Vitest, Testing Library, Fastify injection/integration tests, Playwright, axe-core; containerized PostgreSQL in CI | Covers domain, API, browser, accessibility, and real SQL behavior |
 | Delivery | Docker/OCI image, GitHub Actions, Cloudflare, managed compute and managed PostgreSQL | Reproducible release, TLS/WAF/rate controls, low-operations deployment |
 | Observability | Pino-compatible structured logs, provider metrics, error tracking with strict scrubbing; OpenTelemetry only where it adds evidence | Useful diagnostics without building an observability platform |
@@ -65,6 +65,7 @@ flowchart LR
     API --> DB[(Private PostgreSQL)]
     API --> EMAIL[Email provider]
     WORKER[KFin worker process] --> DB
+    WORKER --> TOMB[Protected restore-exclusion register]
     WORKER --> EMAIL
     API --> OBS[Logs / metrics / error tracking]
     WORKER --> OBS
@@ -72,9 +73,10 @@ flowchart LR
     CP --> API
     CP --> WORKER
     CP --> DB
+    CP --> TOMB
 ```
 
-Trust boundaries exist at the user device, Cloudflare edge, application runtime, database network, third-party email provider, observability provider, and operator control plane.
+Trust boundaries exist at the user device, Cloudflare edge, application runtime, database network, independently protected restore-exclusion register, third-party email provider, observability provider, and operator control plane.
 
 ## 5. Container/runtime view
 
@@ -96,12 +98,16 @@ flowchart TB
     subgraph Data[Private data environment]
       PG[(PostgreSQL)]
     end
+    subgraph Recovery[Independent recovery-control boundary]
+      DR[Deletion restore-exclusion register]
+    end
     UI --> TLS
     TLS --> STATIC
     TLS --> PROXY
     PROXY --> API
     API --> PG
     WK --> PG
+    WK --> DR
     SW -. no authenticated API cache .-> UI
 ```
 
@@ -111,17 +117,17 @@ For the smallest deployment, the API may also serve the built web assets, but br
 
 | Module | Responsibilities | Must not own |
 |---|---|---|
-| Identity | User/profile/status, invite eligibility, locale/timezone/base currency | Password hashing/session token logic |
+| Identity | User/profile/status, invite eligibility, locale/timezone/base currency, deletion lifecycle and restore-exclusion intent | Password hashing/session token logic |
 | Authentication | Registration, verification, login, password recovery/change | Financial data |
 | Sessions | Create/validate/rotate/revoke sessions, active-session view | User-controlled authorization decisions |
-| Accounts | Manual financial accounts and opening balances | Schedule or debt policy |
-| Transactions | Posted inflow/outflow, classifications, correction/void semantics, monthly actual aggregates | Auto-posting scheduled money |
+| Accounts | One aggregate account, immutable balance snapshots, current-balance segments, manual known-balance updates | Bank/account-statement reconciliation, schedule, or debt policy |
+| Transactions | Posted current-impact/historical-only inflow/outflow, classifications, correction/void semantics, monthly actual aggregates | Auto-posting scheduled money or silently crossing snapshot anchors |
 | Schedule | Recurring definitions, generated occurrences, confirmation links | Declaring a payment complete without transaction confirmation |
 | Debt | Debt profile, payment split/history, outstanding corrections | Authoritative lender interest accrual |
-| Savings | Goals and virtual allocation ledger under approved policy | Cash movement unless explicitly linked by a future spec |
-| Purchases | Planned purchase lifecycle and explicit completion link | Treating plans as actual expenses |
+| Savings | Goals, manually maintained current amount/as-of date, old/new audit metadata | Contribution ledger, cash account, or verified bank balance |
+| Purchases | Planned purchase lifecycle, explicit expense completion, optional atomic goal-amount deduction | Treating plans as actual expenses or auto-zeroing goals |
 | Dashboard/Reporting | Read models and transparent calculations | Independent source of financial truth |
-| Notifications | Preferences, in-app notifications, delivery records, email adapter | Changing financial status based on delivery |
+| Notifications | Fixed-stage in-app notifications for eligible outgoing obligations and deduplication; required security-email intents where applicable | Scheduled-income stages, payment-reminder email/push, or changing financial status based on delivery |
 | Audit/Security | Security/audit events, abuse signals, redaction policy | General-purpose analytics payloads |
 | Jobs | Outbox claim/retry/dead-letter mechanics | Domain decisions hidden from owning modules |
 
@@ -197,19 +203,26 @@ Object-not-found and object-not-owned responses should be indistinguishable to p
 
 ### Derived values
 
-- Current balance and month totals derive from posted records, not cached client math.
+- Current balance derives from the latest immutable balance snapshot plus posted current-impact transactions attached to that snapshot segment.
+- Historical-only backfill participates in occurrence-month/category totals but not current balance; it is never inferred solely from client ownership/status fields.
+- Safe-to-spend equals current balance minus unpaid outgoing occurrences due through local calendar-month end minus manual current amounts on active savings goals; projected income is excluded.
 - Due/overdue derives from occurrence state + due date + user timezone; it does not mutate to paid.
-- Dashboard calculations live in one reporting service with named/versioned formulas and source drill-down.
+- Dashboard calculations live in one reporting service with named/versioned formulas, snapshot anchor, as-of time, and source drill-down.
 - Early beta can calculate on demand with indexed SQL. Materialized views/caches require measured evidence and an invalidation design.
 
 ## 11. Transaction and consistency boundaries
 
 The following operations must be atomic:
 
-- create/confirm posted transaction + link schedule occurrence + idempotency result;
+- invitation consumption + pending user/password credential creation;
+- aggregate account + initial balance snapshot creation;
+- create/confirm posted transaction + balance-effect/snapshot anchor + optional schedule occurrence link + idempotency result;
+- create a manual authoritative-balance snapshot + new segment metadata + audit event;
 - debt payment + posted outflow + principal/outstanding update + occurrence link;
-- planned-purchase completion + posted expense + approved linked-goal release + purchase status;
+- savings current-amount update + old/new audit metadata;
+- planned-purchase completion + posted expense + optional linked-goal scalar deduction/audit + purchase status;
 - password reset + credential replacement + all-session revocation + challenge consumption;
+- account-deletion state transition/purge checkpoint + required audit/tombstone metadata;
 - security-sensitive state change + required audit event;
 - domain state change + transactional outbox entry when external delivery is required.
 
@@ -219,11 +232,11 @@ Email delivery itself cannot be part of a database transaction. For outbox-eligi
 
 Initial job types:
 
-- send non-secret security/reminder email from durable intent;
+- send approved non-secret security email from durable intent;
 - generate a bounded window of schedule occurrences;
-- evaluate reminder stages and create delivery intents;
-- send approved reminder email;
+- evaluate eligible outgoing-obligation in-app reminder stages at 09:00 user-local time and create each stage once;
 - prune expired challenge/session/idempotency data under retention policy;
+- execute/cancel due account-deletion purge jobs and maintain the independently protected restore-exclusion/tombstone register;
 - operational consistency checks where specified.
 
 Worker requirements:
@@ -245,7 +258,7 @@ Detailed decisions are in [ADR-002](ADR/ADR-002-authentication-strategy.md), [AD
 
 Proposed design:
 
-- Email/password identity with verified email and optional beta invite.
+- Email/password identity with verified email and a required single-use, expiring beta invitation code; invite consumption and pending-account creation are atomic.
 - Passwords hashed with Argon2id using parameters benchmarked against current OWASP guidance on production-class hardware.
 - OTP/reset challenges are purpose-bound, single-use, short-lived, attempt-limited, stored only as keyed digest/hash, and superseded on controlled resend.
 - Because a digest cannot be used to reconstruct an emailed secret, the proposed MVP sends secret-bearing OTP/reset mail immediately after committing the challenge while plaintext exists only in process memory. Provider failure produces a controlled resend path. Such secrets are never put in the ordinary outbox; a future asynchronous encrypted-envelope design needs its own review.
@@ -318,8 +331,11 @@ Requirements:
 - Schema changes follow expand/migrate/contract when instant rollback would otherwise break.
 - Secrets come from managed secret storage, are least-privilege, rotatable, and never embedded in image/repository.
 - PostgreSQL accepts only private/restricted application and operator paths; TLS is required in transit.
-- Daily encrypted backup plus provider PITR is recommended; proposed beta objectives are RPO ≤ 24 hours and RTO ≤ 8 hours, pending business approval.
-- Hosting region/provider depends on OQ-01/OQ-09.
+- Daily encrypted backup plus provider PITR is recommended; backup retention MUST NOT exceed 90 days unless a dated decision formally replaces OQ-18 with legal/privacy/product/security approval. Legal review may require a shorter period. Proposed beta objectives are RPO ≤ 24 hours and RTO ≤ 8 hours, pending business approval.
+- Application logs have a 90-day maximum baseline; minimized security/audit evidence has a 24-month maximum baseline, both subject to legal reduction.
+- A current deletion restore-exclusion register must remain protected and operationally independent of any application/database restore point it is used to sanitize; exact storage/key/expiry design is a pre-deletion-implementation blocker.
+- Private Beta is Vietnam-first and prefers a Southeast Asia region subject to legal review.
+- Specific PaaS/database/email/observability providers, domain, final region, and budget are deliberately deferred under OQ-17 until before Release Candidate. Production-like provider verification cannot be claimed before then.
 
 ## 17. Capacity and performance approach
 
@@ -362,10 +378,12 @@ At 50 users, one small application instance plus one worker process and managed 
 
 Architecture approval requires:
 
-- disposition of OQ-01 through OQ-15;
+- confirmation that OQ-01 through OQ-19 decisions are reflected consistently;
 - accepted ADR-001 through ADR-008;
-- a short implementation spike validating same-origin hosting, secure cookies/CSRF, ORM transaction behavior, service-worker exclusions, and PostgreSQL job claiming;
+- a short local/ephemeral spike validating same-origin routing, secure cookies/CSRF, ORM transaction behavior, service-worker exclusions, snapshot segmentation, and PostgreSQL job claiming;
 - reviewed data-isolation strategy, including whether PostgreSQL RLS is mandatory at beta launch;
-- selected hosting/email/monitoring providers and documented data subprocessors;
-- approved RPO/RTO, retention, incident ownership, and cost envelope;
+- explicit acceptance of OQ-17’s late provider-selection risk and a dated Release Candidate provider gate;
+- approved provisional RPO/RTO, retention baseline, incident ownership, and cost envelope assumptions;
 - traceability from architecture requirements to tests.
+
+Release Candidate additionally requires selected providers/domain/region/budget, a provider ADR addendum, documented subprocessors, production-like staging, legal/residency review, restore/rollback evidence, and measured RPO/RTO.

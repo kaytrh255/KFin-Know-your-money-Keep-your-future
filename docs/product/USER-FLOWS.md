@@ -16,15 +16,15 @@
 ## 2. First-use map
 
 ```text
-Invite / permitted registration
-  → Create account
+Receive single-use invitation code
+  → Register with invite + email + password
   → Generic verification instruction
   → Verify email OTP
   → Sign in (or establish verified session under approved policy)
-  → Set display name, timezone, locale, base currency
-  → Create default/manual account and opening balance
+  → Set display name, timezone, and one base currency
+  → Create aggregate account and initial balance snapshot
   → Dashboard setup state
-  → Add first income or expense
+  → Add first current transaction or historical backfill
 ```
 
 The policy for automatically signing in after verification is not yet approved. Whatever is selected must rotate credentials/session identifiers and produce one unambiguous result.
@@ -33,12 +33,12 @@ The policy for automatically signing in after verification is not yet approved. 
 
 ### UF-AUTH-01 — Register and verify email
 
-**Precondition:** Registration policy permits the request.
+**Precondition:** User has an unexpired, unused Private Beta invitation code.
 
-1. User enters email and a password meeting the visible policy.
-2. Client submits over TLS without logging credentials.
-3. Server normalizes email, applies IP/email/invite abuse controls, and returns a generic response.
-4. If permitted, server stores an Argon2id password hash and sends a single-use OTP.
+1. User enters invitation code, email, and a password meeting the visible policy.
+2. Client submits over TLS without logging credentials or invite material.
+3. Server digests/validates the invitation, normalizes email, applies IP/email/invite abuse controls, and returns a generic response.
+4. If permitted, server atomically consumes the invitation and creates the pending account with an Argon2id password hash, then sends a single-use OTP.
 5. User enters the OTP on a screen that shows a masked destination and expiry/resend guidance.
 6. Server validates purpose, digest, attempts, expiry, and consumed state.
 7. On success, email becomes verified and a security event is recorded.
@@ -46,11 +46,11 @@ The policy for automatically signing in after verification is not yet approved. 
 
 **Failure/recovery**
 
-- Existing email, blocked invite, and non-existing email must not create an enumeration oracle.
-- Incorrect code shows remaining-safe guidance, not secret comparison details.
-- Expired/consumed code offers controlled resend.
-- Resend invalidates or supersedes prior active codes according to the approved challenge policy.
-- Rate limit response is calm and does not reveal account existence.
+- Existing email, invalid/expired/consumed/revoked/wrong-email invitation, and non-existing email states must not create an enumeration oracle.
+- An unusable invitation gets generic guidance; only the audited operator procedure may issue a replacement invitation.
+- Incorrect OTP shows remaining-safe guidance, not secret comparison details.
+- OTP resend invalidates or supersedes prior active verification challenges according to the approved challenge policy.
+- Rate-limit responses are calm and do not reveal account or invitation state.
 
 ### UF-AUTH-02 — Sign in and resume session
 
@@ -90,26 +90,54 @@ The policy for automatically signing in after verification is not yet approved. 
 3. User revokes one other session or confirms revocation of all.
 4. List updates only after server confirmation.
 
+### UF-AUTH-07 — Request or cancel account deletion
+
+1. User initiates through the legally approved beta request channel and completes identity verification/recent authentication.
+2. Review states the 7-day cancellation deadline, active-data purge scope, retained minimum audit evidence, backup aging, and loss of access.
+3. Server marks account `deletion_pending`, revokes sessions according to approved policy, records the request/deadline, and sends a safe confirmation.
+4. A verified cancellation before the deadline restores the account under the approved session policy and is audited.
+5. After the deadline, an idempotent purge process removes/anonymizes active identity and financial data according to the approved deletion map and records minimum non-sensitive evidence.
+6. A later backup restore must obtain the current independently protected restore-exclusion register and reapply deletion tombstones before data becomes active.
+
 ## 4. Money setup and transaction flows
 
-### UF-FIN-01 — Establish opening balance
+### UF-FIN-01 — Establish initial balance snapshot
 
-1. Onboarding explains that KFin is manual and asks what aggregate liquid money should be represented.
-2. User accepts the approved default account or names it if the reviewed OQ-03 experience allows naming.
-3. User enters opening balance, ledger start date, and currency fixed to base currency in MVP. Under the OQ-13 recommendation, the amount means balance at the start of that local date.
-4. Review shows that transactions on/after the ledger start date adjust current balance, earlier records are not accepted in MVP, and multiple accounts/transfers are not being tracked under the recommended model.
-5. Server creates the user-owned account; dashboard exposes the as-of status.
+1. Onboarding explains that KFin tracks one aggregate liquid-money amount manually and does not connect to banks.
+2. User selects one base currency (VND default), which becomes immutable after the first financial record.
+3. User enters the authoritative current balance and confirms an exact local as-of date/time.
+4. Review explains that this snapshot anchors current balance, future current-impact transactions adjust it, and older backfill can be reported without changing it.
+5. Server atomically creates the one user-owned aggregate account and its initial immutable balance snapshot.
+6. Dashboard shows the current balance with snapshot/last-activity freshness disclosure.
 
-Changing an opening balance later is a deliberate correction with recalculation and audit metadata, not an unexplained balance overwrite.
+A snapshot is never silently overwritten. A later manual authoritative-balance update creates a new snapshot segment and preserves prior evidence; it is not bank/account-statement reconciliation.
 
-### UF-FIN-02 — Global Add expense
+### UF-FIN-02 — Add historical transaction before the snapshot
+
+1. User chooses `Add historical record`, selects a date before the latest snapshot’s local date, or selects the same local date and enters the explicit inclusion review.
+2. A pre-snapshot date is historical. On the same local date, the UI asks whether the event was already included; choosing `No` exits this historical path and previews a current-impact save.
+3. For the historical path, the form labels the transaction `Already included in current snapshot`, previews no current-balance change, and asks the user to confirm the income/expense details.
+4. Server posts the transaction with historical balance effect and links it to the relevant snapshot context.
+5. Activity and monthly/category reports include it with a visible historical-only label; Home current balance stays unchanged.
+
+Changing historical/current balance effect later is a deliberate correction with consequence preview, optimistic concurrency control, and audit evidence.
+
+### UF-FIN-03 — Update known balance with a new snapshot
+
+1. User opens Money setup and selects `Update known balance`.
+2. KFin shows calculated current balance and asks for the user’s authoritative actual amount and exact as-of time.
+3. If different, review explains the variance without inventing a missing income/expense transaction.
+4. User confirms; server creates a new immutable snapshot segment.
+5. Current balance now starts from the new snapshot. Prior transactions/snapshots remain inspectable and monthly reports are not rewritten.
+
+### UF-FIN-04 — Global Add expense
 
 **Entry:** Global Add action from any authenticated primary screen.
 
 1. Bottom sheet/full-screen mobile form opens with **Expense** selected and amount focused.
 2. User enters amount using a locale-appropriate numeric keypad.
-3. User chooses a recent/default category and classification; date defaults to today; default account is preselected.
-4. Optional fields (note, different date/account) remain collapsed or secondary.
+3. User chooses a recent/default category and classification; date defaults to today; the one aggregate account is implicit.
+4. Optional fields (note and different date) remain secondary. Choosing a pre-snapshot date switches to the historical-review behavior rather than silently changing balance impact.
 5. Save disables repeat taps and sends an idempotency key.
 6. On server confirmation, sheet closes, a concise undo/edit affordance may appear, and visible totals invalidate/refetch.
 
@@ -122,26 +150,26 @@ Changing an opening balance later is a deliberate correction with recalculation 
 
 **Usability target:** Valid basic entry in one surface, with no required note and no multi-page navigation.
 
-### UF-FIN-03 — Add flexible income
+### UF-FIN-05 — Add flexible income
 
-Same amount-first pattern as Global Add, with **Income** selected. The date determines the confirmed monthly aggregate. Successful save increases the selected account balance.
+Same amount-first pattern as Global Add, with **Income** selected. The date determines the confirmed monthly aggregate. A current-impact save increases current balance; a pre-snapshot historical save is reported but leaves current balance fixed.
 
-### UF-FIN-04 — Edit or remove a transaction
+### UF-FIN-06 — Edit or remove a transaction
 
 1. User opens Activity and selects a transaction.
-2. Detail shows amount, date, classification, account, linked schedule/debt/purchase if any, and last update.
-3. Edit validates all affected invariants and warns when a linked item will change.
+2. Detail shows amount, date, classification, current-impact or historical-only effect, snapshot segment, linked schedule/debt/purchase if any, and last update.
+3. Edit validates all affected invariants and previews balance/report effects, especially when crossing a snapshot boundary or changing a linked item.
 4. Remove uses the approved delete/void policy and asks confirmation with concrete impact.
 5. Server applies one consistent transaction, records audit metadata, and recalculates summaries.
 
-Linked financial records must not become orphaned. Exact historical edit/void semantics remain an open product decision.
+Linked financial records must not become orphaned. Exact historical edit/void semantics remain a specification/physical-design decision that blocks financial implementation.
 
 ## 5. Recurring income and obligation flows
 
 ### UF-SCH-01 — Create recurring income
 
 1. User chooses Add → Recurring income.
-2. Enters name, amount, account, cadence, first expected date, optional end date.
+2. Enters name, amount, cadence, first expected date, and optional end date; the one aggregate account is implicit.
 3. Review explicitly says occurrences are projected until confirmed received.
 4. Server creates schedule and generates the bounded next occurrences idempotently.
 5. Schedule and dashboard show projected values separately.
@@ -149,34 +177,34 @@ Linked financial records must not become orphaned. Exact historical edit/void se
 ### UF-SCH-02 — Confirm income received
 
 1. User opens an expected income occurrence.
-2. Confirms or edits actual amount/date/account.
+2. Confirms or edits the actual amount/date; the one aggregate account is implicit.
 3. Server atomically creates one posted income transaction and links it to the occurrence.
 4. Occurrence becomes confirmed; projected and confirmed totals update without double counting.
 
 ### UF-SCH-03 — Create and confirm recurring essential payment
 
-1. User enters payee/title, essential classification, expected amount, cadence, first due date, reminders, and account.
+1. User enters payee/title, essential classification, expected amount, cadence, and first due date; the one aggregate account and fixed in-app reminder stages are implicit.
 2. Schedule generates future unpaid occurrences.
-3. Reminder navigates to occurrence detail.
-4. User selects Mark paid, verifies actual amount/date/account, and confirms.
+3. An eligible fixed-stage in-app reminder navigates to occurrence detail.
+4. User selects Mark paid, verifies actual amount/date, and confirms.
 5. Server atomically records one expense and links it; occurrence becomes paid.
 
-Passing the due date performs step 2/overdue state only, never steps 4–5.
+Passing the due date changes only derived due/overdue presentation and notification eligibility; it never performs steps 4–5.
 
 ### UF-SCH-04 — Handle due, overdue, skip, or changed amount
 
 - Due/overdue is derived from user-local date and unresolved state.
 - User may confirm paid with an actual amount different from expected while preserving both values.
 - “Skip occurrence” requires a reason/confirmation and does not create a transaction.
-- Editing a recurrence defines whether only future unconfirmed occurrences or also a selected occurrence changes; paid history remains stable unless explicitly corrected.
+- Series-edit scope (`this occurrence` versus `this and future`) remains a pre-implementation decision. The UI must not offer an unsupported choice; paid history remains stable unless explicitly corrected.
 
 ## 6. Debt flows
 
 ### UF-DEBT-01 — Create debt
 
 1. User enters name, original principal, current lender-reported outstanding balance and as-of date.
-2. Optional interest rate is labelled informational; no automatic accrual claim is made.
-3. User enters usual payment amount, frequency, first/next due date, and reminder preference.
+2. Optional annual interest rate includes an as-of date/source and is labelled informational; no automatic accrual claim is made.
+3. User enters usual payment amount, frequency, and first/next due date; fixed outgoing-obligation in-app stages apply without a channel preference.
 4. Review explains expected occurrences and manual confirmation.
 5. Server creates debt, schedule, and next occurrences atomically.
 
@@ -184,7 +212,7 @@ Passing the due date performs step 2/overdue state only, never steps 4–5.
 
 1. User opens due occurrence or debt detail and chooses Record payment.
 2. Enters actual total and date; optionally splits principal, interest, and fee or supplies a new lender-reported outstanding balance with as-of date.
-3. If a complete split is supplied, parts must reconcile to total.
+3. A complete split must equal total; a partial split must show the unclassified remainder and never treat it as principal.
 4. Review shows cash-balance effect. It shows an outstanding-balance effect only when principal or a new reported balance is known.
 5. Server records expense, debt payment, and occurrence link atomically. It updates outstanding balance only from known principal or an explicit new lender-reported value.
 6. If neither is available, the prior outstanding amount and as-of date remain unchanged and the detail prompts later reconciliation; KFin never assumes the full payment is principal.
@@ -193,15 +221,15 @@ If the lender-reported balance later differs, the user makes an explicit balance
 
 ## 7. Savings and planned-purchase flows
 
-### UF-SAV-01 — Create and fund a savings goal
+### UF-SAV-01 — Create and update a savings goal
 
-1. User enters name, target, existing allocated amount, planned contribution/cadence, and optional target date.
-2. Review explains that allocated savings is a virtual reserve under the proposed OQ-08 model.
-3. Goal is created with progress and an explainable initial allocation entry.
-4. Add contribution records amount/date and reduces the spendable reserve calculation, not total cash.
-5. Withdrawal reverses allocation only after confirmation.
+1. User enters name, target amount, manually reported current amount/as-of date, planned contribution/cadence, and optional target date.
+2. Review explains that current amount is a declared reserve used by safe-to-spend, not a separate cash account or verified bank balance.
+3. Goal is created with current/target progress. The current amount does not change aggregate cash or monthly income/outflow.
+4. To change it, user selects `Update current amount`, enters a new absolute value/as-of date and optional reason, then reviews its safe-to-spend effect.
+5. Server version-checks the goal, updates the scalar amount, and writes immutable old/new audit metadata.
 
-If OQ-08 is resolved differently, this flow and the data model must be revised before implementation.
+MVP does not expose contribution or withdrawal ledger entries.
 
 ### UF-PLAN-01 — Create planned purchase
 
@@ -212,11 +240,11 @@ If OQ-08 is resolved differently, this flow and the data model must be revised b
 ### UF-PLAN-02 — Complete planned purchase
 
 1. User chooses Mark purchased.
-2. Enters actual amount/date/account/category.
-3. If a goal is linked, review asks how much of its allocation funded the purchase. Under the recommended OQ-15 policy, that amount becomes a goal withdrawal/release; it may not exceed the goal’s available allocation or actual purchase amount.
-4. Review explains the cash expense, savings-release effect, and whether any goal allocation remains. Goal archive/retain behavior remains a separate explicit choice.
-5. Server atomically creates/links the expense, records the approved goal release, and sets the purchase completed.
-6. Dashboard and Activity update without double-counting already-reserved money; the purchase, goal, and release history remain inspectable.
+2. Enters actual amount/date/category; the one aggregate account is implicit.
+3. If a goal is linked, review asks how much of its manual current amount funded the purchase; the value may be zero but cannot exceed the actual purchase amount or goal current amount.
+4. Review explains the cash expense, old/new goal amount, safe-to-spend effect, and that the goal will not be auto-archived.
+5. Server atomically creates/links the expense, updates the goal scalar with old/new audit metadata, and sets the purchase completed under one idempotency result.
+6. Dashboard and Activity update without a duplicate deduction; purchase, goal, and amount-change evidence remain inspectable.
 
 ## 8. Dashboard and reminder flows
 
@@ -234,15 +262,15 @@ When setup is incomplete, the dashboard explains which missing data prevents a t
 
 ### UF-REM-01 — Act on a reminder
 
-1. Worker creates/delivers at most one reminder for occurrence + stage + channel.
-2. User opens it and lands on the owned occurrence, after authentication.
-3. User confirms paid/received, views details, or dismisses/marks read.
-4. Confirming resolves future overdue reminders for that occurrence.
-5. Dismissal does not mark payment complete.
+1. At the 09:00 user-local evaluation, the worker creates at most one in-app notification for each eligible outgoing occurrence + stage (7-day, 3-day, due-today, or first-overdue).
+2. User opens it and lands on the owned occurrence after authentication.
+3. User confirms paid, views details, or dismisses/marks read.
+4. The overdue stage is created once and does not repeat daily/weekly; Schedule continues to show overdue until resolved.
+5. Reading/dismissing a notification does not mark payment complete, and no payment-reminder email/push is sent.
 
 ### UF-REM-02 — Cash-flow warning
 
-1. System detects available amount below outgoing obligations in the approved horizon.
+1. System detects current balance below unpaid outgoing obligations due through the end of the current local calendar month.
 2. One deduplicated warning states the amount available, total due, shortfall, dates, and as-of time.
 3. User opens the warning to inspect included obligations.
 4. The warning changes/resolves when underlying confirmed facts change; it does not repeatedly spam unchanged information.
@@ -280,14 +308,20 @@ When setup is incomplete, the dashboard explains which missing data prevents a t
 
 Before approval, product/UX review must walk through at minimum:
 
+- invitation expiry/wrong-email/parallel use and one atomic account creation;
+- post-verification session behavior under the selected policy;
+- deletion request/cancellation race, purge, and restore-exclusion behavior;
 - fixed salary plus two daily income records in one month;
 - insufficient current funds for rent due in three days;
 - payment due date passes with no confirmation;
 - retry after an uncertain Global Add response;
 - debt payment with and without a principal/interest split;
-- savings contribution followed by purchase completion without double counting;
-- timezone change near month boundary;
+- pre-snapshot historical backfill appears in the month but leaves current balance fixed;
+- same-day snapshot ambiguity requires an explicit inclusion decision;
+- a manual authoritative-balance snapshot starts a new segment without rewriting history;
+- manual savings amount update followed by partial linked-purchase deduction without double counting;
+- timezone change near month/reminder boundary and 09:00 catch-up behavior;
 - recurrence on the 29th/30th/31st and leap day;
-- edit/delete of records linked to schedules, debt, or planned purchase;
+- edit/delete of records linked to snapshots, schedules, debt, or planned purchase;
 - two users attempting the same object identifiers;
 - screen-reader and keyboard completion of every critical flow.

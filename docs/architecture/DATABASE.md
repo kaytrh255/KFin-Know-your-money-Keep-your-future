@@ -2,7 +2,7 @@
 
 **Status:** Draft conceptual/logical model — review required<br>
 **Database:** Proposed PostgreSQL<br>
-**Important blockers:** OQ-02, OQ-03, OQ-04, OQ-07, OQ-08, OQ-10, OQ-13, OQ-14, OQ-15
+**Decision baseline:** OQ-01 through OQ-19 recorded; physical design and legal retention review remain open
 
 This document defines an intended model and invariants, not executable schema or migrations. Names may be refined during reviewed physical design, but financial meaning and ownership constraints must not be weakened silently.
 
@@ -11,13 +11,13 @@ This document defines an intended model and invariants, not executable schema or
 1. Every private domain row is owned directly by a `user_id`, even when ownership could be inferred through a parent.
 2. Authenticated identity comes from the validated server session, never a request body/path user identifier.
 3. Relationships between private rows must prove same-user ownership, preferably with composite foreign keys.
-4. Actual posted money, scheduled money, debt state, and virtual savings allocations are separate concepts.
+4. Balance snapshots, current-impact transactions, historical-only transactions, scheduled money, debt state, and manual savings-goal amounts are separate concepts.
 5. Amounts are exact integer minor units; rates use exact decimal/integer scale; binary floating point is forbidden.
 6. Database constraints enforce invariants in addition to application validation.
 7. Security and financial changes are auditable, but logs/audit storage minimize secret and sensitive payload.
 8. Migrations are versioned, forward-reviewed, tested on realistic data, and coupled to restore/rollback plans.
-9. Derived dashboard values are reproducible from source records; caches/materializations are not source of truth.
-10. Retention/deletion behavior remains blocked until OQ-10 has legal/product approval.
+9. Derived dashboard values are reproducible from the latest balance snapshot, its current-impact segment, scheduled occurrences, and manual goal values; caches/materializations are not source of truth.
+10. Account deletion has a 7-day pending period followed by active-data purge. Maximum baselines are 90-day backups, 90-day application logs, and 24-month minimized security/audit evidence, subject to Vietnamese legal/privacy reduction.
 
 ## 2. Conventions
 
@@ -43,14 +43,19 @@ This document defines an intended model and invariants, not executable schema or
 
 ```mermaid
  erDiagram
+    BETA_INVITATIONS o|--o| USERS : consumed_by
     USERS ||--|| PASSWORD_CREDENTIALS : has
     USERS ||--o{ AUTH_CHALLENGES : requests
     USERS ||--o{ SESSIONS : owns
     SESSIONS ||--o{ SESSION_TOKENS : rotates
     USERS ||--o{ SECURITY_EVENTS : receives
-    USERS ||--o{ FINANCIAL_ACCOUNTS : owns
+    USERS ||--o{ DELETION_REQUESTS : requests
+    DELETION_REQUESTS ||--o| DELETION_TOMBSTONES : completes_as
+    USERS ||--|| FINANCIAL_ACCOUNTS : owns
+    FINANCIAL_ACCOUNTS ||--o{ BALANCE_SNAPSHOTS : anchors
     USERS ||--o{ TRANSACTIONS : records
     FINANCIAL_ACCOUNTS ||--o{ TRANSACTIONS : contains
+    BALANCE_SNAPSHOTS ||--o{ TRANSACTIONS : segments
     CATEGORIES ||--o{ TRANSACTIONS : classifies
     USERS ||--o{ SCHEDULED_ITEMS : defines
     SCHEDULED_ITEMS ||--o{ SCHEDULED_OCCURRENCES : generates
@@ -59,13 +64,13 @@ This document defines an intended model and invariants, not executable schema or
     DEBTS ||--o{ DEBT_PAYMENTS : has
     TRANSACTIONS ||--o| DEBT_PAYMENTS : represents
     USERS ||--o{ SAVINGS_GOALS : owns
-    SAVINGS_GOALS ||--o{ SAVINGS_ENTRIES : explains
+    SAVINGS_GOALS ||--o{ SAVINGS_AMOUNT_CHANGES : audits
     USERS ||--o{ PLANNED_PURCHASES : owns
     SAVINGS_GOALS o|--o{ PLANNED_PURCHASES : may_fund
-    PLANNED_PURCHASES o|--o| SAVINGS_ENTRIES : may_release
+    PLANNED_PURCHASES o|--o| SAVINGS_AMOUNT_CHANGES : may_reduce
     TRANSACTIONS o|--o| PLANNED_PURCHASES : completes
     USERS ||--o{ NOTIFICATIONS : receives
-    SCHEDULED_OCCURRENCES ||--o{ REMINDER_DELIVERIES : triggers
+    SCHEDULED_OCCURRENCES ||--o{ REMINDER_EVENTS : triggers
     USERS ||--o{ AUDIT_EVENTS : owns
 ```
 
@@ -99,10 +104,20 @@ Constraints:
 
 ### 4.2 `beta_invitations`
 
-Required only if OQ-11 approves invite codes rather than an allowlist.
+Required for every Private Beta registration.
 
-- `id`, normalized invited email or securely random invite digest, status, expires/consumed timestamps, created_by operator reference, created_at.
-- Never store a reusable plaintext invitation secret.
+- `id UUID PK`, `code_digest BYTEA UNIQUE`
+- `invited_email_normalized NULL` for optional email binding
+- `status` — `active | consumed | expired | revoked`
+- `expires_at`, `consumed_at`, `consumed_by_user_id NULL`
+- `created_by_operator_id`, `created_at`, `revoked_at`
+
+Rules:
+
+- Generate high-entropy single-use code material and store only its purpose-bound digest.
+- Code validation, pending user creation, and invitation consumption are atomic.
+- Expired/consumed/revoked/other-email behavior must remain generic externally.
+- Invitation provisioning is operator-audited; an admin UI is not required by the schema.
 
 ### 4.3 `password_credentials`
 
@@ -167,7 +182,42 @@ User-visible and operator-reviewable security history.
 - privacy-approved client/network summary
 - `metadata JSONB` limited to an allowlisted schema and never containing secrets/financial payload
 
-Examples: registration requested, email verified, login success/failure summary, password changed/reset, session revoked, suspicious token replay. Retention requires OQ-10 approval.
+Examples: registration requested, email verified, login success/failure summary, password changed/reset, session revoked, suspicious token replay. Maximum baseline retention is 24 months, subject to legal reduction and post-deletion minimization/pseudonymization.
+
+### 4.8 `deletion_requests`
+
+- `id`, `user_id`
+- `status` — `pending | cancelled | processing | completed | failed`
+- `requested_at`, `cancel_before`, `cancelled_at`, `processing_started_at`, `completed_at`
+- identity-verification/recent-auth reference without secret material
+- approved `request_channel`, `correlation_id`, `failure_code NULL`
+
+Rules:
+
+- `cancel_before = requested_at + 7 days` under the accepted baseline.
+- Only one unresolved request per user.
+- Processing is idempotent and follows an approved table/provider deletion map.
+- A minimum non-identifying deletion tombstone survives active purge long enough to prevent restored backups from reactivating deleted data; its retention/legal basis must be approved.
+
+### 4.9 `deletion_tombstones` / restore-exclusion register
+
+Purpose: prevent an older application/database restore point from resurrecting a user purged after that backup was taken.
+
+Minimum logical fields:
+
+- `id UUID PK`, opaque `purge_operation_id UNIQUE`
+- `subject_digest BYTEA UNIQUE` — purpose-separated keyed digest of the original immutable user UUID; no email/name/raw user ID
+- `digest_key_version`
+- `purge_completed_at`, `created_at`, `expires_at`
+- minimum non-sensitive deletion-map/version and outcome code where legally approved
+
+Rules:
+
+- The register must be available from a protected source that is operationally independent of the application restore point being activated; a row only inside the same old backup is insufficient.
+- Before activation, restore tooling computes subject digests for restored users with the controlled tombstone key, removes/suppresses every match, and records count-only evidence.
+- Tombstones remain until every backup/restore point capable of containing the subject has expired, plus any legally approved verification margin; they must not be silently retained forever.
+- Digest key access, backup, rotation, destruction, and break-glass use require a reviewed procedure. The register has stricter write/delete privileges than the runtime application.
+- Exact storage mechanism, legal basis, pseudonymization strength, and expiry are physical-design/legal blockers; raw direct identifiers are prohibited by default.
 
 ## 5. Reference and account tables
 
@@ -183,20 +233,40 @@ MVP ships reviewed system categories. A user cannot mutate global rows. Custom c
 
 ### 5.2 `financial_accounts`
 
-- `id`, `user_id`
-- `name`, `account_type` (`cash | bank | e_wallet | other_manual`)
-- `currency CHAR(3)` equal to user base currency in MVP
-- `opening_balance_minor BIGINT`
-- `opening_balance_as_of DATE`
-- `is_liquid BOOLEAN` (all exposed MVP accounts are expected to be liquid)
-- `archived_at`, `created_at`, `updated_at`, `version`
+- `id`, `user_id UNIQUE`
+- `name` — system/default aggregate label; not an exposed account taxonomy
+- `account_type` fixed to `aggregate_liquid` in MVP
+- `currency CHAR(3)` equal to user base currency
+- `created_at`, `updated_at`, `version`
 
 Rules:
 
-- The opening balance is the ledger seed, not a transaction.
-- An archived account with records remains queryable and cannot be hard-deleted casually.
-- Negative opening/current balance behavior must be explicitly supported in UI; the database must not silently clamp it.
-- The recommended OQ-03 resolution exposes one aggregate account in MVP while retaining this ownership boundary. Multiple exposed accounts require specified transfer/reconciliation semantics and are not obtained merely by allowing extra rows.
+- Exactly one account may exist per user in MVP; account picker, archive, transfer, and multiple account types are absent.
+- Currency cannot change after the first snapshot/financial record.
+- Negative current balance is valid and must not be silently clamped.
+- Future multi-account support requires a migration that deliberately removes the one-user uniqueness and specifies transfers plus any bank/account-statement reconciliation workflow.
+
+### 5.3 `balance_snapshots`
+
+Purpose: immutable authoritative anchors for current-balance segments.
+
+- `id`, `user_id`, `account_id`
+- `amount_minor BIGINT NOT NULL` — signed snapshot amount
+- `currency CHAR(3) NOT NULL`
+- `effective_at TIMESTAMPTZ NOT NULL`
+- `effective_local_date DATE NOT NULL`, `timezone TEXT NOT NULL`
+- `reason` — `onboarding | manual_balance_update | recovery_correction`
+- bounded `note NULL`
+- `created_at`, `created_by_user_id NULL`, `created_by_operator_id NULL`, `correlation_id`; exactly one approved actor reference is present
+
+Rules:
+
+- `(user_id, account_id)` must identify the user’s one account and currency.
+- Snapshots are immutable; correction creates a new snapshot with explicit reason rather than overwriting.
+- `(account_id, effective_at)` is unique; latest snapshot is selected deterministically by `effective_at DESC`.
+- Creating a post-onboarding snapshot begins a new balance segment and does not mutate old transactions; this is a manual known-balance update, not a bank/account-statement reconciliation workflow.
+- A new user-created snapshot must be strictly later than the current latest snapshot under the approved serialized comparison; backdated and future-dated snapshot insertion is forbidden.
+- A recovery-created snapshot requires elevated operational procedure and audit.
 
 ## 6. Posted transactions
 
@@ -204,11 +274,13 @@ Rules:
 
 Purpose: source of truth for actual cash inflow/outflow.
 
-- `id`, `user_id`, `account_id`
+- `id`, `user_id`, `account_id`, `balance_snapshot_id`
 - `kind` — `income | expense`
 - `amount_minor BIGINT NOT NULL CHECK (amount_minor > 0)`
 - `currency CHAR(3) NOT NULL`
 - `occurred_on DATE NOT NULL`
+- `balance_effect` — `current | historical`
+- `already_included_in_snapshot BOOLEAN NOT NULL` consistent with balance effect
 - `category_id`
 - `expense_class NULL` — `essential_fixed | essential_variable | daily`; null for income unless future specification says otherwise
 - `is_unexpected BOOLEAN NOT NULL DEFAULT FALSE` — orthogonal to expense class
@@ -220,27 +292,37 @@ Purpose: source of truth for actual cash inflow/outflow.
 
 Invariants:
 
-- `(user_id, account_id)` references an account owned by the same user.
-- Currency equals account/user currency in MVP.
+- `(user_id, account_id, balance_snapshot_id)` resolves to one same-user account/snapshot segment.
+- Currency equals account/user/snapshot currency.
+- `historical` requires `already_included_in_snapshot = true`; it participates in period/category reporting but never current-balance arithmetic.
+- `current` means the transaction was a delta after its attached anchor and contributes to current balance only while that anchor is latest. A newer snapshot does not rewrite this immutable meaning; UI/reporting then identifies it as prior-segment evidence.
+- `occurred_on` before the latest snapshot’s `effective_local_date` requires `historical`; a later local date requires `current`; the same local date requires an explicit server-validated `already_included_in_snapshot` choice.
+- A posted actual transaction cannot have a future `occurred_on` in the user’s stored timezone; future expectations belong to schedules/plans.
 - Income cannot have an expense class and must set `is_unexpected = false`.
 - An expense may retain its essential/daily class while independently being unexpected.
-- Voided transactions do not affect balances/aggregates.
-- A correction may atomically void an old transaction and create a replacement; whether users see `delete` or `correct` is pending product/retention policy.
-- Link tables/columns below must prevent one posted transaction from satisfying multiple incompatible domain actions.
+- Voided transactions do not affect balance or period aggregates.
+- A correction atomically voids the old transaction and creates a replacement. Crossing snapshot segment/effect requires an explicit correction action and audit event.
+- Link tables/columns below prevent one posted transaction from satisfying multiple incompatible domain actions.
 
-### 6.2 Balance calculation
+### 6.2 Balance and monthly calculation
 
-For one account and as-of date, the OQ-13 recommendation is:
+For latest snapshot `S`:
 
 ```text
-opening balance at the start of opening_balance_as_of
-+ sum(posted income where occurred_on >= opening_balance_as_of and <= as-of)
-- sum(posted expense where occurred_on >= opening_balance_as_of and <= as-of)
+current balance
+= S.amount_minor
++ sum(posted current income where balance_snapshot_id = S.id)
+- sum(posted current expense where balance_snapshot_id = S.id)
 ```
 
-Under that proposal, transactions earlier than `opening_balance_as_of` are rejected in MVP. Supporting historical backfill would require the user to move the opening date and provide the corresponding start-of-day opening balance through a deliberate recalculation flow. Silently double-counting history is prohibited.
+Rules:
 
-A database view/query should expose balance with checked integer arithmetic. Do not maintain a mutable balance cache in MVP unless concurrency and reconciliation are separately designed.
+- `historical` transactions never enter current-balance arithmetic, even if created after `S`.
+- Transactions attached to an older snapshot segment no longer enter current balance after a newer snapshot becomes authoritative; the newer user-entered amount supersedes the old segment as the current anchor.
+- Monthly income/outflow includes every posted transaction by `occurred_on`, both `current` and visibly labelled `historical`, and excludes voided records.
+- Current balance therefore cannot be reconstructed from an unbounded all-history transaction sum across snapshot boundaries. Reporting APIs must expose the snapshot anchor and components.
+- Use checked integer arithmetic and a database view/query; do not maintain a mutable balance cache in MVP.
+- Snapshot creation and concurrent transaction creation require serialization/version policy so a transaction cannot attach ambiguously to the segment being closed.
 
 ## 7. Schedules and occurrences
 
@@ -256,13 +338,13 @@ Represents a planned series, not actual money.
 - `category_id` nullable
 - `debt_id` nullable and same-user when kind is debt payment
 - recurrence fields: `frequency`, `interval`, `day_of_week`/`day_of_month` as applicable
-- `month_day_policy` where applicable; proposed value `last_day_if_missing`
+- `month_day_policy` where applicable; fixed to `last_day_if_missing` in MVP
 - `start_on`, `end_on` nullable
 - `timezone`
 - `confirmation_policy` fixed to `explicit` in MVP
 - `active`, `created_at`, `updated_at`, `version`
 
-Avoid opaque recurrence JSON for core supported cadences. Under the OQ-14 recommendation, MVP supports one-off plus interval-based weekly, monthly, and yearly schedules; a requested monthly day missing from a short month resolves to that month’s last day. If RFC 5545 rules are later used, supported subsets and validation must be strict.
+Avoid opaque recurrence JSON for core supported cadences. MVP supports one-off plus interval-based weekly, monthly, and yearly schedules; a requested monthly day missing from a short month resolves to that month’s last local calendar day. Daily recurrence and arbitrary RFC 5545 rules are excluded.
 
 ### 7.2 `scheduled_occurrences`
 
@@ -291,13 +373,14 @@ One-off obligations may be represented by a non-recurring scheduled item with on
 - `id`, `user_id`, `name`
 - `original_principal_minor`, `currency`
 - `current_outstanding_minor`, `outstanding_as_of DATE`
-- `interest_rate NUMERIC NULL`, `interest_rate_basis` nullable (`annual_percentage` only if approved)
+- `interest_rate NUMERIC NULL`, `interest_rate_basis` nullable/fixed to `annual_percentage` when a rate is supplied
+- `interest_rate_as_of DATE NULL`, bounded `interest_rate_source TEXT NULL` — informational provenance paired consistently with a supplied rate
 - `interest_method TEXT NULL` — informational/unknown in MVP; no calculation implied
 - `expected_payment_minor`, `payment_frequency`
 - `status` — `active | paid_off | archived`
 - `created_at`, `updated_at`, `version`
 
-The current outstanding amount is explicitly user-maintained/lender-reported until OQ-07 specifies a calculation engine. Updating it requires a payment with principal split or a separate balance adjustment.
+The current outstanding amount is explicitly user-maintained/lender-reported. Its as-of date cannot be in the user’s future. MVP intentionally has no interest-accrual or amortization engine. Updating outstanding requires a payment with known principal, an explicit new lender-reported value, or a separate balance adjustment.
 
 ### 8.2 `debt_payments`
 
@@ -308,48 +391,66 @@ The current outstanding amount is explicitly user-maintained/lender-reported unt
 - `principal_amount_minor NULL`
 - `interest_amount_minor NULL`
 - `fee_amount_minor NULL`
+- `split_status` — `none | partial | complete`
 - `paid_on`
 - `outstanding_after_minor NULL`, `outstanding_as_of NULL`
+- `status` — `posted | voided`; `voided_at`, `supersedes_debt_payment_id NULL`
 - `created_at`
 
-If any split is supplied, approved rules define whether all parts are mandatory; when complete, principal + interest + fee must equal total. All rows/currency/user ownership must agree. If neither principal nor an explicit new lender-reported balance is known, the debt’s current outstanding amount/as-of date remains unchanged; the full payment must never be silently treated as principal.
+Provided split components are non-negative and their sum cannot exceed total. `complete` requires principal + interest + fee (with explicit zeroes where applicable) to equal total; `partial` preserves the visible unclassified remainder. All rows/currency/user ownership must agree. Only an explicitly supplied principal amount or new lender-reported balance may change outstanding. If neither is known, the prior outstanding amount/as-of date remains unchanged; the full payment must never be silently treated as principal.
+
+A correction preserves the old payment/transaction as voided evidence and creates linked replacements atomically. Recomputing current outstanding may use only explicit principal deltas or user-entered lender-reported balances; the exact behavior when later payments/adjustments exist is a pre-debt-implementation blocker and must never invent interest.
 
 ### 8.3 `debt_balance_adjustments`
 
 - `id`, `user_id`, `debt_id`
 - `previous_amount_minor`, `new_amount_minor`
 - `as_of DATE`, bounded `reason`
-- `created_at`
+- `created_at`, approved actor reference, `correlation_id`
 
-This preserves explicit reconciliation with a lender statement rather than disguising unexplained difference as interest. Creating payment/adjustment and updating `debts.current_outstanding_minor` is atomic and version checked.
+Adjustment rows are immutable. This preserves explicit reconciliation with a lender statement rather than disguising unexplained difference as interest. Creating payment/adjustment and updating `debts.current_outstanding_minor` is atomic and version checked.
 
 ## 9. Savings tables
 
-These tables implement the recommended virtual-allocation interpretation and must be revised if OQ-08 chooses another model.
+MVP stores a manual current amount, not a contribution/withdrawal ledger.
 
 ### 9.1 `savings_goals`
 
 - `id`, `user_id`, `name`
-- `target_amount_minor`, `currency`
+- `target_amount_minor`, `current_amount_minor`, `currency`
+- `current_amount_as_of DATE NOT NULL`
 - `target_date NULL`
 - `planned_contribution_minor NULL`
 - `contribution_frequency NULL`
-- `status` — `active | achieved | archived`
+- `status` — `active | archived`
 - `created_at`, `updated_at`, `version`
 
-Current amount is derived from entries; it is not an independently editable counter.
+Rules:
 
-### 9.2 `savings_entries`
+- Current/target amounts are non-negative and use the user base currency; `current_amount_as_of` cannot be in the user’s future.
+- `Achieved`/over-target is derived from current versus target amount and does not silently archive the goal or remove its reserve.
+- Current amount is an absolute user-maintained reserve estimate; it does not alter the aggregate account or monthly income/outflow.
+- Safe-to-spend subtracts `current_amount_minor` for active goals only.
+- Updating current amount uses optimistic versioning and must create one old/new audit row in the same transaction.
+
+### 9.2 `savings_amount_changes`
+
+Purpose: correction/audit evidence, not a semantic cash ledger.
 
 - `id`, `user_id`, `savings_goal_id`
-- `kind` — `initial | contribution | withdrawal | purchase_release | correction`
-- `amount_minor > 0`, `direction` — `increase | decrease`
-- `occurred_on DATE`
-- `planned_purchase_id NULL` — required and same-user for `purchase_release`, otherwise null
-- bounded `note`
-- `created_at`
+- `previous_amount_minor`, `new_amount_minor`
+- `as_of DATE`
+- `source` — `initial | manual_update | planned_purchase_use | recovery_correction`
+- `planned_purchase_id NULL UNIQUE` — required and same-user only for `planned_purchase_use`; one completion has at most one goal-change row
+- bounded `reason NULL`
+- `created_at`, `actor_user_id NULL`, `actor_operator_id NULL`, `correlation_id`; exactly one approved actor reference is present
 
-Current allocated amount = increases − decreases. A constraint/application invariant prevents negative allocation unless product explicitly permits it. These entries do **not** alter a financial account or monthly income/expense. They alter the spendable reserve formula only. Under the recommended OQ-15 policy, completing a linked purchase creates a `purchase_release` decrease in the same transaction as the posted expense and purchase transition.
+Rules:
+
+- A row is immutable and created atomically with the scalar goal update.
+- It is never included in account balance, income, expense, or transaction totals.
+- It must not be labelled as contribution/withdrawal history in the UI.
+- For planned-purchase use, decrease is non-negative and no greater than both prior current amount and actual purchase amount.
 
 ## 10. Planned purchases
 
@@ -369,46 +470,42 @@ Rules:
 - Planned has no completed transaction.
 - Purchased requires a linked posted expense and completion timestamp.
 - Linking a goal does not move money.
-- Under the recommended OQ-15 policy, purchase completion may atomically create one same-user `purchase_release` savings entry for a user-confirmed amount no greater than both actual purchase amount and available goal allocation.
-- Cancelling/archiving does not silently mutate/delete a goal.
+- Purchase completion may atomically decrease a linked goal’s scalar current amount by a user-confirmed value (including zero) and create one `planned_purchase_use` old/new audit row. The decrease cannot exceed purchase amount or prior goal current amount.
+- Idempotency/unique linkage prevents duplicate expense creation or repeated goal decrease.
+- Completing/cancelling/archiving a purchase does not auto-zero, archive, or delete a goal.
 
 ## 11. Notifications and jobs
 
-### 11.1 `notification_preferences`
+MVP has no user-configurable reminder-rule/channel table. The four fixed approved stages derive directly for eligible outgoing obligations; scheduled income has no fixed-stage notification requirement. The worker evaluates them at 09:00 in the occurrence/user IANA timezone.
 
-- `user_id PK`
-- approved channel flags (in-app is intrinsic; email opt-in proposed)
-- quiet-hour/timezone settings only after OQ-12 approval
-- created/updated timestamps and version
+### 11.1 `reminder_events`
 
-### 11.2 `reminder_rules`
-
-- `id`, `user_id`, `scheduled_item_id`
-- `channel` — `in_app | email`
-- `offset_days` — proposed `7`, `3`, `0`; overdue stage represented explicitly
-- `enabled`
-- unique logical rule per item/channel/stage
-
-### 11.3 `reminder_deliveries`
-
-- `id`, `user_id`, `scheduled_occurrence_id`, `reminder_rule_id`
-- `stage` — `seven_days | three_days | due_today | overdue`
-- `channel`
-- `due_at`, `status` — `pending | processing | sent | failed | cancelled | dead`
-- `attempt_count`, `last_attempt_at`, `provider_message_id` nullable/sanitized
+- `id`, `user_id`, `scheduled_occurrence_id`
+- `stage` — `seven_days | three_days | due_today | first_overdue`
+- `scheduled_for TIMESTAMPTZ`, local timezone/date metadata
+- `status` — `pending | created | cancelled | failed | dead`
+- `attempt_count`, `last_attempt_at`
 - `deduplication_key UNIQUE`
-- `created_at`, `sent_at`
+- `notification_id NULL UNIQUE`
+- `created_at`, `completed_at`
 
-A confirmed/skipped/cancelled occurrence cancels unresolved reminder delivery. Delivery never changes occurrence payment state.
+Rules:
 
-### 11.4 `notifications`
+- Only an eligible outgoing-obligation occurrence may have a fixed-stage reminder event; scheduled-income occurrences are excluded.
+- Deduplication key uniquely represents occurrence + stage; worker downtime catch-up cannot create duplicates.
+- `first_overdue` is generated once and never repeats while the occurrence remains overdue.
+- Confirmed/skipped/cancelled occurrence cancels unresolved reminder events.
+- Reminder event or notification state never changes occurrence payment state.
+
+### 11.2 `notifications`
 
 - `id`, `user_id`
 - `type`, `resource_type`, `resource_id` (validated by application; polymorphic reference cannot replace authorization)
 - safe message-key + minimal parameters; avoid duplicating sensitive full payload
+- `deduplication_key NULL` — required for cash-flow warnings and any non-reminder logical notification that can be retried; unique with `user_id` when present
 - `created_at`, `read_at`, `dismissed_at`
 
-### 11.5 `outbox_jobs`
+### 11.3 `outbox_jobs`
 
 - `id`, `topic`, `payload JSONB` constrained/versioned to minimum identifiers
 - `deduplication_key UNIQUE`
@@ -469,38 +566,49 @@ RLS is not a reason to omit application authorization. If RLS is rejected, the A
 
 Physical design must validate query plans, but expected indexes include:
 
-- `transactions (user_id, occurred_on DESC, id DESC)` plus filtered posted indexes and account/category filters;
+- unique `balance_snapshots (account_id, effective_at)` plus `(user_id, account_id, effective_at DESC)` for latest-anchor lookup;
+- `transactions (user_id, occurred_on DESC, id DESC)` for Activity plus filtered `(user_id, balance_snapshot_id, balance_effect, status)` for current-balance calculation;
 - `scheduled_occurrences (user_id, due_on, state)` and unique `(scheduled_item_id, due_on)`;
 - `debts (user_id, status)`;
-- `savings_goals (user_id, status)` and `savings_entries (user_id, savings_goal_id, occurred_on, id)`;
+- `savings_goals (user_id, status)` and `savings_amount_changes (user_id, savings_goal_id, created_at DESC)`;
 - `planned_purchases (user_id, status, target_date)`;
 - `sessions (user_id, revoked_at, absolute_expires_at)` and unique session token digest;
 - `auth_challenges` on active expiry/user/purpose without indexing plaintext secrets;
-- `reminder_deliveries (status, due_at)` for worker claims plus dedup unique;
+- `reminder_events (status, scheduled_for)` for worker claims plus dedup unique;
+- `notifications (user_id, created_at DESC)` plus nullable logical-dedup uniqueness;
 - `outbox_jobs (status, available_at)` plus dedup unique;
 - `security_events/audit_events (user_id, occurred_at DESC)`;
+- `deletion_requests (status, cancel_before)` plus one-unresolved-per-user uniqueness;
+- unique deletion-tombstone subject digest plus expiry index in the independent restore-exclusion register;
 - idempotency unique and expiry indexes.
 
 Indexes containing sensitive values receive the same backup/access protections as tables. Avoid indexing unrestricted notes.
 
 ## 15. Retention, deletion, and privacy
 
-OQ-10 is a release blocker. Before implementation, define retention per class:
+Accepted product baseline, subject to Vietnamese legal/privacy review:
 
-- active financial records and user-requested corrections;
-- account after closure/deletion request;
-- security and audit events;
-- expired sessions/challenges/idempotency keys/rate counters;
-- application logs, backups, dead-letter jobs, and email-provider records;
-- legal hold or incident evidence where applicable.
+- deletion request remains cancellable for 7 days;
+- after the deadline, active identity/financial data is purged or irreversibly anonymized according to an approved table/provider deletion map;
+- encrypted backup retention has a 90-day maximum;
+- application log retention has a 90-day maximum;
+- minimized security/audit evidence has a 24-month maximum;
+- secrets/challenges/idempotency/rate counters use much shorter purpose-specific expiry;
+- provider records cannot exceed the approved purpose/contract period.
 
-Required properties regardless of final periods:
+Required properties:
 
-- secrets/challenges are short-lived and pruned;
-- deletion jobs are auditable, idempotent, and include third-party data where contractually possible;
-- backups age out under a disclosed schedule rather than being surgically edited unsafely;
+- legal review may shorten, but not silently extend, the baseline periods;
+- deletion jobs are auditable, idempotent, resumable, and include third-party data where contractually possible;
+- direct identity and financial payload are not retained merely because security evidence has a longer period;
+- retained security/audit rows after purge are minimized/pseudonymized under approved legal basis;
+- backups age out automatically rather than being surgically edited unsafely;
+- the current independent restore-exclusion register is obtained and deletion tombstones are reapplied to any restore before user data becomes active;
+- legal hold/incident exceptions require documented authority, scope, access, and expiry;
 - production data is never copied to development/test;
 - support/operator reads are authorized, logged, and minimal.
+
+Private Beta is blocked until the deletion map, request channel, cancellation authentication, retained fields, provider behavior, and legal basis are approved.
 
 ## 16. Migration strategy
 
@@ -515,14 +623,15 @@ Required properties regardless of final periods:
 
 ## 17. Backup and recovery
 
-Proposed baseline, pending business/provider approval:
+Baseline pending provider/legal confirmation:
 
-- Managed daily encrypted backups and point-in-time recovery where available.
+- Managed daily encrypted backups and point-in-time recovery where available, with no restore point retained beyond 90 days.
 - Backup access limited to designated operators and audited.
-- Cross-account/region copy only if residency policy allows.
+- Cross-account/region copy only if residency/legal policy allows.
 - Monthly restore drill during beta preparation/early beta; at least quarterly after stability, subject to approved RPO/RTO.
-- Restore into isolated environment, validate schema, row counts, constraints, sample reconciliations, and application smoke tests; securely destroy restored copy afterward.
-- Evidence records backup ID/time, restore duration, checks, issues, and approver—never exported user data.
+- Restore into an isolated environment, obtain the current independently protected restore-exclusion register, reapply deletion tombstones, validate schema/constraints/counts/snapshot balances/sample reports, and execute application smoke tests before any activation.
+- Securely destroy the restored copy afterward.
+- Evidence records backup ID/time, restore duration, checks, issues, and approver—never exported user financial data.
 
 ## 18. Reconciliation checks
 
@@ -532,26 +641,32 @@ Automated or operator-safe checks should detect:
 - confirmed occurrence without exactly one posted transaction;
 - purchased item without posted expense;
 - debt payment totals/splits or outstanding history mismatch;
-- savings derived amount below allowed bounds;
+- savings scalar value without exactly one corresponding old/new change record for each update;
+- planned-purchase goal decrease outside allowed bounds or repeated by duplicate completion;
+- transaction/snapshot user, currency, segment, or balance-effect mismatch;
+- current-balance query including historical/old-segment records;
 - orphaned same-user links;
-- duplicate logical occurrences/reminders/jobs;
+- duplicate logical occurrences/reminder stages/jobs;
 - cross-currency aggregate attempts;
 - balance arithmetic overflow;
+- completed deletion missing required purge checkpoints/tombstone;
 - outbox/domain commits missing required delivery intent.
 
 Checks emit identifiers/counts and safe error codes, not notes or complete financial records in logs.
 
 ## 19. Open physical-design decisions
 
-- PostgreSQL RLS adoption and trusted request context mechanism.
-- Exact account model and earlier-than-opening transaction policy under OQ-03.
-- Financial correction versus hard-delete semantics under OQ-10.
-- Recurrence representation and supported cadence edge rules.
-- OTP keyed-digest construction and challenge supersession policy.
-- Session rotation/grace/replay schema details.
-- Debt rate representation after OQ-07.
-- Savings model after OQ-08.
-- Hosting PostgreSQL version/extensions, pooling, PITR, and region.
-- Approved upper bounds for money, notes, records/page, occurrence window, and retention.
+Product meaning is set by OQ-01 through OQ-19. Physical review must still resolve:
 
-No migration should be written until these affective decisions are reviewed and the logical model is approved.
+- PostgreSQL RLS adoption and trusted request/worker context mechanism;
+- exact transaction-versus-snapshot serialization and same-day inclusion contract;
+- correction/void API behavior across old/current snapshot segments;
+- yearly 29-February fallback, maximum recurrence interval/end/window bounds, series-edit scope, and multi-stage reminder catch-up/suppression policy;
+- deletion table/provider map, independent restore-exclusion register storage/key/expiry design, pseudonymization, and legal-hold mechanism;
+- OTP keyed-digest construction and challenge supersession policy;
+- session rotation/grace/replay schema details;
+- exact debt-rate precision/source metadata and historical payment-correction/outstanding recomputation behavior;
+- PostgreSQL version/extensions/pooling/PITR after the OQ-17 provider selection;
+- approved upper bounds for money, notes, records/page, occurrence window, and job batches.
+
+No migration should be written until the logical model, privacy/legal constraints, and these affected physical decisions are reviewed.

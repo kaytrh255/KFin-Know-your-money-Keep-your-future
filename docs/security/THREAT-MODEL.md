@@ -1,7 +1,7 @@
 # KFin Threat Model
 
 **Status:** Draft — review required<br>
-**Version:** 0.1<br>
+**Version:** 0.2<br>
 **Method:** Asset/threat-boundary analysis informed by STRIDE and abuse cases<br>
 **Scope:** Proposed Private Beta Web/PWA, edge, API, worker, PostgreSQL, email, observability, CI/CD, backups, and operator access
 
@@ -31,6 +31,7 @@ No mitigation is currently implemented or tested. Risk ratings are design-time e
 | A-09 | Provider, CI/CD, database, and operator credentials | Platform takeover and supply-chain compromise |
 | A-10 | Availability, email/reminder queue, recovery capability | Missed access/reminders, failed beta, data loss |
 | A-11 | Source code/build/deployment integrity | Persistent compromise across users |
+| A-12 | Deletion restore-exclusion register and digest key | Purged-user resurrection, deletion bypass, or pseudonymous-linkage exposure |
 
 ## 3. Actors
 
@@ -53,13 +54,16 @@ flowchart LR
     EDGE -->|2 trusted proxy HTTPS| API[API]
     API -->|3 scoped SQL/TLS| DB[(PostgreSQL)]
     WORKER[Worker] -->|4 scoped SQL/TLS| DB
-    API -->|5 outbox intent| DB
-    WORKER -->|6 minimum email payload/TLS| EMAIL[Email provider]
+    API -->|5 durable non-secret outbox intent| DB
+    API -->|6a ephemeral OTP/reset submission over TLS| EMAIL[Email provider]
+    WORKER -->|6b minimum non-secret email payload/TLS| EMAIL
     API -->|7 redacted telemetry| OBS[Logs/error/metrics]
     WORKER -->|7 redacted telemetry| OBS
     CI[CI/CD and operators] -->|8 controlled deployment/admin| APP[Runtime/control plane]
     CI -->|9 migration/admin| DB
     DB -->|10 encrypted backup| BACKUP[Backup storage]
+    WORKER -->|11 minimum deletion marker| TOMB[Independent restore-exclusion register]
+    CI -->|12 controlled restore sanitization| TOMB
 ```
 
 Boundary-specific concerns:
@@ -67,10 +71,11 @@ Boundary-specific concerns:
 1. Untrusted client input, stolen cookies, CSRF, XSS, local persistence.
 2. Header spoofing, origin bypass, WAF/rate-control gaps, cache mistakes.
 3–4. SQL injection, excessive DB role, missing tenant scope, pool/RLS context leak.
-5–6. outbox duplication, secret payload, provider outage/webhook forgery.
+5–6. outbox duplication, accidental queued secret, immediate secret-delivery uncertainty, provider outage/webhook forgery.
 7. sensitive logging, broad staff/vendor access, retention.
 8–9. supply chain, stolen operator account, malicious migration/release.
 10. backup exfiltration, untested/corrupt restore, residency/retention.
+11–12. deletion-marker omission/tampering, digest-key compromise, stale register use, excessive retention, or restore without sanitization.
 
 ## 5. Assumptions and constraints
 
@@ -78,9 +83,10 @@ Boundary-specific concerns:
 - Users manually enter data; KFin cannot verify it against a bank/lender.
 - Same-origin browser delivery and PostgreSQL sessions are proposed, not yet validated.
 - No bank/payment integrations, MFA, shared finances, file uploads, offline writes, or native package in MVP.
-- Cloudflare, hosting, email, and observability providers are not selected.
+- Cloudflare topology is selected, but specific hosting/database/email/observability providers are deliberately deferred until before Release Candidate.
+- Product baseline is Vietnam-first with Southeast Asia region preference; Vietnamese cross-border/privacy review is not complete.
+- Maximum baseline retention is 90-day backups, 90-day application logs, and 24-month minimized security/audit evidence; legal review may shorten it.
 - User device compromise cannot be fully prevented; impact can be reduced with revocation, XSS prevention, minimal local persistence, and security history.
-- Legal jurisdiction, retention, residency, and operator staffing are unresolved.
 
 Any changed assumption requires threat-model review.
 
@@ -104,7 +110,7 @@ Any changed assumption requires threat-model review.
 | TM-06 | Weak/stolen password-hash database cracked offline | Medium/Critical | Argon2id benchmark; unique salt; common-password rejection; DB/private backup controls; rapid incident reset plan | Parameter benchmark; storage inspection; backup/IAM review | Medium |
 | TM-07 | Session theft via XSS, logs, URL, JS storage, network, shared cache, or stolen device | High/Critical | HttpOnly Secure host-only cookie; TLS/HSTS; no local token/cache/log; CSP/XSS controls; idle/absolute expiry; session UI/revoke; no-store | Cookie/cache/client-storage/CSP/XSS tests; device-loss tabletop | Medium |
 | TM-08 | Token replay or rotation race retains access | Medium/Critical | Digest-only token generations; atomic rotation; bounded grace; replay detection/revoke; session family; credential-change invalidation | Parallel-tab, retired-token, timeout-after-rotation, logout replay tests | Low/Medium |
-| TM-09 | Session fixation or privilege/account switch confusion | Medium/High | New token after auth/verification; never accept client session ID; clear/revoke on transitions; same-user draft retry only | Fixation/auth-switch E2E tests | Low |
+| TM-09 | Session fixation or privilege/account switch confusion | Medium/High | New token after authentication and after verification only if the approved flow establishes a session; never accept client session ID; clear/revoke on transitions; same-user draft retry only | Fixation/auth-switch E2E tests for the selected post-verification policy | Low |
 | TM-10 | CSRF performs financial/security mutation | High/Critical | SameSite cookie plus strict Origin/Fetch Metadata and unpredictable CSRF token; same-origin CORS; explicit content type | Cross-site form/fetch, missing/invalid token, allowed-origin test suite | Low |
 
 ### Authorization, application, and financial-integrity threats
@@ -117,11 +123,12 @@ Any changed assumption requires threat-model review.
 | TM-14 | Stored/reflected/DOM XSS steals session or financial data | Medium/Critical | React encoding; no raw HTML; CSP; bounded text; template escaping; no third-party scripts; HttpOnly cookie | XSS corpus, CSP/DAST, email-render tests | Low/Medium |
 | TM-15 | Duplicate/replayed/parallel transaction creates multiple financial effects | High/High | User/operation-scoped idempotency; request digest; unique constraints; atomic result; disabled repeat submit; safe retry lookup | Parallel duplicate, timeout-after-commit, key-conflict tests | Low |
 | TM-16 | Client manipulates amount, currency, date, aggregate, payment status, debt split, or ownership | High/Critical | Authoritative schemas/domain rules; integer bounds; currency/relationship checks; derive totals; explicit payment confirmation; atomic constraints | Boundary/property/fuzz tests; tampered API requests | Low |
-| TM-17 | Due date or reminder falsely marks payment paid, or email webhook changes financial state | Medium/Critical | Schedule state separate from transaction; only explicit confirmation links posted transaction; delivery/webhook has no financial authority | Date-rollover/webhook spoof/state-machine tests | Low |
-| TM-18 | Savings/planned purchase/debt records double-count or corrupt balance/spendable result | Medium/High | Separate ledgers/concepts; named formulas; atomic links; reconciliation checks; no auto interest; drill-down | Golden financial scenarios, property tests, reconciliation | Low/Medium pending decisions |
+| TM-17 | Due date, in-app reminder creation/read state, or worker action falsely marks payment paid | Medium/Critical | Schedule state separate from transaction; only explicit user confirmation links posted transaction; notification state has no financial authority | Date-rollover/notification/state-machine tests | Low |
+| TM-18 | Forged snapshot anchor/effect, manual savings value, planned-purchase deduction, or debt record corrupts balance/safe-to-spend | High/Critical | Server-selected owner/anchor; constrained effect; immutable snapshots; scalar goal versioning + old/new audit; atomic purchase deduction; named formulas; no auto interest | Malicious API, concurrency, property, golden scenario, and reconciliation tests | Medium |
 | TM-19 | Race between editing schedule/payment and worker reminders creates stale/incorrect actions | Medium/High | Version checks; row locks/atomic transitions; worker rechecks state after claim; idempotent keys; cancellation | Deterministic concurrency/clock tests | Low/Medium |
 | TM-20 | Integer overflow, float precision, currency mismatch, or timezone boundary manipulates totals | Medium/High | BIGINT + checked arithmetic; no JS number for money; one currency; ISO dates/IANA timezone; bounded values | Property/boundary/month/DST/leap tests | Low |
 | TM-21 | Malicious note/name content causes email header/template injection, log forging, or spreadsheet formula issue in future export | Medium/High | Length/schema validation; structured logs; escaping; no notes in email/log; future export sanitization spec | Payload corpus across UI/email/log; export blocked in MVP | Low |
+| TM-42 | Attacker marks a real new expense as historical, reanchors it to an old snapshot, races a manual known-balance snapshot update, or forges a snapshot to inflate current balance | High/Critical | Server-authoritative latest snapshot/effect rules; explicit backfill flow; same-user composite constraints; immutable snapshots; serialization/versioning; audit/reconciliation alerts | Tampered API, two-user, same-day, concurrent snapshot/transaction, correction, and old-segment replay tests | Medium |
 
 ### Privacy and data-leakage threats
 
@@ -129,10 +136,10 @@ Any changed assumption requires threat-model review.
 |---|---|---|---|---|---|
 | TM-22 | Sensitive data leaks through errors, source maps, analytics, session replay, logs, traces, URLs, page title, or referrer | High/Critical | Safe errors/correlation; allowlist telemetry; no bodies/amounts/notes; session replay off; restricted source maps; no-referrer; no secrets in URL | Canary-secret/log scan; error/analytics/source-map review | Low/Medium |
 | TM-23 | Browser/service worker/shared CDN caches authenticated financial data after logout/device sharing | Medium/Critical | API/private no-store; service-worker static allowlist; Cloudflare bypass; no offline private persistence; logout tests | Cache inspection and shared-cache tests across login/logout/update | Low |
-| TM-24 | Email content exposes balances/debt/OTP on shared inbox/lock-screen or provider logs | Medium/High | Minimal subject/preview; amount opt-in/privacy review; short-lived secrets; provider retention review; no notes | Template/privacy review; provider log inspection | Medium |
+| TM-24 | Authentication/security email exposes OTP/account context on a shared inbox/lock screen or provider logs | Medium/High | No payment-reminder/financial amount email; minimal subject/preview; short-lived secrets; provider retention review; no notes | Template/privacy review; provider log inspection | Low/Medium |
 | TM-25 | Operator/support/insider accesses or alters user data outside need | Medium/Critical | Least privilege; separate MFA identities; no shared account; audited access; approval/break-glass; app role restrictions; data minimization | IAM/access review; audit tests; insider tabletop | Medium |
 | TM-26 | Cross-environment copy or debug tooling exposes production data | Medium/Critical | No prod data below prod; synthetic fixtures; environment credentials; restricted exports/debug; redaction | Pipeline/config review; DLP/manual checks | Low |
-| TM-27 | User deletion/retention behavior leaves unexpected data across DB, logs, backup, provider | Medium/High | OQ-10 policy; data inventory; idempotent deletion; disclosed backup aging/provider retention; audit | End-to-end deletion/retention test after policy | Unknown until decision |
+| TM-27 | Deletion/purge fails, backup restore resurrects data, or extended retention exposes unexpected data | Medium/Critical | 7-day state machine; identity verification; idempotent deletion map; independently protected restore-exclusion register; 90d backup/log and 24mo minimized security maxima; provider/legal review | Race-safe cancellation/purge, provider deletion, retention expiry, restore-with-current-tombstone tests | Medium pending legal/provider validation |
 
 ### Availability, API abuse, and exhaustion threats
 
@@ -141,7 +148,7 @@ Any changed assumption requires threat-model review.
 | TM-28 | Volumetric DDoS saturates public origin/network | Medium/High | Cloudflare DDoS/WAF; hidden/restricted origin; provider capacity; static edge delivery; runbook | Origin-bypass test; controlled provider exercise/tabletop | Medium/provider-dependent |
 | TM-29 | Application-layer flooding of login, dashboard, search, recurrence, or history exhausts CPU/DB | High/High | Edge + app limits; body/time/range/pagination caps; indexed queries; pool/concurrency limits; caching only safe public assets; alerts | k6/abuse tests, slow-query plans, limit-bypass tests | Medium |
 | TM-30 | Database connection/storage/table/index exhaustion from traffic, counters, logs, jobs, or unbounded records | Medium/Critical | Small pool/timeouts; bounded retention/pagination/generation; job/counter pruning; storage/pool alerts; quotas/limits | Soak/exhaustion tests; retention job tests; fail-closed behavior | Low/Medium |
-| TM-31 | Email/provider outage or deliberate bounce abuse blocks auth/reminders | Medium/High | Outbox, bounded retries/dead letters, provider limits, health metrics, support fallback policy, financial state independent | Provider fault injection and retry/dedup tests | Medium |
+| TM-31 | Email/provider outage or deliberate bounce abuse blocks verification/recovery/security email | Medium/High | Immediate secret-delivery policy, bounded resend/limits, non-secret outbox retries, health metrics, support fallback policy; in-app payment reminders remain independent | Provider fault injection, uncertainty, resend, and retry/dedup tests | Medium |
 | TM-32 | Worker crash/duplicate execution loses or repeats reminders/occurrences | Medium/High | Lease/reclaim; unique dedup keys; idempotent handlers; backlog alert; bounded generation | Kill-at-each-step tests, concurrent worker tests | Low |
 | TM-33 | Expensive password hashing is weaponized for CPU denial | Medium/High | Edge/app login limits, global concurrency/semaphore, benchmarked cost, generic failure, capacity monitoring | Auth load/abuse test without weakening hash | Medium |
 
@@ -195,7 +202,9 @@ Attacker sends slow/large/parallel login hashes, month-range reports, occurrence
 - RQ-TM-07: Validate no-store/service-worker/Cloudflare cache configuration in deployed staging, not only unit tests.
 - RQ-TM-08: Prove restore and rollback; do not equate backup configuration with recovery.
 - RQ-TM-09: Select providers only after data flow, IAM, retention, residency, webhook, and incident review.
-- RQ-TM-10: Resolve debt/savings/safe-to-spend semantics so incorrect financial advice is not implemented as a security/integrity flaw.
+- RQ-TM-10: Enforce accepted debt/manual-savings/month-end-safe-to-spend semantics and snapshot-anchor disclosure so incorrect financial confidence is not implemented as an integrity flaw.
+- RQ-TM-11: Treat historical/current balance effect and snapshot anchor as server-authoritative fields with concurrency, ownership, correction, and reconciliation tests.
+- RQ-TM-12: Obtain the current independently protected restore-exclusion register, reapply tombstones during restore, and prove extended retention expires automatically.
 
 ## 10. Security test focus
 
@@ -220,12 +229,14 @@ Before beta, owners must assess and accept/reduce:
 
 - password-only authentication without MFA;
 - user device/email account compromise;
-- manual and potentially stale financial data producing an imperfect spendable estimate;
+- manual/stale balance snapshots and savings-goal current amounts producing an imperfect safe-to-spend estimate;
+- user misunderstanding of historical-only records at snapshot boundaries;
 - single-region/provider availability within approved RTO;
 - provider insider/subprocessor exposure;
 - approximate device/network security-history data;
 - external email’s inability to guarantee exactly-once delivery or inbox privacy;
-- deletion from aged backups under approved retention;
+- deletion data remaining in encrypted backups until the 90-day maximum and minimized security evidence until 24 months;
+- late provider selection under OQ-17 and resulting integration/residency risk;
 - any decision not to implement PostgreSQL RLS.
 
 ## 12. Review and maintenance

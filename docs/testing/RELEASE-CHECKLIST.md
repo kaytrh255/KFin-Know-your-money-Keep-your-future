@@ -24,7 +24,7 @@
 ## 1. Specification and scope gate
 
 - [ ] PRD, MVP scope, user flows, UX, screen inventory, architecture, database, security, threat model, and test strategy are approved at recorded versions. Evidence: _link_
-- [ ] OQ-01 through OQ-15 have recorded decisions/owners/dates. Evidence: _link_
+- [ ] OQ-01 through OQ-19 decisions are reflected consistently; OQ-17 provider deferral has been resolved before this Release Candidate. Evidence: _link_
 - [ ] Required ADRs are `Accepted`; no implementation silently depends on a `Proposed`/rejected decision. Evidence: _link_
 - [ ] Implemented scope matches MVP; future items have not entered release accidentally. Evidence: _link_
 - [ ] Every release item maps to requirements, tests, and user-visible release notes where applicable. Evidence: _link_
@@ -32,17 +32,20 @@
 
 ## 2. Product and financial correctness
 
-- [ ] Current balance reconciles from opening balance and posted transactions under the approved ledger-start/backdating cutoff. Evidence: _link_
+- [ ] Current balance reconciles to the latest immutable snapshot plus only current-impact transactions in that segment. Evidence: _link_
+- [ ] Historical-only backfill appears in period/category reports, is visibly labelled, and never silently changes current balance. Evidence: _link_
+- [ ] Snapshot creation versus transaction creation/correction race tests yield one deterministic segment/result. Evidence: _link_
 - [ ] Monthly income/outflow respects user-local month, status, currency, and exact integer arithmetic. Evidence: _link_
 - [ ] The 4,000,000 + 350,000 + 280,000 VND income scenario produces 4,630,000 VND only under approved confirmation semantics. Evidence: _link_
 - [ ] Scheduled income/obligations never become actual/paid solely because time passes. Evidence: _link_
 - [ ] Global Add retry/parallel/timeout cases create exactly one transaction. Evidence: _link_
 - [ ] Transaction edit/correction/removal policy updates aggregates and linked records consistently. Evidence: _link_
 - [ ] Debt payment split, no-split, outstanding correction, and history reconcile; a no-split payment never silently reduces principal. Evidence: _link_
-- [ ] Savings allocations and planned purchase completion do not double-count cash or spending; linked-goal release matches the approved user-confirmed amount. Evidence: _link_
+- [ ] Manual savings current amount/as-of changes safe-to-spend but not cash/monthly flow; every update has one old/new audit record. Evidence: _link_
+- [ ] Planned purchase completion applies at most one user-confirmed linked-goal scalar deduction within bounds and never auto-archives/zeroes the goal. Evidence: _link_
 - [ ] Spendable estimate and cash-flow warning show approved inputs, horizon, exclusions, and as-of time. Evidence: _link_
 - [ ] Dashboard aggregates drill down exactly to source records; zero/no-data/not-calculated states differ. Evidence: _link_
-- [ ] Recurrence boundaries (29/30/31, leap day, timezone/month change) meet approved rules. Evidence: _link_
+- [ ] Monthly 29/30/31 uses last-day fallback; yearly 29-February, interval/end/window bounds, and timezone changes meet separately approved rules. Evidence: _link_
 
 ## 3. UX, responsive, and accessibility
 
@@ -60,7 +63,8 @@
 
 ## 4. Authentication and session security
 
-- [ ] Registration/invite eligibility and email-normalization rules match approved policy. Evidence: _link_
+- [ ] Single-use invitation digest, expiry/revoke/wrong-email/replay/parallel-use, generic errors, and atomic account creation tests pass. Evidence: _link_
+- [ ] Registration eligibility, email normalization, and post-verification sign-in/session behavior match approved policy. Evidence: _link_
 - [ ] Argon2id parameters are benchmarked, encoded correctly, and rehash policy is tested. Evidence: _link_
 - [ ] Password policy supports managers/paste and common/compromised-password control is privacy reviewed. Evidence: _link_
 - [ ] OTP expiry, attempt, resend, supersession, keyed-digest storage, replay, concurrency, immediate delivery uncertainty, and ordinary-outbox secret exclusion tests pass. Evidence: _link_
@@ -74,7 +78,8 @@
 ## 5. Authorization, API, and application security
 
 - [ ] Full BOLA/IDOR matrix passes for every private resource, method/action, nested parent, and two-user case. Evidence: _link_
-- [ ] Server identity never comes from client `userId`; owner/status/derived/audit fields resist mass assignment. Evidence: _link_
+- [ ] Server identity never comes from client `userId`; owner/status/derived/audit/snapshot-anchor/balance-effect fields resist mass assignment. Evidence: _link_
+- [ ] Old/latest snapshot, historical/current effect, same-day inclusion, and cross-user anchor tampering tests pass. Evidence: _link_
 - [ ] Same-user composite constraints and accepted RLS/compensating controls are verified under connection pooling and worker paths. Evidence: _link_
 - [ ] CSRF cross-site form/fetch and Origin/Fetch Metadata/token tests pass for every state-changing browser endpoint. Evidence: _link_
 - [ ] CORS is deny-by-default/same-origin and credentials are never combined with wildcard origin. Evidence: _link_
@@ -92,7 +97,9 @@
 - [ ] App/worker versions are compatible through rollout; expand/migrate/contract steps are scheduled. Evidence: _link_
 - [ ] Migration rollback or forward-recovery procedure is rehearsed and tied to decision thresholds. Evidence: _link_
 - [ ] Reconciliation checks find no unexplained orphan, duplicate, link, debt, savings, occurrence, or balance issue. Evidence: _link_
-- [ ] Retention/deletion/export/user-rights policy is approved and implemented/tested where required. Evidence: _link_
+- [ ] Vietnamese legal/privacy review approves deletion map/request channel/cross-border processing and either the OQ-18 maxima (90d backup, 90d log, 24mo minimized security/audit) or documented shorter enforced periods. Evidence: _link_
+- [ ] Seven-day deletion request/cancel/purge races, provider deletion, independent restore-exclusion register access/key/tamper/expiry, pseudonymized retained evidence, and retention expiry pass. Evidence: _link_
+- [ ] Data export/user-rights procedure is owned even though export UI is out of MVP unless legally required. Evidence: _link_
 - [ ] No production data is present in staging, CI, developer systems, test reports, or screenshots. Evidence: _link_
 - [ ] Direct data access/change and break-glass procedures are restricted, MFA-protected, and audited. Evidence: _link_
 
@@ -108,14 +115,16 @@
 
 ## 8. Notifications and email
 
-- [ ] Reminder channels, timing, timezone, quiet-hour, overdue repeat, and amount privacy match approved OQ-06/OQ-12 decisions. Evidence: _link_
-- [ ] Outbox is atomic with state change; worker lease/retry/crash/dead-letter and deduplication tests pass. Evidence: _link_
-- [ ] Confirmation/skip/cancel races do not send stale reminders or change financial truth. Evidence: _link_
-- [ ] Email templates are escaped, localized/accessibility reviewed, and minimize sensitive subject/preview content. Evidence: _link_
+- [ ] Eligible outgoing-obligation stages occur at 09:00 user-local time for 7-day/3-day/due-today/first-overdue with one occurrence + stage notification; scheduled income has none. Evidence: _link_
+- [ ] First-overdue does not repeat, while Schedule remains visibly overdue until resolved. Evidence: _link_
+- [ ] No payment-reminder email, push, SMS, quiet-hour/channel preference, or permission path exists in MVP. Evidence: _link_
+- [ ] Worker lease/retry/crash/dead-letter, approved multi-stage downtime/timezone/late-creation catch-up suppression, and notification deduplication tests pass. Evidence: _link_
+- [ ] Confirmation/skip/cancel races do not create stale authoritative state or mark financial truth. Evidence: _link_
+- [ ] Vietnamese authentication/security email templates are escaped, accessibility reviewed, and minimize sensitive subject/preview content. Evidence: _link_
 - [ ] SPF, DKIM, DMARC, sender domain, bounce handling, provider sandbox/production credentials, and quotas are configured. Evidence: _link_
-- [ ] Provider webhook signature/timestamp/replay/schema/idempotency tests pass. Evidence: _link_
+- [ ] Security-email provider webhook signature/timestamp/replay/schema/idempotency tests pass where applicable. Evidence: _link_
 - [ ] Queue age/dead-letter/email failure alerts and operator remediation runbook are tested. Evidence: _link_
-- [ ] Delivery events cannot mark an obligation paid/received. Evidence: _link_
+- [ ] Notification read/dismiss or email delivery events cannot mark an obligation paid/received. Evidence: _link_
 
 ## 9. Performance, reliability, and abuse resistance
 
@@ -130,9 +139,10 @@
 
 ## 10. Backup, restore, rollback, and disaster readiness
 
-- [ ] Automated encrypted production backup/PITR is enabled, monitored, access restricted, and residency compliant. Evidence: _link_
+- [ ] Automated encrypted production backup/PITR is enabled, monitored, access restricted, residency compliant, and enforces the 90-day maximum. Evidence: _link_
 - [ ] Backup failure alert reaches the named responder. Evidence: _link_
-- [ ] A recent backup is restored in isolation; schema, constraints, counts, user isolation, and representative financial reconciliations pass. Evidence: _link_
+- [ ] A recent backup is restored in isolation; the current independently protected restore-exclusion register is obtained, tombstones are reapplied before activation, and purged users are not resurrected. Evidence: _link_
+- [ ] Restored schema, constraints, counts, user isolation, snapshot-segment balances, historical reports, and representative financial reconciliations pass. Evidence: _link_
 - [ ] Restored application smoke tests pass against the exact release artifact. Evidence: _link_
 - [ ] Measured RPO/RTO meet approved targets or discrepancy has blocking disposition. Evidence: _link_
 - [ ] Restored data is securely destroyed and exercise access is audited. Evidence: _link_
@@ -152,7 +162,8 @@
 
 ## 12. Privacy, legal, provider, and support readiness
 
-- [ ] Beta jurisdiction, language, age/eligibility, data residency, and invitation terms are approved. Evidence: _link_
+- [ ] Vietnam-first jurisdiction/audience, Vietnamese-first content, age/eligibility, Southeast-Asia/cross-border residency, and invitation terms are approved. Evidence: _link_
+- [ ] OQ-17 is resolved with selected PaaS/database/email/observability providers, domain, final region, budget, and dated provider ADR addendum. Evidence: _link_
 - [ ] Privacy notice, terms, financial-data limitation/estimate disclaimer, support contact, and incident communication templates are approved. Evidence: _link_
 - [ ] Data inventory/flow and provider/subprocessor register include hosting, database, email, Cloudflare, observability, CI, and backups. Evidence: _link_
 - [ ] Provider contracts/settings/retention/region/security responsibilities are reviewed. Evidence: _link_
