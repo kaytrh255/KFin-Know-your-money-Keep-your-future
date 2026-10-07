@@ -3,7 +3,7 @@
 **Status:** Proposed<br>
 **Date:** 2026-10-07<br>
 **Decision owners:** Product Owner; UX/Accessibility Owner; Architecture Owner; Security Owner<br>
-**Exact blocker:** `SPEC-GOV-01` — The approved product boundary fixes Web → PWA → possible later Capacitor reuse, but compact Web/PWA usability, accessibility, supported-browser, lifecycle, and real-device evidence does not exist. Native distribution/auth/plugin decisions remain future scope and cannot be treated as accepted MVP implementation details.<br>
+**Exact blocker:** `SPEC-UX-01` and `SPEC-GOV-01` — the approved product boundary fixes Web → PWA → possible later Capacitor reuse, but compact/expanded visual, content, usability, accessibility, supported-browser, lifecycle, and real-device evidence does not exist. Round 3 defines the evidence manifest and approval record but supplies no evidence. Native distribution/auth/plugin decisions remain future scope and cannot be treated as accepted MVP implementation details.<br>
 **Related:** [ADR-005](ADR-005-pwa-strategy.md), [UX specification](../../ux/UX-SPEC.md)
 
 ## Context

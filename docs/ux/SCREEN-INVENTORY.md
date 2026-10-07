@@ -1,6 +1,6 @@
 # KFin Initial Screen Inventory
 
-**Status:** Draft — specification review required<br>
+**Status:** Draft — Round 3 decision dependencies recorded; specification/evidence review required<br>
 **Evidence status:** Screen-list review is not visual prototype, usability, or accessibility acceptance<br>
 **Purpose:** Define the minimum screen map before visual design and implementation.<br>
 **Note:** Routes are proposals for Web/PWA navigation, not API contracts.
@@ -133,7 +133,7 @@ Savings screens must state that current amount is user-maintained and not a veri
 | SEC-01 | `/settings/security` | Security overview | Navigate password, sessions, history | Verified email, last password change, concise recommendations |
 | SEC-02 | `/settings/security/password` | Change password | Reauthenticate and rotate credentials | Current/new password, policy, session consequence, durable success |
 | SEC-03 | `/settings/security/sessions` | Active sessions | Identify and revoke access | Current marker, device/time, revoke one, sign out everywhere |
-| SEC-04 | `/settings/security/history` | Security history | Review important account events | Event type/outcome/time, privacy-safe origin detail, pagination |
+| SEC-04 | `/settings/security/history` | Security history | Review only approved user-visible account events | `SPEC-SEC-02` event classification; approved safe type/outcome/time/origin detail; operator-only exclusion; pagination/retention; unavailable until policy approval |
 | SET-03 | `/settings/about` | Privacy, terms, help | Access policy/support information | Version, privacy/terms, support/deletion request channel, status link if provided |
 
 There is no reminder-channel settings screen in MVP: reminders are in-app only at fixed approved stages/timing. Self-service account-deletion UI is not automatically in scope; the identity-verified beta request channel must be selected by legal/privacy review. Data export UI remains deferred unless legally required.
@@ -201,3 +201,22 @@ This is a necessary per-screen evidence list, not visual/UX acceptance or permis
 6. analytics/privacy decision;
 7. loading/error/offline behavior;
 8. acceptance tests and responsive test cases.
+
+Completing this list is necessary but does not close `SPEC-UX-01`. The versioned evidence manifest and named acceptance in UX Specification §16 remain mandatory.
+
+## 14. Round 3 decision-dependent screen register
+
+| Blocker | Screens/surfaces that cannot be accepted yet | Exact UX dependency | Fixed safety boundary | Status |
+|---|---|---|---|---|
+| `SPEC-AUTH-01` | AUTH-03/06, ONB-01 | Verification must end in one approved session or explicit-sign-in outcome, with retry/multi-tab/result copy | No session fixation; only an approved authenticated context enters onboarding | OPEN — decision ready |
+| `SPEC-AUTH-02` | AUTH-01–05, SEC-02/03 | Visible policy, expiry, limits, recovery, rotation/replay and session consequences | Invitation code mandatory; generic errors; password manager/paste support | OPEN — decision ready |
+| `SPEC-FIN-01` | ACT-02/03, ADD-01/02, SCH-02, DEBT-07, PUR-05 | Correction/void/link/report/audit and idempotent/stale consequence previews | No history erasure, silent segment movement or double effect | OPEN — decision ready |
+| `SPEC-FIN-02` | ONB-02, SET-04, ADD-01/02, ACT-03 | Snapshot/transaction race conflict and deliberate retry result | No silent re-anchor or ambiguous successful save | OPEN — decision ready |
+| `SPEC-DEBT-01` | DEBT-03/06/07 | Later-event correction must use approved replay/fresh-balance policy or explicit rejection | Never infer principal, interest, fee or outstanding | OPEN — decision ready |
+| `SPEC-SCH-01` | SCH-01–03, DEBT-02/04 | Leap-day preview, bounds, occurrence/future edit choices and split consequences | Monthly missing-day fallback fixed; unsupported scope hidden | OPEN — decision ready |
+| `SPEC-REM-01` | NOTIF-01, SCH-01/02 | Catch-up stage/result, recovery expiry and suppression explanation | Zero/one catch-up, never a burst; occurrence state stays authoritative | OPEN — decision ready |
+| `SPEC-SEC-02` | SEC-01/04, NOTIF-01 | Which event appears, safe details, delivery/deep link and display retention | No secrets, false exact location, internal rule or financial payload | OPEN — decision ready |
+| `SPEC-DEL-01` | SET-03 and any promoted deletion surface/result | Request/cancel identity, pending access, deadline/purge/retention/legal-hold/provider copy | Seven-day cancellation and no restoration reactivation | OPEN — decision ready |
+| `SPEC-UX-01` | Every MVP screen | Visual, Vietnamese content, state, usability and accessibility evidence in both compact and expanded contexts | Specification/design tokens cannot substitute for acceptance evidence | OPEN — evidence ready |
+
+A screen can be prototyped to compare unresolved options, but no option may be labelled accepted or implementation-ready until its blocker has a named, evidence-backed approval record.

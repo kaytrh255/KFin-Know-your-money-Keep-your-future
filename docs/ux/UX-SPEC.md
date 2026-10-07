@@ -1,7 +1,7 @@
 # KFin UX Specification
 
-**Status:** Draft — review required<br>
-**Version:** 0.3<br>
+**Status:** Draft — Round 3 evidence manifest defined; acceptance evidence absent<br>
+**Version:** 0.4<br>
 **Platforms:** Responsive Web and installable PWA<br>
 **Accessibility target:** WCAG 2.2 AA for all MVP core flows<br>
 **Evidence status:** Specification review only — no visual prototype, usability study, or accessibility validation has passed
@@ -271,7 +271,39 @@ These reviews are separate and none may be inferred from another:
 
 1. **UX specification review** evaluates completeness and cross-document consistency of flows, states, content requirements, and interaction constraints.
 2. **Visual prototype acceptance** requires dated compact/expanded low- and high-fidelity artifacts covering critical states and approved design-token application.
-3. **Usability acceptance** requires representative moderated-task evidence, observed errors/comprehension, agreed thresholds, and owner sign-off.
+3. **Usability acceptance** requires representative moderated-task evidence, observed errors/comprehension, pre-approved thresholds, and owner sign-off.
 4. **Accessibility acceptance** requires dated keyboard, screen-reader, zoom/reflow, contrast, touch-target, reduced-motion, and automated-check evidence against WCAG 2.2 AA scope.
 
-This document can receive specification review without satisfying items 2–4. No visual prototype, usability study, or accessibility validation currently exists, so none is Accepted. `SPEC-UX-01` remains OPEN until Vietnamese content, balance-snapshot/backfill interaction, safe-to-spend disclosure, debt correction blocked states, in-app catch-up behavior, manual savings amount, and deletion communication receive the required separate evidence. Design-system tokens are a coherent proposal, not visual acceptance.
+### 16.1 `SPEC-UX-01` evidence manifest
+
+Every row must identify artifact version/location, date, method, participant/reviewer profile, device/browser/assistive technology, expected threshold, observed result, defects, remediation/retest, and named approver. A design link, screenshot, automated score, or role label alone is insufficient.
+
+| Evidence item | Required scope | Acceptance condition | Accountable / co-approver | Current state |
+|---|---|---|---|---|
+| Compact visual prototype | 320px-class through representative mobile widths; all primary and critical exception states | No omitted required state, unreadable amount, clipped action, hidden focus/error, or unresolved critical visual defect | UX/Accessibility / Product | Missing |
+| Expanded visual prototype | Tablet/desktop widths; persistent navigation, lists, detail, dialogs, source drill-down | Same completeness and critical-defect rule; compact/expanded information meaning remains identical | UX/Accessibility / Product | Missing |
+| Vietnamese content | Auth, snapshot/backfill, safe-to-spend, debt unknown/blocked state, recurrence/reminder, security history, deletion and errors | Product/domain/privacy reviewers approve exact copy; no guarantee, inference, shame, enumeration, or false location claim | Product / UX, Security, Financial Integrity, Privacy/Legal | Missing |
+| Critical-state inventory | Loading, empty, incomplete setup, validation, offline, authorization/not-found, server, uncertain/conflict, success, partial background failure | Every critical screen maps every applicable state to an artifact and expected recovery action | UX/Accessibility / Product, QA | Missing |
+| Moderated task plan | §15 tasks plus auth verification outcome, correction blocked states, reminder recovery and deletion comprehension | Participant profile, sample/rationale, task script and success/comprehension thresholds are approved before sessions | UX/Accessibility / Product | Missing |
+| Moderated results | Observed completion, errors, time, comprehension, trust and accessibility barriers | Every pre-approved threshold is reported; no unresolved severe task failure or misleading financial/security comprehension remains | UX/Accessibility / Product, domain owners | Missing |
+| Keyboard/focus | All critical flows, dialogs/sheets, errors, session expiry and recovery | Full completion without pointer; logical focus; no trap/loss; visible focus; status/errors announced | UX/Accessibility / QA | Missing |
+| Screen reader | Representative iOS/Android/desktop screen readers on critical flows and dynamic states | Names/roles/states/order/announcements permit completion; amounts/dates/status are unambiguous; no unresolved WCAG A/AA failure | UX/Accessibility / QA | Missing |
+| Zoom/reflow/responsive | 200% and 400% where WCAG requires; compact to expanded; text-size stress | Controls/content remain available without loss or prohibited two-dimensional scrolling; no overlap/clipping | UX/Accessibility / QA | Missing |
+| Contrast/targets/motion | All tokens/components/states, 44×44 target goal, forced colors where applicable, reduced motion | WCAG 2.2 AA contrast/reflow/input criteria pass; target exceptions are documented and approved; essential meaning does not depend on motion/color | UX/Accessibility / QA | Missing |
+| Automated accessibility | Component and integrated critical flows | Zero untriaged violations; every finding links to manual confirmation where automation is insufficient | QA / UX/Accessibility | Missing |
+| Trace and sign-off | Requirement/flow/screen/state/evidence/defect/retest mapping | No critical row missing; stable privacy-safe evidence links and named Product + UX/Accessibility acceptance recorded | UX/Accessibility / Product | Missing |
+
+### 16.2 Decision-dependent UX evidence
+
+Evidence cannot be final for an unresolved policy. Prototypes may compare options, but acceptance must wait for the authorized outcome:
+
+- `SPEC-AUTH-01`: verification result, onboarding transition, session/sign-in copy, retry and multi-tab states;
+- `SPEC-AUTH-02`: visible password/OTP/reset/session guidance and abuse/recovery consequences;
+- `SPEC-FIN-01`/`02`: correction consequence preview, blocked transition, conflict and uncertain-result recovery;
+- `SPEC-DEBT-01`: no-inference blocked state and explicit lender-balance path;
+- `SPEC-SCH-01`: leap-day copy, bounds and occurrence/series-edit choices;
+- `SPEC-REM-01`: catch-up result and explanation without notification burst;
+- `SPEC-SEC-02`: user-visible event list, safe detail, delivery and retention copy;
+- `SPEC-DEL-01`: request, pending, cancellation, purge, retention and legal-hold communication.
+
+This document can receive specification review without satisfying visual, usability, or accessibility acceptance. No visual prototype, usability study, content approval, or accessibility validation currently exists, so none is Accepted. `SPEC-UX-01` remains **OPEN — evidence ready**. The full blocker closure contract is in the [Round 3 remediation report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md), and evidence/sign-off metadata belong in the [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md). Design-system tokens are a coherent proposal, not visual acceptance.

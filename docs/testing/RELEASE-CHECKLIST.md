@@ -1,8 +1,29 @@
 # KFin Private Beta Release Checklist
 
-**Status:** Template — no item is currently complete<br>
+**Status:** Template — Round 3 pre-implementation gate added; no item is currently complete<br>
 **Use:** One copy per release candidate and per cohort expansion<br>
 **Rule:** Every checked item requires linked, dated evidence. A checkbox without evidence is not a pass.
+
+## 0. Pre-implementation specification gate
+
+Round 3 defined decision/evidence packets but closed no blocker. This checklist cannot be used to manufacture an approval after implementation. Before any implementation phase opens, the controlled [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md) and source specifications must show:
+
+- [ ] `SPEC-AUTH-01`: one authorized post-verification outcome, synchronized auth/session/UX contracts, and passing `AUTH-VRF` evidence. Evidence: _missing_
+- [ ] `SPEC-AUTH-02`: every auth/session value and behavior approved, synchronized, and supported by `AUTH-POL` threat/benchmark/provider/usability/replay evidence. Evidence: _missing_
+- [ ] `SPEC-FIN-01`: approved correction/void/link/report/audit/retry model and exact H–J/`FIN-COR` results. Evidence: _missing_
+- [ ] `SPEC-FIN-02`: approved serialization/conflict ADR and passing `FIN-RACE` PostgreSQL evidence. Evidence: _missing_
+- [ ] `SPEC-DEBT-01`: approved later-event correction policy and exact DCT-08/09/`DEBT-HIST` results preserving no-inference. Evidence: _missing_
+- [ ] `SPEC-SCH-01`: approved leap-day/bounds/series-edit policy and passing `SCH-BND` boundary/race evidence. Evidence: _missing_
+- [ ] `SPEC-REM-01`: approved complete catch-up tuple and passing RCT-04–07/`REM-REC` evidence with no burst. Evidence: _missing_
+- [ ] `SPEC-SEC-01`: approved RLS/compensating-control ADR and passing `SEC-RLS` table/action/pool/worker/operator evidence. Evidence: _missing_
+- [ ] `SPEC-SEC-02`: approved event classification/disclosure policy and passing `SEC-HIST` privacy/content/authorization/accessibility evidence. Evidence: _missing_
+- [ ] `SPEC-DEL-01`: approved deletion/legal/restore/provider policy and passing `DEL-LIFE` race/expiry/restore evidence. Evidence: _missing_
+- [ ] `SPEC-UX-01`: complete, versioned and signed `UX-EVID` visual/content/usability/accessibility manifest. Evidence: _missing_
+- [ ] `SPEC-GOV-01`: named authorities, delegation/conflict rules, approved physical limits, `GOV-EVID` trace, and specification/ADR sign-offs. Evidence: _missing_
+
+Every row is currently OPEN. Exact criteria are in the [Round 3 remediation report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md). No box may be checked merely because the packet, test design, or template exists.
+
+**Implementation Gate: CLOSED**
 
 ## Release record
 
@@ -25,7 +46,7 @@
 
 - [ ] PRD, MVP scope, user flows, UX, screen inventory, architecture, database, security, threat model, and test strategy are approved at recorded versions. Evidence: _link_
 - [ ] OQ-01 through OQ-19 decisions are reflected consistently; OQ-17 provider deferral has been resolved before this Release Candidate. Evidence: _link_
-- [ ] Required ADRs are `Accepted` with role-based approvers; no implementation silently depends on a `Proposed`, `Blocked`, or rejected decision, and every centralized `SPEC-*` blocker is closed. Evidence: _link_
+- [ ] Required ADRs are `Accepted` with named accountable/mandatory co-approvers and versioned evidence; no implementation silently depends on a `Proposed`, `Blocked`, or rejected decision, and every centralized `SPEC-*` blocker is closed. Evidence: _link_
 - [ ] Implemented scope matches MVP; future items have not entered release accidentally. Evidence: _link_
 - [ ] Every release item maps to requirements, tests, and user-visible release notes where applicable. Evidence: _link_
 - [ ] Known limitations and manual-data/estimate language are accurate. Evidence: _link_
@@ -227,11 +248,15 @@ The incident lead decides containment and rollback/forward recovery; preserving 
 | Role | Name | Decision | Date | Evidence / conditions |
 |---|---|---|---|---|
 | Product owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
-| Engineering owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
+| Engineering/architecture owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
+| Data owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
+| Financial integrity owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
 | Security reviewer | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
+| QA owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
 | UX/accessibility reviewer | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
 | Operations owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
 | Privacy/legal owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
+| Incident/support owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
 | Release owner | _TBD_ | Go / Hold / No-go | _TBD_ | _TBD_ |
 
 **Final decision:** _Not made_<br>

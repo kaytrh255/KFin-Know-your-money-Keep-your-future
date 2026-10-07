@@ -1,7 +1,7 @@
 # KFin UI Design System
 
-**Status:** Draft visual proposal — review and contrast validation required<br>
-**Version:** 0.2<br>
+**Status:** Draft visual proposal — Round 3 evidence requirements recorded; validation absent<br>
+**Version:** 0.3<br>
 **Evidence status:** No visual prototype acceptance, usability acceptance, or accessibility validation<br>
 **Purpose:** Create one accessible, reusable visual and interaction language before feature screens proliferate.
 
@@ -335,3 +335,5 @@ Before acceptance:
 4. Test numeric keyboard and safe-area behavior on representative iOS and Android browsers.
 5. Conduct keyboard, screen-reader, zoom, and reduced-motion reviews.
 6. Confirm brand marks/logo separately; this document defines interface style, not a final logo.
+
+Round 3 does not mark any item complete. These tasks must be retained as versioned artifacts inside the `SPEC-UX-01` evidence manifest in UX Specification §16, with named UX/Accessibility and Product approval and all required device/assistive-technology metadata. Design-token consistency, a Storybook page, or automated contrast output alone cannot close `SPEC-UX-01`; its post-Round-3 state is **OPEN — evidence ready**.

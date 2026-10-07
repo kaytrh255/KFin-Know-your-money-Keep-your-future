@@ -1,6 +1,6 @@
 # KFin Main User Flows
 
-**Status:** Draft — review required<br>
+**Status:** Draft — Round 3 flow decision packets recorded; approval required<br>
 **Scope:** Private Beta Web/PWA<br>
 **Related:** [PRD](PRD.md), [UX specification](../ux/UX-SPEC.md), [screen inventory](../ux/SCREEN-INVENTORY.md)
 
@@ -337,3 +337,20 @@ Before approval, product/UX review must walk through at minimum:
 - edit/delete of records linked to snapshots, schedules, debt, or planned purchase;
 - two users attempting the same object identifiers;
 - screen-reader and keyboard completion of every critical flow.
+
+## 11. Round 3 flow closure register
+
+Round 3 does not choose any unresolved branch. It defines what flow evidence must exist before owner approval:
+
+| Blocker | Affected flows | Exact unresolved flow decision | Fixed flow boundary | Required flow evidence | Status |
+|---|---|---|---|---|---|
+| `SPEC-AUTH-01` | First-use map, `UF-AUTH-01`/`02` | Fresh rotated session after verification or explicit sign-in; result, onboarding redirect, cookie/CSRF, event, multi-tab, and uncertain-response result | OTP use is atomic/single-use; no pre-auth identifier survives | Compact/expanded walkthrough, threat/session-fixation review, retry/multi-tab tests, approved Vietnamese copy | OPEN — decision ready |
+| `SPEC-AUTH-02` | `UF-AUTH-01`–`06`, session-expiry exception | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and failure path | Invitation code only; generic responses; Argon2id; digest-only secrets; reset revokes all sessions | Boundary, expiry, replay, concurrent-tab, provider-failure, benchmark and usability evidence | OPEN — decision ready |
+| `SPEC-FIN-01` | `UF-FIN-02`/`03`/`06` and linked flows | Correction versus void transitions, snapshot/link/report effects, preview, audit and retry/stale-version result | Append-only evidence; no silent cross-segment move, history erasure, or double effect | Snapshot H–J plus schedule/debt/purchase correction walkthroughs | OPEN — decision ready |
+| `SPEC-FIN-02` | `UF-FIN-01`–`06` | Snapshot/transaction race winner, conflict/retry/idempotency response and user recovery | Exactly one latest segment; no silent re-anchor | Deterministic race and timeout-after-commit walkthrough/tests | OPEN — decision ready |
+| `SPEC-DEBT-01` | `UF-DEBT-03` | Explicit-fact replay or fresh lender-reported balance when later events exist | No inferred debt component or outstanding; unsafe path unavailable | DCT-08/09 and later-event/date-reorder/missing-state walkthroughs | OPEN — decision ready |
+| `SPEC-SCH-01` | `UF-SCH-01`–`04` | 29-February outcome, bounds/horizon/batch, and exact occurrence/series-edit split behavior | Supported cadence and monthly missing-day fallback stay fixed; history is preserved | Fixed-clock boundary, edit-versus-worker race and UX walkthroughs | OPEN — decision ready |
+| `SPEC-REM-01` | `UF-REM-01` | Catch-up emission, precedence, recovery window, suppression record, timezone/late-creation and state-race outcomes | At most one catch-up; no burst; no financial-state mutation | Exact RCT-04–07 and outage/timezone/state-race outcomes | OPEN — decision ready |
+| `SPEC-DEL-01` | `UF-AUTH-07` | Request/cancel authentication/channel, pending-session behavior, purge map, retained evidence, restore exclusion, legal hold/provider failure | Seven-day cancellation and post-deadline active-data purge baseline | Request/cancel/purge races, legal review, provider evidence and restore drill | OPEN — decision ready |
+
+Accountable/co-approver roles, artifact metadata, and binary closure criteria are in the [Round 3 report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md). A walkthrough is evidence only when it records source version, participants/reviewers, expected and observed result, defects, and explicit disposition in the [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md).

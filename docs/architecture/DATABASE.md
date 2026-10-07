@@ -1,8 +1,8 @@
 # KFin Database Specification
 
-**Status:** Draft conceptual/logical model — review required<br>
+**Status:** Draft conceptual/logical model — Round 3 physical-decision packets recorded; approval required<br>
 **Database:** Proposed PostgreSQL<br>
-**Decision baseline:** OQ-01 through OQ-19 recorded; physical design and legal retention review remain open
+**Decision baseline:** OQ-01 through OQ-19 recorded; Round 3 leaves all affected physical, concurrency, isolation, and legal-lifecycle choices open
 
 This document defines an intended model and invariants, not executable schema or migrations. Names may be refined during reviewed physical design, but financial meaning and ownership constraints must not be weakened silently.
 
@@ -683,17 +683,20 @@ Checks emit identifiers/counts and safe error codes, not notes or complete finan
 
 ## 19. Open physical-design decisions
 
-Product meaning is set by OQ-01 through OQ-19. Physical review must still resolve:
+Product meaning is set by OQ-01 through OQ-19. Round 3 makes each affected physical decision reviewable without selecting it:
 
-- `SPEC-SEC-01`: PostgreSQL RLS adoption and trusted request/worker context mechanism;
-- `SPEC-FIN-02`: transaction-versus-snapshot serialization and retryable-conflict contract; same-day explicit inclusion is already fixed by `FIN-SNAP-INV-05`;
-- `SPEC-FIN-01`: correction/void/link/report/idempotent API behavior for latest, prior, and cross-segment records;
-- `SPEC-SCH-01`: yearly 29-February fallback, maximum recurrence interval/end/window bounds, and series-edit scope;
-- `SPEC-REM-01`: one-stage-or-none multi-stage catch-up selection, suppression record, and recovery window;
-- `SPEC-DEL-01`: deletion table/provider map, independent restore-exclusion register storage/key/expiry design, pseudonymization, and legal-hold mechanism;
-- `SPEC-AUTH-02`: OTP keyed-digest construction/challenge supersession and session rotation/grace/replay details;
-- `SPEC-DEBT-01`: historical payment-correction/outstanding behavior; exact informational debt-rate storage bounds still require review;
-- `RC-PROV-01`: PostgreSQL version/extensions/pooling/PITR after provider selection;
-- `SPEC-GOV-01`: approved upper bounds for money, notes, records/page, occurrence window, and job batches.
+| Blocker | Exact data decision | Immutable data constraints | Required evidence / acceptance condition | Accountable owner | Status |
+|---|---|---|---|---|---|
+| `SPEC-AUTH-02` | Invitation/challenge/session values; keyed-digest construction; challenge supersession; rotation/grace/replay and last-seen write behavior | No plaintext reusable secret; generic responses; reset revokes all sessions | Benchmark/threat/replay/provider evidence; Security + Product approve every value and all auth/session documents agree | Security Owner | OPEN — decision ready |
+| `SPEC-FIN-01` | Append-only correction/void representation; supported segment/effect transitions; links, report/audit and idempotent/stale response | No in-place erasure, double effect, silent segment movement, or rewrite of current balance from closed history | Snapshot H–J and linked-domain tests have exact outcomes; Product + Financial Integrity + Data + Security approve | Product Owner | OPEN — decision ready |
+| `SPEC-FIN-02` | Per-account linearization point; lock/isolation ordering; transaction boundaries; winner/conflict/retry/idempotency behavior | One latest segment; deterministic attachment; no silent re-anchor or duplicate effect | PostgreSQL race/deadlock/timeout evidence; scenario J fully expected; accepted ADR amendment/new ADR | Data Owner | OPEN — decision ready |
+| `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported outstanding for corrections with later events; date reorder/void/partial-failure behavior | No inferred component, amortization, payoff, or outstanding; unsafe path unavailable | DCT-08/09 and multi-event results fixed; Product + Financial Integrity + Data approve | Product Owner | OPEN — decision ready |
+| `SPEC-SCH-01` | 29-February policy; interval/end/horizon/batch/active-series limits; split-point and occurrence/future edit behavior | Monthly missing-day fallback and supported cadence stay fixed; generated rows idempotent; history preserved | Boundary/load/edit-race tests; Product + Data + Architecture approve all fields and bounds | Product Owner | OPEN — decision ready |
+| `SPEC-REM-01` | Catch-up stage-or-none precedence, recovery age, suppression status/reason, timezone/late-creation/state-race behavior | Occurrence + stage uniqueness; at most one catch-up; no burst or financial mutation | RCT-04–07 exact results plus outage/timezone/race proof; Product + Architecture + Operations + QA approve | Product Owner | OPEN — decision ready |
+| `SPEC-SEC-01` | RLS table/action policies, trusted context, pool reset and special roles; or explicit compensating controls/risk | Application authorization, owner scope, composite ownership, least privilege and two-user tests remain mandatory | Every private table/action and pool/worker/operator path covered; residual risk signed if RLS omitted | Security Owner | OPEN — decision ready |
+| `SPEC-DEL-01` | Complete table/provider disposition; retained pseudonymous fields; tombstone storage/key/expiry; purge/legal-hold/provider state | Seven-day cancel, idempotent purge, no reusable secret retention and no restored-account reactivation | Approved map/legal basis plus cancellation/purge race and restore-drill evidence | Privacy/Legal Owner | OPEN — decision ready |
+| `SPEC-GOV-01` | Money/text/page/schedule/job/auth/retention bounds and database-version change authority | Framework defaults cannot become policy silently | Every bound has value, rationale, owner, user consequence and boundary test in governance register | Product Owner | OPEN — evidence/assignment ready |
 
-No migration should be written until the logical model, privacy/legal constraints, and these affected physical decisions are reviewed.
+`RC-PROV-01` separately retains PostgreSQL version/extensions/pooling/PITR selection until the Release Candidate provider gate. Full decision alternatives, co-approvers and binary criteria are in the [Round 3 report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md).
+
+No migration should be written until the logical model, privacy/legal constraints, and affected pre-implementation blockers are authorized with evidence. A migration or ORM default cannot be used to make one of these decisions implicitly.

@@ -1,11 +1,11 @@
 # KFin Specification Foundation
 
-**Status:** Draft — Round 1 specification edits complete; owner approval/evidence blocked<br>
-**Version:** 0.3<br>
+**Status:** Draft — Round 3 decision packets complete; owner decisions/evidence blocked<br>
+**Version:** 0.4<br>
 **Date:** 2026-10-07<br>
 **Implementation gate:** CLOSED
 
-This directory is the specification source of truth for the KFin Private Beta. It describes the intended product, user experience, architecture, security posture, data model, and verification approach. It does **not** authorize implementation. Product decisions OQ-01 through OQ-19 were captured on 2026-10-07. Round 1 consistency edits do not constitute owner approval or evidence; Proposed/Blocked ADRs and open blocker decisions must be resolved before acceptance.
+This directory is the specification source of truth for the KFin Private Beta. It describes the intended product, user experience, architecture, security posture, data model, governance, and verification approach. It does **not** authorize implementation. Product decisions OQ-01 through OQ-19 were captured on 2026-10-07. The [Round 3 remediation report](reviews/SPECIFICATION-REMEDIATION-ROUND-3.md) makes every pre-implementation `SPEC-*` blocker decision-ready; it does not supply the missing owner decisions or evidence. Proposed/Blocked ADRs and open blocker decisions must be resolved before acceptance.
 
 The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are normative unless a section is explicitly labelled as a proposal, assumption, example, or open decision.
 
@@ -28,6 +28,8 @@ The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are no
 | Security | [Threat model](security/THREAT-MODEL.md) | Assets, boundaries, abuse cases, mitigations and residual risk |
 | Testing | [Test strategy](testing/TEST-STRATEGY.md) | Verification levels, environments, quality gates and evidence |
 | Testing | [Release checklist](testing/RELEASE-CHECKLIST.md) | Private Beta readiness and rollout gates |
+| Governance | [Approval and evidence register](governance/APPROVAL-AND-EVIDENCE-REGISTER.md) | Named authority, decision approvals, physical limits, and evidence control |
+| Reviews | [Round 3 remediation report](reviews/SPECIFICATION-REMEDIATION-ROUND-3.md) | Before/after state and closure packet for every open `SPEC-*` blocker |
 
 ## Requested proposal summary
 
@@ -72,32 +74,33 @@ The full rationale and consequences are in the [Product Decision Log](product/DE
 
 **Implementation Gate: CLOSED**
 
-The OQ review is complete, but implementation remains blocked until:
+The OQ review and Round 3 documentation remediation are complete, but implementation remains blocked until:
 
-1. all affected specifications are consistent with the decision log;
+1. every `SPEC-*` decision packet has an authorized outcome and linked evidence;
 2. PRD, MVP scope, UX, architecture, database, security, and test specifications are formally reviewed;
-3. every required Proposed/Blocked ADR is genuinely Accepted with role-based approvers and evidence;
-4. required financial formula, snapshot A–J, debt correction, and reminder catch-up matrices are fully decided and validated;
-5. implementation work is traceable to requirements, flows, invariants, ADRs, and tests.
+3. every required Proposed/Blocked ADR is genuinely Accepted with named role-based approvers and evidence;
+4. required financial formula, snapshot A–J, debt correction, schedule, reminder, security, deletion, and UX matrices/evidence are fully decided and validated;
+5. the [Approval and Evidence Register](governance/APPROVAL-AND-EVIDENCE-REGISTER.md) has named assignments, approved physical limits, versioned evidence, and sign-off records;
+6. implementation work is traceable to requirements, flows, invariants, ADRs, and tests.
 
 ### Remaining blocker register
 
-Every open `SPEC-*` row keeps the Implementation Gate CLOSED. `RC-PROV-01` and `BETA-LEGAL-01` are additional later-phase gates under the accepted OQ-17 deferral; they do not waive any earlier blocker.
+Every open `SPEC-*` row keeps the Implementation Gate CLOSED. Round 3 changed each row from a broad blocker to an **OPEN — decision/evidence ready** packet; it did not resolve any row. Exact owners, inputs, evidence, and binary closure criteria are in the [Round 3 report](reviews/SPECIFICATION-REMEDIATION-ROUND-3.md) and [Approval and Evidence Register](governance/APPROVAL-AND-EVIDENCE-REGISTER.md). `RC-PROV-01` and `BETA-LEGAL-01` are additional later-phase gates under the accepted OQ-17 deferral; they do not waive any earlier blocker.
 
 | Blocker ID | Status | Due gate | Exact decision or evidence required |
 |---|---|---|---|
-| SPEC-AUTH-01 | OPEN | Before authentication implementation | Product Owner must choose whether successful email verification creates a newly rotated authenticated session or requires an explicit sign-in. |
-| SPEC-AUTH-02 | OPEN | Before authentication/session implementation | Security and Product owners must approve invitation expiry/binding/provisioning values, password/OTP/reset limits, session lifetimes, token-rotation cadence, and prior-token grace/replay response. The invitation-code mechanism itself is already Accepted. |
-| SPEC-FIN-01 | OPEN | Before transaction correction implementation | Product, Engineering, and Security owners must define correction/void behavior across snapshot segments, including linked occurrences, report effects, audit chain, and idempotent retry result. |
-| SPEC-FIN-02 | OPEN | Before financial schema/API implementation | Engineering and Security owners must select and validate the per-account snapshot/transaction serialization mechanism and retryable-conflict API contract while preserving the linearizable invariant. |
-| SPEC-DEBT-01 | OPEN | Before debt-payment correction implementation | Product and Engineering owners must choose how a corrected historical payment affects current outstanding when later payments or lender adjustments exist: deterministic replay from explicit facts or mandatory fresh lender-reported outstanding. |
-| SPEC-SCH-01 | OPEN | Before recurrence implementation | Product Owner must choose yearly 29-February fallback, maximum recurrence interval/horizon, and supported `this occurrence` versus `this and future` edit behavior. |
-| SPEC-REM-01 | OPEN | Before reminder implementation | Product Owner must choose which single stage, if any, is emitted when stages were missed after downtime, late occurrence creation, or timezone change; define the recovery window and how non-selected elapsed stages are recorded. Burst delivery remains prohibited. |
-| SPEC-SEC-01 | OPEN | Before database authorization implementation | Engineering and Security owners must accept PostgreSQL RLS with trusted request/worker context or approve documented compensating controls and risk. |
-| SPEC-SEC-02 | OPEN | Before security-history implementation | Product and Security owners must decide which authentication/session/account events are user-visible versus operator-only, their safe detail, notification behavior, and retention/display limits. |
-| SPEC-DEL-01 | OPEN | Before deletion implementation | Privacy, Product, Security, and Operations owners must approve request/cancellation authentication, table/provider deletion map, retained pseudonymous fields, restore-exclusion storage/key/expiry, legal-hold handling, and request channel. |
-| SPEC-UX-01 | OPEN | Before UX acceptance | Product and UX/Accessibility owners must approve compact/expanded prototypes and Vietnamese content, then retain representative usability-task, keyboard, screen-reader, zoom/reflow, contrast, touch-target, and state-coverage evidence. Specification review alone cannot close this blocker. |
-| SPEC-GOV-01 | OPEN | Before specification/ADR approval | Name accountable Product, Engineering, Security, UX/accessibility, QA, Operations, Privacy/legal, incident, support, and release approvers; review each ADR status; approve remaining physical safety bounds (money, note, page, and job-batch limits); and retain formula/flow/prototype/architecture validation evidence. |
+| SPEC-AUTH-01 | OPEN — decision ready | Before authentication implementation | Product + Security approval of exactly one post-verification outcome (fresh rotated authenticated session or explicit sign-in), including cookies/CSRF, result UX, events, multi-tab, and uncertain-response behavior. |
+| SPEC-AUTH-02 | OPEN — decision ready | Before authentication/session implementation | Security + Product approval of every invitation, password, OTP, reset, abuse, session-lifetime, rotation/replay, and known-password-change value/behavior with threat, benchmark, usability, and provider evidence. Invitation-code admission itself is already Accepted. |
+| SPEC-FIN-01 | OPEN — decision ready | Before transaction correction implementation | Product + Financial Integrity + Data + Security approval of append-only correction/void transitions, snapshot/link/report effects, consequence preview, audit chain, and idempotent/stale-write results, with H–J evidence. |
+| SPEC-FIN-02 | OPEN — decision ready | Before financial schema/API implementation | Data + Architecture + Security + Financial Integrity approval of the per-account linearization mechanism, lock/isolation order, winner/conflict/retry/idempotency contract, and PostgreSQL race evidence. |
+| SPEC-DEBT-01 | OPEN — decision ready | Before debt-payment correction implementation | Product + Financial Integrity + Data approval of explicit-fact replay or mandatory fresh lender-reported outstanding (or a precisely bounded combination), including later-event/date-reorder/void outcomes and DCT-08/09 evidence. |
+| SPEC-SCH-01 | OPEN — decision ready | Before recurrence implementation | Product + Data + Architecture approval of yearly 29-February behavior, recurrence/generation/series bounds, and exact `this occurrence` / `this and future` semantics with boundary and race evidence. |
+| SPEC-REM-01 | OPEN — decision ready | Before reminder implementation | Product + Architecture + Operations + QA approval of one catch-up policy tuple: emission, stage precedence, recovery window, first-overdue treatment, suppression record, timezone/late-creation and state-race outcomes. Burst delivery remains prohibited. |
+| SPEC-SEC-01 | OPEN — decision ready | Before database authorization implementation | Security + Data + Architecture approval of PostgreSQL RLS coverage/context/roles or explicit beta compensating controls and residual risk, backed by private-table/action and connection-reuse evidence. |
+| SPEC-SEC-02 | OPEN — decision ready | Before security-history implementation | Product + Security + Privacy/Legal classification of every event family as user-visible/operator-only/both/not-retained, with safe fields, delivery/display/retention behavior and privacy/UX evidence. |
+| SPEC-DEL-01 | OPEN — decision ready | Before deletion implementation | Privacy/Legal + Product + Security + Operations approval of request/cancel auth, deletion map, retained evidence, restore-exclusion register, legal hold, provider proof, and restore-drill behavior. |
+| SPEC-UX-01 | OPEN — evidence ready | Before UX acceptance | UX/Accessibility + Product approval of versioned compact/expanded prototypes, Vietnamese content, moderated usability, keyboard, screen-reader, zoom/reflow, contrast, touch-target, reduced-motion, and required-state evidence. |
+| SPEC-GOV-01 | OPEN — evidence/assignment ready | Before specification/ADR approval | Named accountable role assignments, delegation/conflict rules, approved physical limits, controlled evidence manifest, ADR/specification sign-offs, and change history in the governance register. |
 | RC-PROV-01 | OPEN | Before Release Candidate | Resolve OQ-17 with providers, domain, final region, budget, provider ADR addendum, subprocessors, production-like staging, measured RPO/RTO, and cost/residency evidence. |
 | BETA-LEGAL-01 | OPEN | Before external Private Beta | Complete Vietnamese legal/privacy approval, enforce retention/deletion, and provide restore/rollback/deletion, security, accessibility, usability, incident/support, and release evidence. |
 

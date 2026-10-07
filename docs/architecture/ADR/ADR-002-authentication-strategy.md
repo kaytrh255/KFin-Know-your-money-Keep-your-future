@@ -2,8 +2,8 @@
 
 **Status:** Blocked<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Product Owner; Security Owner; Architecture Owner<br>
-**Exact blocker:** OQ-11’s mandatory single-use expiring invitation-code mechanism is Accepted, and email-allowlist admission is rejected. ADR acceptance remains blocked by `SPEC-AUTH-01` (post-verification session outcome), `SPEC-AUTH-02` (invitation, OTP, password, abuse, and recovery values), and `RC-PROV-01` (email-provider review); required auth race/threat/UX evidence does not exist.<br>
+**Decision owners:** Product Owner (`SPEC-AUTH-01` accountable); Security Owner (`SPEC-AUTH-02` accountable and `SPEC-AUTH-01` mandatory co-approver); Architecture Owner (consulted/technical evidence)<br>
+**Exact blocker:** OQ-11’s mandatory single-use expiring invitation-code mechanism is Accepted, and email-allowlist admission is rejected. Round 3 makes `SPEC-AUTH-01` (post-verification outcome) and `SPEC-AUTH-02` (complete invitation/password/OTP/reset/abuse/session policy) decision-ready but approves neither. `RC-PROV-01` remains the email-provider gate; required auth race/threat/benchmark/UX evidence does not exist.<br>
 **Related:** [Security requirements](../../security/SECURITY-REQUIREMENTS.md), [ADR-004](ADR-004-session-management.md)
 
 ## Context
@@ -37,6 +37,17 @@ Proposed initial policy values (not accepted until security/UX review):
 - no security-question recovery.
 
 Limits are centrally configurable within secure bounds, monitored, and tuned without revealing account existence.
+
+### Round 3 unresolved decision packet
+
+This ADR remains **Blocked**. The following choices are not part of the proposed authentication direction until approved:
+
+| Blocker | Exact decision required | Fixed constraints | Required evidence | ADR acceptance condition |
+|---|---|---|---|---|
+| `SPEC-AUTH-01` | Select fresh rotated authenticated session after OTP consumption **or** no session + explicit sign-in; define result/onboarding, cookie/CSRF, security event, multi-tab and uncertain-response behavior | Atomic single-use OTP; no pre-auth identifier survives; generic external behavior | Threat review of both branches; fixation/retry/multi-tab tests; compact/expanded flow and Vietnamese content review | Product + Security record one branch; ADR-004, flows, security and tests contain one deterministic outcome |
+| `SPEC-AUTH-02` | Approve expiry/binding/issuance/revocation for invitation; password normalization/bounds/check; OTP/reset limits/supersession/failure; login abuse; session lifetime/rotation/replay; known-password-change revocation | Invitation code only; Argon2id; password-manager/paste support; digest-only secrets; reset revokes all sessions; no security questions | Threat/abuse review, Argon2 benchmark, provider assumptions, UX/accessibility and replay/concurrency tests | Security + Product approve every dimension/value/range/change owner; no proposed/default value remains unlabeled |
+
+The exact checklist and evidence metadata are in the [Round 3 report](../../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md) and [Approval and Evidence Register](../../governance/APPROVAL-AND-EVIDENCE-REGISTER.md). Documenting this table is not acceptance.
 
 ## Alternatives considered
 
@@ -101,6 +112,8 @@ Rejected categorically: compromise would expose credentials and violates securit
 - Threat review all auth state transitions and race conditions.
 - Test password manager, autofill, OTP paste, screen reader, rate-limit, and email failure behavior.
 - Determine breached-password service/privacy approach.
+- Complete all `AUTH-VRF` and `AUTH-POL` evidence specified by the Test Strategy with versioned PASS/accepted-risk results.
+- Record named Product/Security approvers, date, source versions, evidence links, rejected alternatives, and review trigger; a role label alone is insufficient.
 
 ## Revisit when
 

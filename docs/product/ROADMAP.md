@@ -1,6 +1,6 @@
 # KFin Product and Delivery Roadmap
 
-**Status:** Draft — review required<br>
+**Status:** Draft — Phase 0 remains open after Round 3 documentation remediation<br>
 **Planning rule:** Later phases are not authorization to implement future scope.
 
 ## 1. Roadmap principles
@@ -25,13 +25,18 @@
 - Security requirements and threat model.
 - Test strategy and release checklist.
 - Product decision log for OQ-01 through OQ-19 and cross-document consistency review.
+- Round 3 remediation report with exact AUTH → FIN → DEBT → SCHEDULE → REMINDER → SECURITY/data-lifecycle → UX → GOVERNANCE decision packets.
+- Controlled approval/evidence register for named authorities, physical limits, decision evidence, and specification/ADR sign-off.
 
 **Exit gate**
 
 - Required documents reviewed for contradictions.
-- Product owner and engineering/security reviewers approve MVP boundaries and major decisions.
-- All required ADRs are genuinely Accepted with role-based approvers/evidence, and every centralized `SPEC-*` blocker is closed.
+- Named Product and mandatory domain reviewers approve MVP boundaries and all due decisions with versioned evidence.
+- All required ADRs are genuinely Accepted with named accountable/co-approvers and evidence, and every centralized `SPEC-*` blocker is closed against its Round 3 criteria.
+- Governance register assignments, delegation/conflict rules, physical limits, evidence records, and sign-offs are complete.
 - Implementation backlog links each item to requirements, flows, invariants, and tests.
+
+**Current Phase 0 state:** Round 3 documentation remediation is complete, but all twelve `SPEC-*` blockers remain OPEN and no ADR is Accepted. Therefore this exit gate has not passed and Phase 1 is not authorized.
 
 ### Phase 1 — Product foundation and design system
 

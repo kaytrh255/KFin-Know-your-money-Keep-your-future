@@ -1,7 +1,7 @@
 # KFin Test Strategy
 
-**Status:** Draft — review required<br>
-**Version:** 0.3<br>
+**Status:** Draft — Round 3 verification contracts added; no execution evidence<br>
+**Version:** 0.4<br>
 **Release target:** Private Beta, at most 50 users<br>
 **Current evidence:** None; no application has been implemented or tested
 
@@ -93,7 +93,7 @@ Scenarios A–G define complete required results. H–I define only non-negotiab
 | PRD-DEBT-03 | UF-DEBT-02 | DEBT-INV-02, DEBT-INV-03 | DCT-05 — invalid/complete split | Components exceed total, or a `complete` split omits explicit zero/value | Write is rejected; KFin does not repair or redistribute components |
 | PRD-DEBT-05 | UF-DEBT-03 | DEBT-INV-05, DEBT-INV-07 | DCT-06 — cash-only correction | Old/replacement payments have no outstanding effect; total/date changes | Linked old/new cash records are preserved; outstanding amount/as-of remain unchanged |
 | PRD-DEBT-05 | UF-DEBT-03 | DEBT-INV-05, DEBT-INV-06 | DCT-07 — latest explicit-effect correction | No later outstanding event; exact pre-state, old effect, and replacement principal or lender balance are all explicit | Atomic old/new evidence and exact consequence preview; only explicit replacement facts can affect outstanding |
-| PRD-DEBT-06 | UF-DEBT-03 | DEBT-INV-08 | DCT-08 — later payment/adjustment | Correction/void target has a later outstanding-affecting payment or balance adjustment | **BLOCKER — `SPEC-DEBT-01`:** no automatic recomputation, rebase, or guessed preview; exact workflow requires Product Owner approval |
+| PRD-DEBT-06 | UF-DEBT-03 | DEBT-INV-08 | DCT-08 — later payment/adjustment | Correction/void target has a later outstanding-affecting payment or balance adjustment | **BLOCKER — `SPEC-DEBT-01`:** no automatic recomputation, rebase, or guessed preview; exact workflow requires Product Owner approval with Financial Integrity and Data co-approval |
 | PRD-DEBT-06 | UF-DEBT-03 | DEBT-INV-02, DEBT-INV-08 | DCT-09 — missing state/reordered as-of | Pre-state is absent, dates would reorder, or result requires deriving any omitted component/outstanding | Operation is blocked; only a separately explicit lender-reported balance adjustment is safe; no inferred value |
 
 ### 3.4 Reminder downtime and catch-up matrix
@@ -112,6 +112,27 @@ These cases establish the safe boundary. Rows marked with `SPEC-REM-01` cannot r
 | PRD-REM-12 | UF-SCH-04, UF-REM-01 | REM-INV-04, REM-INV-05 | RCT-08 — resolved during delay | Occurrence becomes confirmed, skipped, or cancelled before claimed catch-up insert | No new reminder; no stale worker action changes financial state |
 | PRD-REM-04, PRD-REM-06 | UF-REM-01 | REM-INV-03, REM-INV-04, REM-INV-05 | RCT-09 — retry/crash/concurrency | Retry, lease reclaim, or parallel workers evaluate same stage | One occurrence + stage notification, idempotent completion, and no payment mutation |
 | PRD-REM-05 | UF-REM-01 | REM-INV-10 | RCT-10 — channel boundary | Any normal or catch-up path executes | In-app record only; no payment-reminder email, push, SMS, chat, or permission prompt |
+
+### 3.5 Round 3 blocker closure evidence matrix
+
+The suites below are specifications for evidence, not executed results. A blocker cannot close when only the test design exists. Each retained result must identify specification version, environment/tool/runtime, producer, named reviewer, date, expected/observed result, defects, and disposition in the Approval and Evidence Register.
+
+| Blocker | Mandatory decision-validation suite | Accountable review | Objective closure result | Current result |
+|---|---|---|---|---|
+| `SPEC-AUTH-01` | `AUTH-VRF-01`–`AUTH-VRF-06`: both candidate threat reviews; fresh-identifier/no-session assertion; cookie/CSRF; multi-tab; timeout-after-consume; compact/expanded result flow/content | Product + Security; QA evidence review | Exactly one branch is approved; selected branch passes all applicable cases; rejected branch is absent from source contracts | NOT RUN — OPEN |
+| `SPEC-AUTH-02` | `AUTH-POL-01`–`AUTH-POL-12`: each invitation/password/OTP/reset/login/session/rotation/replay/password-change boundary, Argon2 benchmark, provider failure and abuse-cost tests | Security + Product; Architecture/UX/Operations/QA consultation | Every dimension has approved value/range/change owner and exact pass/fail outcomes; evidence covers lower/upper/expiry/replay/failure boundaries | NOT RUN — OPEN |
+| `SPEC-FIN-01` | Snapshot H–J plus `FIN-COR-01`–`FIN-COR-10`: void/replacement, same/prior/cross-segment, occurrence/debt/purchase links, report periods, idempotent retry and stale version | Product + Financial Integrity + Data + Security | One effective result only; current-balance/history constraints hold; all supported/rejected transitions and linked effects are exact | NOT RUN — OPEN |
+| `SPEC-FIN-02` | `FIN-RACE-01`–`FIN-RACE-08`: snapshot wins, transaction wins, correction race, parallel requests, stale client, deadlock/serialization failure, timeout-after-commit, idempotency retry | Data + Architecture + Security + Financial Integrity | One linearization point; each schedule has deterministic commit/conflict/retry result; no ambiguous attachment/re-anchor/duplicate effect | NOT RUN — OPEN |
+| `SPEC-DEBT-01` | DCT-08/09 plus `DEBT-HIST-01`–`DEBT-HIST-06`: later payment, later adjustment, date reorder, void, missing pre-state and partial failure | Product + Financial Integrity + Data | Approved policy yields exact safe result or explicit rejection for every branch; no inferred component/outstanding in state or preview | NOT RUN — OPEN |
+| `SPEC-SCH-01` | `SCH-BND-01`–`SCH-BND-10`: leap/non-leap recurrence, return to leap year, interval/end/horizon/batch/user bounds, occurrence edit, future split, reminder regeneration, edit/worker race | Product + Data + Architecture | Every boundary has one result; generation is bounded/idempotent; confirmed/skipped/cancelled history is preserved | NOT RUN — OPEN |
+| `SPEC-REM-01` | RCT-04–07 plus `REM-REC-01`–`REM-REC-07`: one/multiple missed stages, first overdue, recovery expiry, timezone, late creation, state change during claim and suppression audit | Product + Architecture + Operations + QA | Approved tuple produces zero/one expected catch-up; never a burst/duplicate/financial mutation; each elapsed non-selected stage is auditable | NOT RUN — OPEN |
+| `SPEC-SEC-01` | `SEC-RLS-01`–`SEC-RLS-10`: private table × action matrix, two-user APIs, nested IDs, pool reuse, worker/operator/migration roles, bypass attempt and omitted-RLS architecture guard | Security + Data + Architecture | Selected branch covers every private path; cross-user attempts fail equivalently; trusted context cannot leak; omitted-RLS residual risk is signed if applicable | NOT RUN — OPEN |
+| `SPEC-SEC-02` | `SEC-HIST-01`–`SEC-HIST-08`: every event class, owner/operator query separation, safe-field schema, authorization, enumeration, retention, Vietnamese content and screen-reader/compact presentation | Product + Security + Privacy/Legal | Every event has one approved class; forbidden fields never appear; visible events are understandable/accessible; retention and APIs match policy | NOT RUN — OPEN |
+| `SPEC-DEL-01` | `DEL-LIFE-01`–`DEL-LIFE-10`: request/recent-auth, cancel/purge race, pending sessions, first-party/provider map, idempotent retry, legal hold, retained fields/expiry, tombstone outage/key access, backup restore drill | Privacy/Legal + Product + Security + Operations | Every category has disposition; one terminal state per race; no reusable secret remains; current tombstones prevent restored data activation | NOT RUN — OPEN |
+| `SPEC-UX-01` | `UX-EVID-01`–`UX-EVID-10`: compact/expanded states, Vietnamese content, moderated critical tasks, keyboard, screen reader, 200%/400% reflow, contrast, targets, reduced motion and error/offline/conflict comprehension | UX/Accessibility + Product | Every manifest item has dated/versioned evidence and named sign-off; no unresolved severe accessibility/usability issue remains | NOT RUN — OPEN |
+| `SPEC-GOV-01` | `GOV-EVID-01`–`GOV-EVID-08`: named authorities/delegates, conflict/quorum rules, physical-limit decisions, evidence metadata, spec/ADR trace, change history, risk expiry and cross-document consistency | Product + all mandatory domain owners | No mandatory role/value/evidence field is missing; every ADR/spec disposition is authorized, versioned and traceable | NOT RUN — OPEN |
+
+The detailed decision dimensions and acceptance criteria are in the [Round 3 remediation report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md); evidence metadata and sign-off are controlled by the [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md).
 
 ## 4. Test environments
 
@@ -497,12 +518,19 @@ Monitoring can reveal defects but does not replace pre-release tests. Cohort exp
 
 ## 13. Strategy approval blockers
 
-- `SPEC-AUTH-01`/`SPEC-AUTH-02`: post-verification and authentication/session policy values.
-- `SPEC-FIN-01`/`SPEC-FIN-02`: snapshot correction and serialization behavior needed to replace scenario J’s blocked result; `STS-01`–`STS-15` already define the accepted safe-to-spend formula but have no execution evidence.
-- `SPEC-DEBT-01`: historical debt-payment correction after later outstanding-affecting events.
-- `SPEC-SCH-01`: yearly 29-February, recurrence bounds, and series-edit semantics.
-- `SPEC-REM-01`: the one catch-up stage, if any, suppression record, and recovery window; the no-burst boundary is fixed.
-- `SPEC-SEC-01`/`SPEC-SEC-02`: RLS/compensating controls and user-visible security-event policy.
-- `SPEC-DEL-01`: deletion map/request/restore-exclusion design; `SPEC-UX-01`: separate visual/usability/accessibility evidence.
-- `SPEC-GOV-01`: selected stack/provisional browser support, named Security/QA/Accessibility/Operations/Release approvers, and retained review/validation evidence.
-- `RC-PROV-01`/`BETA-LEGAL-01`: provider, residency, retention/deletion, production-like evidence, legal/privacy approval, provisional performance/RPO/RTO/vulnerability values, and measured Release Candidate evidence.
+Round 3 defines the required suites in §3.5, but no suite has been executed and no authorized decision has been supplied. Therefore all pre-implementation rows remain OPEN:
+
+| Priority | Blocker(s) | Test-strategy exit condition | Status |
+|---|---|---|---|
+| AUTH | `SPEC-AUTH-01`, `SPEC-AUTH-02` | Approved outcomes/values plus complete applicable `AUTH-VRF` and `AUTH-POL` evidence | OPEN |
+| FIN | `SPEC-FIN-01`, `SPEC-FIN-02` | H–J completed; `FIN-COR` and `FIN-RACE` evidence proves fixed financial boundaries | OPEN |
+| DEBT | `SPEC-DEBT-01` | DCT-08/09 and `DEBT-HIST` outcomes are exact and preserve no-inference | OPEN |
+| SCHEDULE | `SPEC-SCH-01` | `SCH-BND` results cover all approved boundary/edit/race choices | OPEN |
+| REMINDER | `SPEC-REM-01` | RCT-04–07 and `REM-REC` use one approved tuple with no burst | OPEN |
+| SECURITY | `SPEC-SEC-01`, `SPEC-SEC-02`, `SPEC-DEL-01` | `SEC-RLS`, `SEC-HIST`, and `DEL-LIFE` evidence passes for approved policies | OPEN |
+| UX | `SPEC-UX-01` | Complete versioned `UX-EVID` manifest and named acceptance | OPEN |
+| GOVERNANCE | `SPEC-GOV-01` | Complete `GOV-EVID`, assignments, physical limits, trace and sign-offs | OPEN |
+
+`STS-01`–`STS-15` already define the accepted safe-to-spend formula but have no execution evidence. `RC-PROV-01` and `BETA-LEGAL-01` remain later gates for provider, residency, retention/deletion, production-like operation, legal/privacy approval, performance, RPO/RTO, vulnerability, release and cohort evidence.
+
+**Implementation Gate: CLOSED.** A specified test, empty report, or documentation consistency check is not an executed PASS.

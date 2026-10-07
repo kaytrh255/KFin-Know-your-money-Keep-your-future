@@ -1,9 +1,9 @@
 # KFin Product Decision Log
 
-**Status:** Active<br>
-**Version:** 0.2<br>
+**Status:** Active — Round 3 blocker packets recorded; decisions remain open<br>
+**Version:** 0.3<br>
 **Decision date:** 2026-10-07<br>
-**Source:** Interactive specification review with the project owner
+**Source:** Interactive specification review with the project owner; Round 3 documentation remediation
 
 This log records product decisions made after the initial specification foundation was drafted. It replaces the recommendations previously listed as unresolved OQ items. A decision here changes product meaning; affected product, UX, architecture, security, database, and test specifications must remain consistent with it.
 
@@ -294,9 +294,28 @@ This map identifies the primary normative and verification destinations. It is n
 | OQ-18 | MVP boundaries §5 | Database §§15, 17; SEC-DATA-03; expiry/restore evidence |
 | OQ-19 | PRD-REM-04; UF-REM-01 | ADR-008; Database §11.1; long-overdue dedup tests |
 
-## 4. Remaining review and release blockers
+## 4. Round 3 blocker decision ledger
 
-The OQ choices are recorded, but the Implementation Gate remains CLOSED. Open specification blockers are `SPEC-AUTH-01`, `SPEC-AUTH-02`, `SPEC-FIN-01`, `SPEC-FIN-02`, `SPEC-DEBT-01`, `SPEC-SCH-01`, `SPEC-REM-01`, `SPEC-SEC-01`, `SPEC-SEC-02`, `SPEC-DEL-01`, `SPEC-UX-01`, and `SPEC-GOV-01`; exact decisions/evidence and owner roles are centralized in `docs/README.md`. `RC-PROV-01` and `BETA-LEGAL-01` remain later release gates. Documentation must not choose their outcomes silently.
+Round 3 records the exact decision packets below. **No row is an approved decision.** Every row remains OPEN until named authorized owners record one outcome and the required evidence passes the measurable criteria in the [Round 3 report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md). Approval records must use the [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md).
+
+| Blocker | Exact approval still required | Fixed decision/constraint that remains in force | Accountable owner | Minimum closure evidence | Status |
+|---|---|---|---|---|---|
+| `SPEC-AUTH-01` | Fresh rotated session after verification **or** explicit sign-in; result/cookie/CSRF/event/multi-tab/uncertain-response contract | Single-use atomic verification; no session fixation | Product Owner; Security co-approval | Threat, flow, session-fixation, retry, content review | OPEN — decision ready |
+| `SPEC-AUTH-02` | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and behavior | Invitation code, Argon2id, digest-only secrets, generic responses, reset revokes all sessions | Security Owner; Product co-approval | Threat, runtime benchmark, provider, abuse-cost, usability, replay tests | OPEN — decision ready |
+| `SPEC-FIN-01` | Append-only correction/void model, links, report effects, transitions, preview, audit and retry result | No history erasure/double effect/current-balance rewrite from closed history | Product Owner; Financial Integrity/Data/Security co-approval | Snapshot H–J and linked-domain/idempotency evidence | OPEN — decision ready |
+| `SPEC-FIN-02` | PostgreSQL linearization mechanism and exact winner/conflict/retry/idempotency contract | One latest segment; no silent re-anchor or duplicate effect | Data Owner; Architecture/Security/Financial Integrity co-approval | Concurrency spike, race/deadlock/timeout-after-commit tests | OPEN — decision ready |
+| `SPEC-DEBT-01` | Explicit-fact replay, mandatory fresh lender-reported balance, or explicitly bounded combination | No inferred principal, interest, fee, payoff, or outstanding | Product Owner; Financial Integrity/Data co-approval | DCT-08/09 and later-event/date-reorder proof | OPEN — decision ready |
+| `SPEC-SCH-01` | Leap-day fallback, bounds, generation horizon/batch, and exact series-edit behavior | One-off/every-N-week/month/year; monthly missing-day fallback | Product Owner; Data/Architecture co-approval | Fixed-clock boundary, load, UX and race evidence | OPEN — decision ready |
+| `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | At most one catch-up; no burst; no financial mutation | Product Owner; Architecture/Operations/QA co-approval | Exact RCT-04–07, outage, timezone, content evidence | OPEN — decision ready |
+| `SPEC-SEC-01` | RLS coverage/context/roles **or** explicit compensating controls and residual-risk acceptance | App authorization, same-user constraints, deny-by-default and two-user tests | Security Owner; Data/Architecture co-approval | Table/action matrix, pool/worker/operator and leakage proof | OPEN — decision ready |
+| `SPEC-SEC-02` | Event-by-event visibility/classification, safe details, delivery/display and retention | No secrets, precise location, internal rule, financial payload, or enumeration leak | Product Owner; Security/Privacy co-approval | Threat/privacy/content/accessibility/event API evidence | OPEN — decision ready |
+| `SPEC-DEL-01` | Request/cancel auth, complete deletion map, retained evidence, restore exclusion, legal hold/provider proof | Seven-day cancellation and active-data purge baseline; no restore resurrection | Privacy/Legal Owner; Product/Security/Operations co-approval | Legal opinion, inventory, races, provider proof, restore drill | OPEN — decision ready |
+| `SPEC-UX-01` | Versioned visual/content/usability/accessibility evidence manifest and sign-off | Specification review is not visual, usability, or accessibility acceptance | UX/Accessibility Owner; Product co-approval | Prototype, study, keyboard/screen-reader/reflow/contrast/state evidence | OPEN — evidence ready |
+| `SPEC-GOV-01` | Named assignments, delegation/conflict rules, physical limits, controlled evidence/sign-off history | Role-based accountability; silence or template creation is not approval | Product Owner; cross-domain co-approval | Completed authority, limits, evidence and ADR/spec sign-off registers | OPEN — evidence/assignment ready |
+
+## 5. Remaining review and release blockers
+
+The OQ choices are recorded and Round 3 has made all twelve `SPEC-*` packets decision-ready, but the Implementation Gate remains CLOSED. Exact decision dimensions, binary acceptance criteria, and changed-document list are centralized in the Round 3 report; status is centralized in `docs/README.md`. `RC-PROV-01` and `BETA-LEGAL-01` remain later release gates. Documentation must not choose blocker outcomes silently.
 
 Private Beta release additionally remains blocked by:
 
@@ -307,7 +326,7 @@ Private Beta release additionally remains blocked by:
 5. Accepted architecture/security/session/PWA/deployment/notification ADRs.
 6. Validated financial scenarios, prototypes, accessibility/usability review, and complete test traceability.
 
-## 5. Change control
+## 6. Change control
 
 Changing any accepted OQ decision requires:
 

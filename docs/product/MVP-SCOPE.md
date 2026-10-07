@@ -1,6 +1,6 @@
 # KFin MVP Scope
 
-**Status:** Draft — review required<br>
+**Status:** Draft — scope unchanged; Round 3 blockers remain open<br>
 **Release:** Private Beta (maximum 50 real users)<br>
 **Implementation gate:** CLOSED until specification approval and blocker resolution
 
@@ -151,18 +151,21 @@ The following are expressly excluded unless a new specification promotes them:
 
 ## 6. Definition of MVP complete
 
+Round 3 did not change MVP scope or promote any feature. It made all twelve pre-implementation `SPEC-*` blockers decision/evidence ready; every one remains OPEN. Their exact owner, evidence, and closure criteria are in the [Round 3 remediation report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md).
+
 The MVP is complete only when all applicable items below have evidence:
 
-1. Specifications and ADRs are approved and traceable to implementation work.
-2. In-scope acceptance outcomes pass automated and manual tests.
-3. Threat-model mitigations are implemented and reviewed.
-4. WCAG 2.2 AA core-flow review and small-screen review pass.
-5. Cross-user authorization tests pass for every financial resource.
-6. Migration, backup restoration, and rollback drills pass.
-7. Monitoring, alert routing, support ownership, and incident runbooks are active.
-8. Privacy/legal documents, retention policy, and beta consent are approved.
-9. No unresolved critical/high security vulnerability exists; accepted lower risks have owners and expiry dates.
-10. The release checklist is signed for the initial five-user cohort.
+1. Every pre-implementation `SPEC-*` blocker has an authorized outcome, synchronized specifications, and passing versioned evidence in the governance register.
+2. Specifications and required ADRs are approved with named approvers and are traceable to implementation work.
+3. In-scope acceptance outcomes pass automated and manual tests.
+4. Threat-model mitigations are implemented and reviewed.
+5. WCAG 2.2 AA core-flow review and small-screen review pass.
+6. Cross-user authorization tests pass for every financial resource.
+7. Migration, backup restoration, and rollback drills pass.
+8. Monitoring, alert routing, support ownership, and incident runbooks are active.
+9. Privacy/legal documents, retention policy, and beta consent are approved.
+10. No unresolved critical/high security vulnerability exists; accepted lower risks have owners and expiry dates.
+11. The release checklist is signed for the initial five-user cohort.
 
 A compilation, deployment, or happy-path demonstration alone does not satisfy this definition.
 

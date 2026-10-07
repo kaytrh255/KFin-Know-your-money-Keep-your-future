@@ -2,8 +2,8 @@
 
 **Status:** Blocked<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Architecture Owner; Data Owner; Security Owner; Operations Owner<br>
-**Exact blocker:** Managed PostgreSQL is the accepted logical data store, but ADR acceptance is blocked by `SPEC-SEC-01` (RLS decision/context design), `RC-PROV-01` (provider/region/version), and `BETA-LEGAL-01` (residency/retention constraints), plus missing ORM `BIGINT`/transaction, tenant-constraint, query-plan, and restore evidence.<br>
+**Decision owners:** Security Owner (`SPEC-SEC-01` accountable); Data Owner and Architecture Owner (mandatory co-approvers); Operations Owner (consulted/operational evidence)<br>
+**Exact blocker:** Managed PostgreSQL is the accepted logical data store, but ADR acceptance remains blocked by `SPEC-SEC-01`. Round 3 defines the RLS and compensating-control branches without selecting one. `RC-PROV-01` (provider/region/version) and `BETA-LEGAL-01` (residency/retention) remain later gates; ORM `BIGINT`/transaction, tenant-constraint, query-plan, pool-context, and restore evidence is absent.<br>
 **Related:** [Database specification](../DATABASE.md)
 
 ## Context
@@ -22,6 +22,19 @@ Use a single **managed PostgreSQL** database as the transactional source of trut
 - Keep the database on a private/restricted network with TLS, least-privilege runtime/migration/operator roles, encrypted managed storage/backups, and restoration testing.
 - Use PostgreSQL-backed outbox/job claiming at beta scale rather than Redis or a broker.
 - Evaluate Row Level Security as required defense in depth before final acceptance; application authorization remains mandatory either way.
+
+### Round 3 `SPEC-SEC-01` decision packet
+
+Security, Data, and Architecture owners must select exactly one beta posture:
+
+1. **RLS required:** enumerate covered private tables/actions; define trusted transaction-local tenant context, pool reset, worker/operator/migration roles, bypass policy, deny/failure behavior, and policy tests.
+2. **RLS omitted for beta:** record residual-risk acceptance and mandatory owner-scoped repository interfaces, composite ownership constraints, least-privilege roles, architecture tests that reject unscoped access, and complete two-user API coverage.
+
+Both branches require application authorization, server-derived identity, same-user relationships, deny-by-default behavior, safe not-found/forbidden equivalence, pool/worker/operator review, and private table × action evidence.
+
+**Acceptance condition:** one branch is recorded here with named Security/Data/Architecture approvers, date, exact scope, rejected alternative/rationale, evidence links, and review trigger; connection reuse and all special roles have deterministic tests. Until then `SPEC-SEC-01` and this ADR remain **Blocked / OPEN — decision ready**.
+
+`SPEC-FIN-02` is a separate pre-financial-implementation decision: the per-account snapshot/transaction serialization mechanism and conflict contract must be captured in an explicit amendment to an accepted ADR or a new ADR with PostgreSQL concurrency evidence. Selecting PostgreSQL alone does not select that mechanism.
 
 ## Alternatives considered
 
@@ -87,9 +100,11 @@ Use a single **managed PostgreSQL** database as the transactional source of trut
 
 - Before Release Candidate, select provider/region/version under OQ-16/OQ-17 and validate the accepted 90-day backup maximum.
 - Validate ORM/query tool transaction and `BIGINT` behavior.
-- Prototype composite tenant constraints and RLS with connection pooling.
+- Prototype composite tenant constraints and both RLS/pool-context feasibility and omitted-RLS architecture enforcement before selecting the `SPEC-SEC-01` branch.
+- Complete the private table × action, two-user, connection-reuse, worker, operator, migration and bypass evidence matrix.
 - Load representative dashboard/schedule data and inspect plans.
 - Complete a backup/restore rehearsal in a production-like environment before beta.
+- Record named approvers, source versions, evidence results and risk/review expiry in the governance register; documentation consistency alone is not acceptance.
 
 ## Revisit when
 

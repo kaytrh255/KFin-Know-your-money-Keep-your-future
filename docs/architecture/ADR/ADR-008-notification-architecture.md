@@ -3,7 +3,7 @@
 **Status:** Blocked<br>
 **Date:** 2026-10-07<br>
 **Decision owners:** Product Owner; Architecture Owner; Operations Owner; QA Owner<br>
-**Exact blocker:** `SPEC-REM-01` leaves the one-stage-or-none catch-up selection, suppression record, and recovery window unapproved after downtime, late creation, or timezone change. Atomic intent/crash-reclaim, race, timezone, Vietnamese-content, accessibility, and channel-separation evidence also does not exist.<br>
+**Exact blocker:** Round 3 makes `SPEC-REM-01` decision-ready but does not select catch-up emission, one-stage precedence, recovery window, first-overdue treatment, suppression record, timezone/late-creation result, or state-race behavior. Atomic intent/crash-reclaim, race, timezone, Vietnamese-content, accessibility, and channel-separation evidence also does not exist.<br>
 **Related:** [PRD reminders](../../product/PRD.md#78-schedule-reminders-and-warnings), OQ-06, OQ-12, OQ-19
 
 ## Context
@@ -43,8 +43,25 @@ Use a **PostgreSQL transactional outbox/job mechanism plus a small worker**, whi
 - **REM-INV-06 — Closed-app independence:** server evaluation does not depend on Web/PWA lifecycle. A closed app does not stop eligible server evaluation, and opening/returning to the app does not itself evaluate or synthesize elapsed stages.
 - **REM-INV-07 — Delayed return:** return displays persisted unread/read state once. It does not replay worker history, duplicate delivered stages, or emit one notification per elapsed stage.
 - **REM-INV-08 — No catch-up burst:** when downtime, late occurrence creation, or timezone change makes multiple stages elapsed, one recovery evaluation creates at most one catch-up notification for that occurrence.
-- **REM-INV-09 — Catch-up selection blocker:** which single eligible stage, if any, wins; how non-selected elapsed stages are recorded; and the recovery-window boundary remain **BLOCKER `SPEC-REM-01`**, owned by the Product Owner. No implementer may infer `latest`, `earliest`, `most severe`, or `all`.
+- **REM-INV-09 — Catch-up selection blocker:** which single eligible stage, if any, wins; how non-selected elapsed stages are recorded; and the recovery-window boundary remain **BLOCKER `SPEC-REM-01`**, accountable to the Product Owner with Architecture, Operations, and QA co-approval. No implementer may infer `latest`, `earliest`, `most severe`, or `all`.
 - **REM-INV-10 — Channel boundary:** catch-up remains in-app only; it never falls back to payment-reminder email, push, SMS, or chat.
+
+### Round 3 `SPEC-REM-01` decision packet
+
+Product, Architecture, Operations, and QA owners must approve one complete tuple; no tuple component may be inferred independently:
+
+1. emit zero or one catch-up after exactly one missed stage;
+2. emit zero or one catch-up after multiple missed stages;
+3. if one is emitted, deterministic precedence (`latest`, `earliest`, `first-overdue`, another reviewed rule, or condition-specific mapping);
+4. maximum recovery age/window and boundary inclusivity;
+5. first-overdue treatment relative to pre-due/due-today stages;
+6. persisted status/reason for every elapsed non-selected stage;
+7. outcome after forward/backward timezone changes and late occurrence creation;
+8. outcome when occurrence state/version changes during claim/insert.
+
+**Required evidence:** exact RCT-04–RCT-07 and `REM-REC` outcomes, fixed-clock/timezone tests, worker outage/late-creation simulations, state-race and deduplication proof, and reviewed Vietnamese compact/expanded accessible content.
+
+**Acceptance condition:** all eight tuple items have one approved value; each affected test has one result; source documents agree; named approvers/date/source version/evidence are recorded. `REM-INV-08` and `REM-INV-10` cannot be relaxed. Until then ADR-008 remains **Blocked** and `SPEC-REM-01` remains **OPEN — decision ready**.
 
 ### Delivery and job behavior
 
@@ -125,6 +142,7 @@ Use a **PostgreSQL transactional outbox/job mechanism plus a small worker**, whi
 - Prove one notification per stage and one first-overdue notification over long unresolved periods.
 - Review Vietnamese notification content, accessibility, and no-external-channel UX.
 - Confirm authentication/security email remains operationally separate.
+- Retain versioned RCT/`REM-REC` results, content/accessibility review, named approvers, date, source versions and review trigger in the governance register; a policy table without evidence is not acceptance.
 
 ## Revisit when
 

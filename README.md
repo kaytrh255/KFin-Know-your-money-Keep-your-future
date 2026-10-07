@@ -6,9 +6,9 @@ KFin is a production-oriented personal finance management platform being designe
 
 **Specification foundation — implementation has not started.**
 
-The current repository intentionally contains product, UX, architecture, security, database, and testing specifications only. Documents remain drafts pending owner approval/evidence; the Round 1 ADR audit records Proposed or Blocked status and zero Accepted ADRs.
+The current repository intentionally contains product, UX, architecture, security, database, governance, review, and testing specifications only. Documents remain drafts pending authorized owner decisions and evidence. Round 3 makes all pre-implementation blocker packets decision-ready, but every `SPEC-*` blocker remains OPEN; the ADR register still records Proposed or Blocked status and zero Accepted ADRs.
 
-Start with the [KFin Specification Foundation](docs/README.md).
+Start with the [KFin Specification Foundation](docs/README.md), then review the [Round 3 remediation report](docs/reviews/SPECIFICATION-REMEDIATION-ROUND-3.md) and [Approval and Evidence Register](docs/governance/APPROVAL-AND-EVIDENCE-REGISTER.md).
 
 ## Specification areas
 
@@ -24,6 +24,8 @@ Start with the [KFin Specification Foundation](docs/README.md).
 - [Threat model](docs/security/THREAT-MODEL.md)
 - [Test strategy](docs/testing/TEST-STRATEGY.md)
 - [Release checklist](docs/testing/RELEASE-CHECKLIST.md)
+- [Governance approval and evidence register](docs/governance/APPROVAL-AND-EVIDENCE-REGISTER.md)
+- [Specification Remediation Round 3 report](docs/reviews/SPECIFICATION-REMEDIATION-ROUND-3.md)
 
 ## Implementation gate
 
@@ -33,8 +35,9 @@ Do not implement application functionality until:
 
 1. accepted product decisions in the [decision log](docs/product/DECISION-LOG.md) are reflected consistently across specifications;
 2. product/UX/security/architecture/database/test specifications are reviewed and approved;
-3. every required Proposed/Blocked ADR is genuinely Accepted with owner approval and evidence;
-4. every pre-implementation `SPEC-*` blocker in the centralized register is resolved; Release Candidate and beta gates remain enforceable at their stated phases;
-5. implementation work is traceable to requirements, flows, invariants, and tests.
+3. every required Proposed/Blocked ADR is genuinely Accepted with named accountable/co-approver approval and versioned evidence;
+4. every pre-implementation `SPEC-*` blocker in the centralized register is resolved against its Round 3 acceptance criteria—not merely documented; Release Candidate and beta gates remain enforceable at their stated phases;
+5. the governance register contains named role assignments, approved physical limits, evidence records, and specification/ADR sign-offs;
+6. implementation work is traceable to requirements, flows, invariants, and tests.
 
 The priority is: **correct product → excellent UX → secure architecture → maintainable implementation → reliable production system**.

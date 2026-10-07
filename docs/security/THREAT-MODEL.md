@@ -1,7 +1,7 @@
 # KFin Threat Model
 
-**Status:** Draft — review required<br>
-**Version:** 0.3<br>
+**Status:** Draft — Round 3 threat-review contracts added; no review evidence<br>
+**Version:** 0.4<br>
 **Method:** Asset/threat-boundary analysis informed by STRIDE and abuse cases<br>
 **Scope:** Proposed Private Beta Web/PWA, edge, API, worker, PostgreSQL, email, observability, CI/CD, backups, and operator access
 
@@ -251,3 +251,24 @@ Review this model:
 - at least once per major release.
 
 Each review updates assets, boundaries, threats, implemented controls, test evidence, incidents, residual risk owner, and review date.
+
+## 13. Round 3 blocker threat-review requirements
+
+Round 3 documents the required review; no threat review has occurred and no residual risk has been accepted.
+
+| Blocker | Threat decision/review required | Fixed safety boundary | Required evidence and closure condition | Status |
+|---|---|---|---|---|
+| `SPEC-AUTH-01` | Compare fresh-session and explicit-sign-in branches for fixation, CSRF, account switch, replay, timeout-after-consume and multi-tab confusion | Atomic single-use verification; no pre-auth identifier survives | Product + Security select one branch; `AUTH-VRF` evidence passes and TM-09 residual is re-evaluated | OPEN — decision ready |
+| `SPEC-AUTH-02` | Assess all values against guessing, enumeration, email cost, hash DoS, provider failure, stolen token and concurrent replay | Invitation code only, Argon2id, digest-only secrets, generic errors, reset-all revocation | Security + Product approve every dimension; `AUTH-POL` evidence passes; TM-01–08/31/33 residuals are owned | OPEN — decision ready |
+| `SPEC-FIN-01` | Threat-model malicious corrections, cross-segment/link tampering, stale/idempotent replay and audit erasure | No history erasure/double effect/current-balance rewrite from closed history | Approved model passes H–J/`FIN-COR`; TM-15/16/18/42 residuals are reviewed by Security + Financial Integrity | OPEN — decision ready |
+| `SPEC-FIN-02` | Threat-model snapshot/transaction races, lock abuse, stale client and timeout-after-commit ambiguity | One latest segment; no silent re-anchor/duplicate effect | Selected mechanism passes `FIN-RACE`; TM-18/42 concurrency residual is reviewed | OPEN — decision ready |
+| `SPEC-DEBT-01` | Threat-model forged/missing facts and later-event correction used to create false outstanding confidence | No inferred component or outstanding | DCT-08/09/`DEBT-HIST` exact outcomes pass; TM-18 residual reviewed | OPEN — decision ready |
+| `SPEC-SCH-01` | Threat-model unbounded recurrence generation, malicious series edits and edit/worker races | Bounded supported cadence; time passage never confirms money | Approved bounds/semantics pass `SCH-BND`; TM-17/19/29/30/32 residuals reviewed | OPEN — decision ready |
+| `SPEC-REM-01` | Threat-model outage/timezone/late-creation/state races and notification spam/confusion | At most one catch-up; no burst; no financial authority | Approved tuple passes RCT-04–07/`REM-REC`; TM-19/32 residuals reviewed | OPEN — decision ready |
+| `SPEC-SEC-01` | Compare RLS context/bypass/pool risks with omitted-RLS repository/control risks | App authorization, same-user constraints, least privilege and two-user tests under both branches | Selected branch passes `SEC-RLS`; any omitted-RLS residual is explicit, time-bounded and signed | OPEN — decision ready |
+| `SPEC-SEC-02` | Review disclosure, false location, phishing, enumeration, operator-field leakage, notification fatigue and retention | No secrets/internal rules/financial payload/precise-location claim | Event table passes `SEC-HIST`; Product + Security + Privacy/Legal own resulting residuals | OPEN — decision ready |
+| `SPEC-DEL-01` | Review malicious request/cancel, purge races, provider failure, tombstone compromise/outage, legal hold and restore resurrection | Seven-day cancellation; no reusable secret retention; restored deleted account cannot activate | Approved policy passes `DEL-LIFE` and restore drill; TM-27/34/35 residuals receive legal/security/operations disposition | OPEN — decision ready |
+| `SPEC-UX-01` | Validate that critical safety information is perceivable, understandable and operable under compact/accessibility conditions | Specification or automated checks alone are not acceptance | `UX-EVID` includes security/financial/deletion comprehension and no unresolved severe issue | OPEN — evidence ready |
+| `SPEC-GOV-01` | Assign residual-risk authority, separation of producer/approver, expiry and escalation | Silence/role label is not risk acceptance | Named owners and versioned review records exist for every affected threat and ADR | OPEN — evidence/assignment ready |
+
+Evidence and approvals must use the [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md). A documented residual risk is not accepted until the authorized owner signs it with controls and expiry.

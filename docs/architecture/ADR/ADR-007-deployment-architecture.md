@@ -3,7 +3,7 @@
 **Status:** Proposed<br>
 **Date:** 2026-10-07<br>
 **Decision owners:** Architecture Owner; Operations Owner; Security Owner; Privacy/Legal Owner<br>
-**Exact blocker:** The vendor-neutral topology/provider-deferral direction is accepted by OQ-09/OQ-17, but `SPEC-GOV-01` lacks the required logical-architecture spike and owner/cost/RPO/RTO evidence. `RC-PROV-01` and `BETA-LEGAL-01` separately block provider-specific Release Candidate and beta approval; no deployed readiness is claimed.<br>
+**Exact blocker:** The vendor-neutral topology/provider-deferral direction is accepted by OQ-09/OQ-17, but `SPEC-GOV-01` lacks the required logical-architecture spike and named owner/cost/RPO/RTO evidence. `SPEC-DEL-01` also leaves restore-exclusion storage/key/access/expiry, provider purge proof, and restore-activation behavior unapproved. `RC-PROV-01` and `BETA-LEGAL-01` separately block provider-specific Release Candidate and beta approval; no deployed readiness is claimed.<br>
 **Related:** [Architecture specification](../ARCHITECTURE.md), OQ-09, OQ-10, OQ-16, OQ-17, OQ-18
 
 ## Context
@@ -42,6 +42,18 @@ Deployment requirements:
 - Prefer a Southeast Asia region, but complete Vietnamese cross-border/data-residency review before beta.
 
 Under accepted OQ-17, specific compute/database/email/observability vendors, domain, final region, and budget are deferred until before Release Candidate. This ADR can approve the logical topology only; it cannot evidence production readiness before a provider addendum and deployed validation.
+
+### Round 3 data-lifecycle architecture boundary
+
+`SPEC-DEL-01` remains **OPEN — decision ready**. Privacy/Legal, Product, Security, and Operations owners must approve the full deletion policy before Architecture records its implementation mechanism. Any ADR-007 amendment or dedicated lifecycle ADR must then specify:
+
+- the restore-exclusion register’s trust/restore boundary, subject digest, storage, key rotation, least-privilege access, replication, expiry, availability and audit;
+- the activation gate that obtains the current register and re-deletes restored data before any account becomes active;
+- first-party/provider purge orchestration, retry, proof, escalation and legal-hold interaction;
+- retained minimum evidence and its lawful purpose/expiry without reusable authentication secrets;
+- restore drill and provider evidence linked to the approved deletion map.
+
+Round 3 does not select a provider, storage service, key system, legal basis, retained field, or legal-hold policy. The seven-day cancellation and no-restored-account-reactivation boundaries remain fixed.
 
 ## Alternatives considered
 
@@ -111,6 +123,8 @@ Under accepted OQ-17, specific compute/database/email/observability vendors, dom
 - Confirm explicit acceptance of OQ-17’s provider deferral and its Release Candidate deadline.
 - Validate locally/ephemerally that one immutable image can run API/worker, same-origin routing works, and standard PostgreSQL/provider adapters remain portable.
 - Record provisional cost, RPO/RTO, residency, and operational-owner assumptions.
+- Obtain the approved `SPEC-DEL-01` policy and validate the vendor-neutral restore-exclusion/activation boundary without claiming a provider-specific design.
+- Record named approvers, source versions, evidence results and review trigger in the governance register.
 
 ## Additional Release Candidate gate
 

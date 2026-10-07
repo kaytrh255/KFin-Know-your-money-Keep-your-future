@@ -1,7 +1,7 @@
 # KFin Security Requirements
 
-**Status:** Draft — review required<br>
-**Version:** 0.3<br>
+**Status:** Draft — Round 3 security decision contracts recorded; approval/evidence required<br>
+**Version:** 0.4<br>
 **Applies to:** Web/PWA, API, worker, PostgreSQL, edge, CI/CD, providers, operator access<br>
 **Risk posture:** Sensitive personal and financial data; fail closed for identity, authorization, and financial writes
 
@@ -84,8 +84,10 @@ Financial values and note text MUST NOT be sent to session replay, advertising, 
 | SEC-AUTH-13 | Plaintext OTP/reset secrets MUST NOT be stored in the ordinary outbox. Under the proposed MVP path they exist only in request-process memory for immediate provider submission after digest-only challenge commit; any asynchronous encrypted-envelope alternative requires a separate key-management review. |
 | SEC-AUTH-14 | Private Beta invitation codes MUST be high-entropy, purpose-bound, expiring, single-use, digest-only at rest, abuse-limited, and atomically consumed with pending-account creation. Invalid/expired/used/wrong-email states MUST remain generic externally. |
 | SEC-AUTH-15 | Every Private Beta registration MUST present and consume a valid invitation code. Email binding may restrict a code, but a server-side email allowlist MUST NOT grant admission or bypass code validation. |
+| SEC-AUTH-16 | Successful verification MUST follow exactly one approved `SPEC-AUTH-01` branch: issue a fresh rotated authenticated session or issue no authenticated session and require explicit sign-in. No pre-authenticated identifier may be promoted, and cookies/CSRF/events/multi-tab/uncertain-response behavior MUST be explicit before implementation. |
+| SEC-AUTH-17 | Every `SPEC-AUTH-02` invitation, password, OTP, reset, login-abuse, lifetime, rotation/replay, and known-password-change value/behavior MUST have named Security + Product approval and linked evidence. Proposed examples/framework defaults are not approved policy. |
 
-Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldown, target/IP hourly and daily caps—is pending validation and tuning. Rate-limit messages remain generic.
+Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldown, target/IP hourly and daily caps—is pending validation and tuning. Rate-limit messages remain generic. `SPEC-AUTH-01` and `SPEC-AUTH-02` remain **OPEN — decision ready**; Round 3 did not select a verification outcome or approve these baseline values.
 
 ## 7. Session and CSRF requirements
 
@@ -181,6 +183,7 @@ Exact thresholds are configuration reviewed through abuse/load tests; they must 
 | SEC-DB-06 | Database statements/transactions MUST have timeouts appropriate to endpoint/job and release locks reliably. |
 | SEC-DB-07 | Reconciliation checks MUST detect orphan/link/dedup/money inconsistencies without logging private payload. |
 | SEC-DB-08 | Direct production data changes MUST be exceptional, approved, scripted/reviewed, backed up, and audited. |
+| SEC-DB-09 | `SPEC-SEC-01` MUST select either reviewed PostgreSQL RLS coverage/context/roles or explicit compensating controls with residual-risk acceptance. Under either branch, application authorization, same-user constraints, least privilege, deny-by-default, connection-reuse safety, and two-user tests remain mandatory. |
 
 ## 13. Secrets and cryptography
 
@@ -206,6 +209,8 @@ Application-level encryption of selected fields may be added only with a complet
 | SEC-LOG-05 | Audit records MUST be append-oriented, access restricted, time synchronized, retained under policy, and protected from normal application update/delete. |
 | SEC-LOG-06 | Alerts MUST be actionable, routed to named responders, tested, and avoid including private payload. |
 | SEC-LOG-07 | Failed authorization, token replay, unusual auth volume, queue backlog, backup failure, database exhaustion, and deployment health MUST be observable. |
+| SEC-LOG-08 | Before any user-facing security-history implementation, `SPEC-SEC-02` MUST classify each event family as user-visible, operator-only, both, or not retained and approve delivery, display, safe fields, and retention. An audit event is not automatically safe or useful for user display. |
+| SEC-LOG-09 | User-visible security history MUST NOT disclose passwords/tokens/OTPs, internal detection rules, precise location claims, financial amounts/notes, another user, or reliable account-existence signals. Operator-only fields MUST be excluded from owner-facing queries by explicit output schemas and authorization tests. |
 
 ## 15. PWA and client requirements
 
@@ -241,6 +246,9 @@ Application-level encryption of selected fields may be added only with a complet
 | SEC-DATA-06 | A deletion cancellation before the deadline MUST be authenticated, audited, race-safe against purge claiming, and produce one unambiguous account state. |
 | SEC-DATA-07 | Legal hold/incident exceptions MUST record authority, scope, access, review date, and expiry; they MUST NOT become indefinite informal retention. |
 | SEC-DATA-08 | Vietnam-first processing, Southeast Asia region preference, cross-border transfer, and provider retention MUST receive Vietnamese legal/privacy review before external beta. |
+| SEC-DATA-09 | `SPEC-DEL-01` cannot close until the request/cancel identity requirements, pending-account/session behavior, complete first-party/provider deletion map, retained-evidence legal basis/expiry, independent restore-exclusion design, legal-hold procedure, provider proof, and restore activation gate are approved and tested. |
+
+The seven-day cancellation and post-deadline active-data purge baseline remains fixed. Round 3 does not decide the request channel, retained fields, legal basis, tombstone key/storage/expiry, legal-hold authority, or provider failure response. Those choices remain **OPEN — decision ready** under `SPEC-DEL-01`.
 
 ## 17. Backup, recovery, and operational security
 
@@ -294,3 +302,16 @@ Private Beta MUST NOT start unless:
 - The extended 90-day backup/log and 24-month security/audit baseline increases privacy/breach impact and remains subject to legal approval and automated deletion tests.
 - RLS and exact auth/session thresholds remain architecture/security review decisions; payment reminders are in-app only and native security remains future scope.
 - This document is not evidence of compliance with a regulation or security standard.
+
+## 21. Round 3 security closure register
+
+| Blocker | Security approval needed | Accountable / mandatory co-approvers | Required evidence | Security acceptance condition | Status |
+|---|---|---|---|---|---|
+| `SPEC-AUTH-01` | One post-verification outcome and complete cookie/CSRF/event/multi-tab/uncertain-response contract | Product / Security | Branch threat review; fixation, retry and multi-tab tests; content review | No pre-auth identifier survives; one deterministic outcome exists across flows, ADRs and tests | OPEN — decision ready |
+| `SPEC-AUTH-02` | Exact values/behaviors for every auth/session dimension and change authority | Security / Product | Threat/abuse review, Argon2 benchmark, provider assumptions, usability and replay tests | Every proposed value is approved/replaced; boundary/failure expectations are exact and synchronized | OPEN — decision ready |
+| `SPEC-SEC-01` | RLS branch with policies/context/roles, or omitted-RLS branch with compensating controls/risk | Security / Data + Architecture | Table/action matrix, pool leakage, worker/operator, two-user tests; residual-risk record if omitted | Every private path is covered, connection reuse is safe, approvers/evidence are recorded in ADR-003 | OPEN — decision ready |
+| `SPEC-SEC-02` | Event-family visibility classification, safe fields, delivery/display and retention | Product / Security + Privacy/Legal | Event table, threat/privacy/content/accessibility review and API authorization tests | Every event has one class; operator-only fields cannot leak; all source documents agree | OPEN — decision ready |
+| `SPEC-DEL-01` | Complete request/cancel/purge/retention/tombstone/legal-hold/provider contract | Privacy/Legal / Product + Security + Operations | Legal opinion, data map, provider proof, race tests, access/key review, restore drill | Every data category has disposition and restored deleted data cannot activate | OPEN — decision ready |
+| `SPEC-GOV-01` | Named security/incident/operations/privacy authorities, evidence control and approved hard bounds | Product / cross-domain owners | Completed governance register, physical limits, sign-offs and traceability | No security-critical role/value/evidence row is unassigned or missing | OPEN — evidence/assignment ready |
+
+Full decision dimensions and binary criteria are in the [Round 3 remediation report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md). Required records belong in the [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md). This register is documentation, not security evidence.

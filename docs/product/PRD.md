@@ -1,8 +1,8 @@
 # Product Requirements Document
 
 **Product:** KFin — Know your money, Keep your future<br>
-**Status:** Draft — review required<br>
-**Version:** 0.3<br>
+**Status:** Draft — Round 3 decision packets recorded; approval required<br>
+**Version:** 0.4<br>
 **Date:** 2026-10-07<br>
 **Target release:** Private Beta, at most 50 real users
 
@@ -274,19 +274,24 @@ No financial note text, raw amount, password, token, or OTP may be sent to produ
 
 OQ-01 through OQ-19 have recorded dispositions in the [Product Decision Log](DECISION-LOG.md). OQ-17 deliberately defers specific provider/domain/region/budget selection until before Release Candidate and is a release risk, not permission to claim deployment readiness.
 
-The following still require specification review or explicit owner approval; they are not silently resolved by the OQ dispositions:
+Round 3 makes the following decisions/evidence **ready for authorized review**; it does not approve them:
 
-- `SPEC-AUTH-01` and `SPEC-AUTH-02`: post-verification session behavior and approved authentication/session policy values;
-- `SPEC-FIN-01` and `SPEC-FIN-02`: exact cross-segment correction/void/link/report semantics and snapshot/transaction serialization/retry behavior, represented by blocked snapshot scenario J;
-- `SPEC-DEBT-01`: historical debt-payment correction/outstanding behavior when later explicit events exist;
-- `SPEC-SCH-01`: yearly 29-February behavior, bounded interval/end limits, and series-edit semantics;
-- `SPEC-REM-01`: which one missed stage, if any, catch-up emits after downtime/timezone/late creation; multi-stage burst remains prohibited;
-- `SPEC-SEC-01`: RLS or accepted compensating controls;
-- `SPEC-SEC-02`: which security events are user-visible versus operator-only, with safe detail/notification/display behavior;
-- `SPEC-DEL-01`: legally approved deletion map, independent restore-exclusion register, retained pseudonymous evidence, and request/cancellation channel;
-- `SPEC-UX-01`: separate visual-prototype, Vietnamese-content, usability, and accessibility evidence;
-- `SPEC-GOV-01`: named accountable approvers and retained validation for `STS-01`–`STS-15`, snapshot A–J, debt, reminder, flow, prototype, and architecture scenarios;
-- RPO/RTO, incident/support ownership, and `RC-PROV-01` provider selection at its stated gate.
+| Blocker | Product decision or evidence still required | Product-accountable role | Post-Round-3 state |
+|---|---|---|---|
+| `SPEC-AUTH-01` | Fresh rotated session after verification or explicit sign-in, with result/cookie/CSRF/event/multi-tab/retry behavior | Product Owner; Security co-approval | OPEN — decision ready |
+| `SPEC-AUTH-02` | Complete invitation/password/OTP/reset/abuse/session/rotation/password-change policy | Security Owner; Product co-approval | OPEN — decision ready |
+| `SPEC-FIN-01` | Correction/void/link/report/audit/retry model | Product Owner; Financial Integrity/Data/Security co-approval | OPEN — decision ready |
+| `SPEC-FIN-02` | Snapshot/transaction linearization and conflict/retry contract | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — decision ready |
+| `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported balance for historical correction with later events | Product Owner; Financial Integrity/Data co-approval | OPEN — decision ready |
+| `SPEC-SCH-01` | Leap-day fallback, recurrence/generation bounds, and exact series-edit behavior | Product Owner; Data/Architecture co-approval | OPEN — decision ready |
+| `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | Product Owner; Architecture/Operations/QA co-approval | OPEN — decision ready |
+| `SPEC-SEC-01` | PostgreSQL RLS posture or explicit compensating controls/residual risk | Security Owner; Data/Architecture co-approval | OPEN — decision ready |
+| `SPEC-SEC-02` | Event-by-event visibility, safe fields, delivery/display, and retention classification | Product Owner; Security/Privacy co-approval | OPEN — decision ready |
+| `SPEC-DEL-01` | Request/cancel authentication, deletion map, retained evidence, restore exclusion, legal hold and provider proof | Privacy/Legal Owner; Product/Security/Operations co-approval | OPEN — decision ready |
+| `SPEC-UX-01` | Versioned visual/content/usability/accessibility evidence and sign-off | UX/Accessibility Owner; Product co-approval | OPEN — evidence ready |
+| `SPEC-GOV-01` | Named assignments, delegation/conflict rules, physical limits, evidence and sign-off history | Product Owner; cross-domain co-approval | OPEN — evidence/assignment ready |
+
+Exact decision dimensions, immutable safety constraints, required evidence, and binary acceptance criteria are normative in the [Round 3 remediation report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md). Approval records belong in the [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md). RPO/RTO, incident/support ownership, and `RC-PROV-01` provider selection remain due at their stated gates.
 
 ## 14. Approval criteria
 
@@ -297,4 +302,5 @@ This PRD may move from `Draft` to `Approved` only when:
 3. financial definitions are validated against representative user scenarios;
 4. legal/privacy ownership is assigned;
 5. UX, architecture, security, database, and test documents are mutually consistent;
-6. approved reviewers and date are recorded in version control.
+6. every due `SPEC-*` blocker has an authorized outcome and passing evidence rather than only a documented decision packet;
+7. named approvers, date, source version, and evidence links are recorded in the governance register and version control.

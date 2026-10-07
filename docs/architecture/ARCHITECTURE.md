@@ -1,6 +1,6 @@
 # KFin Architecture Specification
 
-**Status:** Draft — review required<br>
+**Status:** Draft — Round 3 architecture decision contracts recorded; approval/evidence required<br>
 **Architecture style:** Proposed modular monolith<br>
 **Scale target:** Private Beta, at most 50 real users<br>
 **Related ADRs:** [ADR index](ADR/README.md)
@@ -418,3 +418,17 @@ Architecture approval requires:
 - traceability from architecture requirements to tests.
 
 Release Candidate additionally requires selected providers/domain/region/budget, a provider ADR addendum, documented subprocessors, production-like staging, legal/residency review, restore/rollback evidence, and measured RPO/RTO.
+
+## 21. Round 3 architecture decision contracts
+
+| Blocker | Architecture approval boundary | Required technical evidence | Architecture acceptance condition | Status |
+|---|---|---|---|---|
+| `SPEC-AUTH-01` | If verification creates a session, define a fresh post-verification credential boundary, cookie/CSRF issuance and replay/uncertain-result behavior; otherwise prove no authenticated session is issued | Threat/session-fixation review and multi-tab/timeout tests on the intended same-origin path | Product and Security select one outcome; ADR-002/004, flows and tests contain no alternative behavior | OPEN — decision ready |
+| `SPEC-AUTH-02` | Define every auth/session value plus rotation, grace, replay containment, revocation and provider-failure semantics | Argon2/runtime benchmark, provider quota assumptions, concurrency/replay and abuse tests | Security/Product approval with exact configurable bounds and change authority | OPEN — decision ready |
+| `SPEC-FIN-02` | Select the per-account linearization point, transaction/lock/isolation ordering, winner/conflict/retry behavior and timeout-after-commit idempotency result | PostgreSQL concurrency spike, deterministic race/deadlock/timeout tests, query/lock review | Scenario J has one expected result per branch and an accepted ADR amendment/new ADR links the evidence | OPEN — decision ready |
+| `SPEC-SEC-01` | Select RLS policy/context/roles or approve complete compensating controls and residual risk; application authorization remains mandatory either way | Table/action matrix, pool-context leakage, two-user, worker/operator/migration tests | ADR-003 records one posture, exhaustive scope, named approvers and evidence | OPEN — decision ready |
+| `SPEC-SCH-01` | Approve generation horizon/batch/series bounds and edit-versus-worker transaction behavior | Fixed-clock boundary/load/race evidence at beta scale | PRD, Database, worker design and tests use one bounded policy | OPEN — decision ready |
+| `SPEC-REM-01` | Approve catch-up policy tuple and worker state-race/suppression behavior | Exact RCT-04–07, outage, timezone and late-creation evidence | ADR-008 and all reminder contracts agree without relaxing one-catch-up/no-burst | OPEN — decision ready |
+| `SPEC-DEL-01` | Define restore-exclusion store boundary, keys/access, backup reconciliation, provider purge and activation gate | Restore drill plus access/key/provider evidence | Restored deleted data cannot become active; Privacy/Legal, Security and Operations approve | OPEN — decision ready |
+
+The full owner/co-approver map, decision alternatives, and measurable criteria are in the [Round 3 report](../reviews/SPECIFICATION-REMEDIATION-ROUND-3.md). Architecture review does not select an unresolved option implicitly.

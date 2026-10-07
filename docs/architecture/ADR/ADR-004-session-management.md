@@ -2,8 +2,8 @@
 
 **Status:** Blocked<br>
 **Date:** 2026-10-07<br>
-**Decision owners:** Security Owner; Product Owner; Architecture Owner<br>
-**Exact blocker:** `SPEC-AUTH-01` and `SPEC-AUTH-02` leave post-verification behavior, idle/absolute/recent-auth values, known-password-change revocation, rotation cadence, and prior-token grace/replay response unapproved; `SPEC-SEC-02` leaves user-visible versus operator-only session/security events unapproved. Browser/PWA cookie, CSRF, tab-race, and lookup-load evidence is also absent.<br>
+**Decision owners:** Product Owner (`SPEC-AUTH-01` and `SPEC-SEC-02` accountable); Security Owner (`SPEC-AUTH-02` accountable and mandatory co-approver); Privacy/Legal Owner (`SPEC-SEC-02` mandatory co-approver); Architecture Owner (consulted/technical evidence)<br>
+**Exact blocker:** Round 3 makes `SPEC-AUTH-01`, `SPEC-AUTH-02`, and `SPEC-SEC-02` decision-ready but leaves post-verification behavior, session/replay values, known-password-change consequences, and event visibility/disclosure unapproved. Browser/PWA cookie, CSRF, tab-race, privacy/content, and lookup-load evidence is also absent.<br>
 **Related:** [ADR-002](ADR-002-authentication-strategy.md), [Security requirements](../../security/SECURITY-REQUIREMENTS.md)
 
 ## Context
@@ -49,6 +49,16 @@ Use **opaque server-side sessions** backed by PostgreSQL.
 ### Future native client
 
 Capacitor/native transport requires a new security review. It may use the same opaque server-side session concept but stores bearer material in platform secure storage and uses an explicit authorization transport with origin-independent CSRF reasoning. Browser tokens must not simply be copied into JavaScript storage.
+
+### Round 3 unresolved decision packet
+
+| Blocker | Session/security-history decision still required | Fixed boundary | Required evidence and ADR acceptance condition |
+|---|---|---|---|
+| `SPEC-AUTH-01` | Verification creates a fresh rotated session or creates none; cookie/CSRF/event/multi-tab/uncertain-response behavior for the selected branch | Never promote pre-auth token; OTP remains atomic/single-use | Product + Security approve one branch; fixation, multi-tab and timeout tests pass; ADR-002/flows/tests agree |
+| `SPEC-AUTH-02` | Idle/absolute/recent-auth values, last-seen writes, rotation cadence, prior-token grace/replay containment, known-password-change revocation and account-status enforcement | Opaque digest-only server sessions; reset revokes all; logout semantics fixed | Security + Product approve every value/range; concurrent-tab/replay/load evidence passes; no proposed/default value is treated as policy |
+| `SPEC-SEC-02` | Classify each session/auth/account event as user-visible, operator-only, both, or not retained; approve safe details, delivery/deep link and display/retention | No bearer secret, precise-location claim, internal rule, financial payload or enumeration leak | Product + Security + Privacy/Legal approve event table; API separation, threat/privacy/content/accessibility tests pass |
+
+No row is selected by this ADR revision. The ADR remains **Blocked** until named approvers, source versions and evidence are recorded in the governance register.
 
 ## Alternatives considered
 
@@ -109,7 +119,9 @@ Rejected categorically because it is non-revocable/long-lived contrary to requir
 - Test current browser cookie limits/behavior, PWA installed mode, and same-origin proxy.
 - Confirm CSRF design for every state-changing content type/method.
 - Load test session lookup and last-seen throttling.
-- Approve lifetime/recent-auth/session-event UX.
+- Approve every lifetime/recent-auth/rotation/replay/password-change value and all selected-branch behavior under `SPEC-AUTH-01`/`02`.
+- Approve the event-by-event owner/operator visibility and safe-detail table under `SPEC-SEC-02`; test output-schema separation and accessibility/content.
+- Retain versioned `AUTH-VRF`, `AUTH-POL`, and `SEC-HIST` evidence with named approvers/date/review trigger; a role label or passing build is insufficient.
 
 ## Revisit when
 
