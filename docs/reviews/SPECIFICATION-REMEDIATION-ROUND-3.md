@@ -177,7 +177,8 @@ The decision must also specify result-screen copy, onboarding transition, cookie
 - a compatible committed idempotency result is checked after account lock and before stale-version comparison;
 - child/domain locks follow one account-first table-rank/ascending-ID order for user, worker, operator and recovery paths;
 - stale state is never retried or reanchored; only SQLSTATE `55P03`, `40P01`, or `40001` may retry once with the unchanged key/digest/version/payload;
-- candidate bounds are 2,000 ms lock, 5,000 ms statement, 8,000 ms normal budget, 25–75 ms jitter, and one additional 2,000 ms uncertain-commit recovery attempt;
+- non-retried `57014` and retryable `55P03`/`40P01`/`40001` require explicit awaited `ROLLBACK` before pool release, response or retry; failed statement is not whole-transaction rollback proof, every retry starts a fresh transaction, and unconfirmed-clean connections are evicted;
+- candidate bounds are 2,000 ms lock, 5,000 ms statement, an 8,000 ms normal budget covering attempts/rollback cleanup/backoff, 25–75 ms jitter, and one additional 2,000 ms uncertain-commit recovery attempt;
 - a lost commit acknowledgement uses the same key/protocol; unresolved status returns `FINANCIAL_RESULT_UNKNOWN`, never a new-key duplicate; and
 - safe metrics and deterministic PostgreSQL `FIN-RACE-01`–`08` evidence prove the mechanism.
 
@@ -189,9 +190,9 @@ The decision must also specify result-screen copy, onboarding transition, cookie
 **Required co-approvers:** Architecture Owner, Security Owner, Financial Integrity Owner.<br>
 **Consulted roles:** Product Owner, QA Owner, Operations Owner.
 
-**Required evidence:** Mandatory owner/ADR review; deterministic forced-order PostgreSQL `FIN-RACE-01`–`08`; exact SQLSTATE attempt/bound proof; connection/proxy commit cut points; user/worker/operator/domain lock-query review; sanitized lock diagnostics; intended beta p95/p99 lock/transaction timing; defect and rerun disposition.
+**Required evidence:** Mandatory owner/ADR review; deterministic `FIN-RACE-01`–`08` against real PostgreSQL on a dedicated Supabase evidence project; exact SQLSTATE attempt/bound proof; ordered rollback-before-response/check-in/fresh-`BEGIN` traces; lock-release and clean/evicted pool-reuse proof; connection/proxy commit cut points; user/worker/operator/domain query review; sanitized diagnostics; p95/p99 timing; defect/rerun disposition. Supabase evidence does not select the production provider under OQ-17.
 
-**Acceptance criteria:** Mandatory owners approve exact mechanism/bounds; ADR-009 becomes Accepted only with evidence; scenario J and all `FIN-RACE` branches produce one version-incrementing winner/stale loser; same-key recovery never duplicates; every covered path is account-first; Database, Architecture, Security, Flow, UX and Test documents agree; approval/evidence metadata is linked.
+**Acceptance criteria:** Mandatory owners approve exact mechanism/bounds; ADR-009 becomes Accepted only with evidence; scenario J and all `FIN-RACE` branches produce one version-incrementing winner/stale loser; `55P03`/`57014` never reuse/release a failed transaction before explicit rollback; every retry uses a fresh transaction; pool borrowers inherit no failed state/lock; same-key recovery never duplicates; every covered path is account-first; source documents agree; approval/evidence metadata is linked.
 
 **Primary blocker-specific documents (see §3.1 for the complete change matrix):** Dedicated SPEC-FIN-02 document, ADR-009, PRD, User Flows, Architecture, Database, Security, Threat Model, UX, Test Strategy, Release Checklist, Decision Log, Governance Register, ADR Index, this report.
 

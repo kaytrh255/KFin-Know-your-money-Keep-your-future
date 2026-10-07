@@ -25,11 +25,12 @@ Adopt policy `account_financial_serialization.v1`:
 5. Increment dedicated `financial_state_version` exactly once per committed logical mutation and zero times for stale/rejected/rollback/idempotent-replay results.
 6. Acquire child/domain rows only after the account and in the global order specified by SPEC-FIN-02.
 7. Persist a success idempotency result with the mutation; persist a bounded stale receipt with no financial/domain change or version increment; after the account lock, check either compatible result before expected-version comparison.
-8. Retry only SQLSTATE `55P03`, `40P01`, or `40001`, at most once with the unchanged key/digest/version/payload and bounded jitter/budget.
-9. Treat a lost `COMMIT` acknowledgement as uncertain; recover through the same account/key protocol and never issue a blind duplicate.
-10. Require all user, worker, operator, and linked-domain paths to use the same boundary.
+8. Retry only SQLSTATE `55P03`, `40P01`, or `40001`, at most once with the unchanged key/digest/version/payload and bounded jitter/budget. Explicitly await `ROLLBACK` before pool release or a retry’s fresh `BEGIN`; `57014` also requires rollback before returning timeout and is not internally retried.
+9. Never treat a failed statement as proof that its whole transaction rolled back. Destroy/quarantine a connection if rollback/idle state cannot be confirmed.
+10. Treat a lost `COMMIT` acknowledgement as uncertain; recover through the same account/key protocol and never issue a blind duplicate.
+11. Require all user, worker, operator, and linked-domain paths to use the same boundary.
 
-Proposed Private Beta bounds are: 2,000 ms lock wait per attempt, 5,000 ms statement timeout, 8,000 ms normal database budget, one internal retry after 25–75 ms jitter, and one commit-uncertainty recovery attempt within an additional 2,000 ms. These are candidate policy values pending evidence and approval, not framework defaults.
+Proposed Private Beta bounds are: 2,000 ms lock wait per attempt, 5,000 ms statement timeout, an 8,000 ms normal database budget covering attempts/rollback cleanup/backoff, one internal retry after 25–75 ms jitter, and one commit-uncertainty recovery attempt within an additional 2,000 ms. These are candidate policy values pending evidence and approval, not framework defaults.
 
 ## Linearization and visible results
 
@@ -89,6 +90,8 @@ Snapshot losers return `FIN_SNAPSHOT_STALE_STATE`; correction/void losers return
 ## Required controls
 
 - No external call, user interaction, or report rendering while the account lock is held.
+- After any pre-`COMMIT` statement failure in an open transaction—including non-retried `57014` and retryable `55P03`/`40P01`/`40001`—await explicit `ROLLBACK` before releasing the pooled connection, starting a retry, or returning a mapped result; use a bounded cleanup scope that survives request cancellation, and give every retry a fresh transaction.
+- A statement failure is not transaction rollback proof. Failed/unconfirmed rollback removes the connection from pool reuse.
 - Owner-scoped lock query and same-user constraints remain mandatory under either future RLS posture.
 - Stable safe errors expose no SQL/lock/private financial payload.
 - Deadlock/timeout/retry/uncertain-result metrics contain no amount, note, or raw idempotency key.
@@ -101,7 +104,7 @@ This ADR MUST remain Proposed until:
 
 1. named mandatory owners approve the exact mechanism, lock order, version scope, errors, and bounds;
 2. deterministic PostgreSQL race tests prove both forced winner orders;
-3. SQLSTATE injection proves one-retry behavior and exhaustion;
+3. SQLSTATE injection proves explicit rollback before pool release/result, fresh transaction per retry, one-retry behavior, `57014` no-retry timeout and exhaustion;
 4. connection/proxy fault injection proves timeout-after-commit recovery;
 5. lock/query review covers every user/worker/operator/domain path;
 6. observed latency/lock waits fit the bounds or an approved revision updates every source document; and

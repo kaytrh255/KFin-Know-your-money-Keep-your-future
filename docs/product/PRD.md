@@ -118,7 +118,7 @@ MVP exposes exactly one aggregate liquid-money account per user. Multiple accoun
 | PRD-FIN-10 | If same-day timing makes snapshot inclusion ambiguous, KFin MUST ask whether the transaction is already included rather than infer silently. |
 | PRD-FIN-11 | A transaction correction MUST never silently change balance effect or snapshot anchor. Under proposed `snapshot_correction.v1`, a request requiring another segment/effect is rejected; supported same-anchor/effect correction requires consequence preview, stale-state protection, and append-only audit evidence. |
 | PRD-FIN-12 | Every account-scoped financial mutation MUST execute under proposed `account_financial_serialization.v1`: one owner-scoped PostgreSQL account-row lock at `READ COMMITTED`, post-lock latest-snapshot/version validation, account-first child-lock ordering, and exactly one financial-state-version increment for one committed logical winner. |
-| PRD-FIN-13 | A stale reviewed state MUST commit no financial/domain/link/audit mutation or version increment; only a bounded terminal idempotency receipt may persist to keep the key/digest result stable. It MUST NOT be auto-reanchored or replayed against refreshed state. Transient database retries are bounded and preserve the original key/digest/version/payload; timeout after an uncertain commit MUST recover with the same idempotency key or return an explicit unknown-result state. |
+| PRD-FIN-13 | A stale reviewed state MUST commit no financial/domain/link/audit mutation or version increment; only a bounded terminal idempotency receipt may persist. It MUST NOT be auto-reanchored or replayed against refreshed state. A failed PostgreSQL statement is not proof of whole-transaction rollback: non-retried `57014` and retryable `55P03`/`40P01`/`40001` require explicit completed `ROLLBACK` before response, pool release, or retry, and each retry starts a new transaction. Timeout after uncertain `COMMIT` uses same-key recovery or an explicit unknown-result state. |
 
 #### Issue #1 proposed correction policy
 
@@ -126,7 +126,7 @@ The complete decision candidate is [SPEC-FIN-01 — Snapshot Correction Semantic
 
 #### Issue #3 proposed concurrency policy
 
-The physical enforcement candidate is [SPEC-FIN-02 — Snapshot Concurrency](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md). It selects an owner-scoped `financial_accounts` row lock at PostgreSQL `READ COMMITTED`, dedicated monotonic `financial_state_version`, deterministic account-first lock order, one bounded retry for exact transient SQLSTATEs, and same-key recovery after uncertain commit. The policy and ADR-009 remain proposed; owner approval and executed `FIN-RACE-01`–`08` PostgreSQL evidence are absent.
+The physical enforcement candidate is [SPEC-FIN-02 — Snapshot Concurrency](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md). It selects an account-row lock at PostgreSQL `READ COMMITTED`, monotonic `financial_state_version`, account-first order, explicit rollback before pool release/response/fresh retry, one bounded retry for exact SQLSTATEs, and same-key uncertain-commit recovery. The policy and ADR-009 remain proposed; owner approval and real-PostgreSQL `FIN-RACE-01`–`08` rollback/lock/pool evidence on Supabase are absent.
 
 ### 7.3 Income
 
@@ -291,7 +291,7 @@ Round 3 makes the following decisions/evidence **ready for authorized review**; 
 | `SPEC-AUTH-01` | Fresh rotated session after verification or explicit sign-in, with result/cookie/CSRF/event/multi-tab/retry behavior | Product Owner; Security co-approval | OPEN — decision ready |
 | `SPEC-AUTH-02` | Complete invitation/password/OTP/reset/abuse/session/rotation/password-change policy | Security Owner; Product co-approval | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve `snapshot_correction.v1` from Issue #1: append-only correction/void, immutable anchor/effect, cross-segment rejection, exact report/link/audit/stale/idempotent outcomes | Product Owner; Financial Integrity/Data/Security co-approval | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account-row lock at `READ COMMITTED`, monotonic version, account-first order, exact retry/timeout-after-commit bounds, stale/error contract and `FIN-RACE-01`–`08` evidence | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account lock/version/order, explicit rollback cleanup and connection eviction, exact retry/uncertain-commit bounds, stale/error contract and Supabase PostgreSQL `FIN-RACE` evidence | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported balance for historical correction with later events | Product Owner; Financial Integrity/Data co-approval | OPEN — decision ready |
 | `SPEC-SCH-01` | Leap-day fallback, recurrence/generation bounds, and exact series-edit behavior | Product Owner; Data/Architecture co-approval | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | Product Owner; Architecture/Operations/QA co-approval | OPEN — decision ready |
