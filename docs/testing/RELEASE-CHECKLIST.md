@@ -1,6 +1,6 @@
 # KFin Private Beta Release Checklist
 
-**Status:** Template — Issue #1 correction gate specified; no item is currently complete<br>
+**Status:** Template — FIN-01/02 gates specified; no item is currently complete<br>
 **Use:** One copy per release candidate and per cohort expansion<br>
 **Rule:** Every checked item requires linked, dated evidence. A checkbox without evidence is not a pass.
 
@@ -11,7 +11,7 @@ Round 3 defined decision/evidence packets but closed no blocker. This checklist 
 - [ ] `SPEC-AUTH-01`: one authorized post-verification outcome, synchronized auth/session/UX contracts, and passing `AUTH-VRF` evidence. Evidence: _missing_
 - [ ] `SPEC-AUTH-02`: every auth/session value and behavior approved, synchronized, and supported by `AUTH-POL` threat/benchmark/provider/usability/replay evidence. Evidence: _missing_
 - [ ] `SPEC-FIN-01`: Product + Financial Integrity + Data + Security approve Issue #1 `snapshot_correction.v1`; synchronized H–J/`FIN-COR-01`–`10` specifications and PR/approval record are linked. Evidence: _missing_
-- [ ] `SPEC-FIN-02`: approved PostgreSQL serialization-mechanism ADR and passing `FIN-RACE` evidence prove the defined one-winner/stale-loser contract. Evidence: _missing_
+- [ ] `SPEC-FIN-02`: Data + Architecture + Security + Financial Integrity approve exact `account_financial_serialization.v1`/bounds; ADR-009 is Accepted only with passing PostgreSQL `FIN-RACE-01`–`08`, lock/query, latency and commit-fault evidence. Evidence: _missing_
 - [ ] `SPEC-DEBT-01`: approved later-event correction policy and exact DCT-08/09/`DEBT-HIST` results preserving no-inference. Evidence: _missing_
 - [ ] `SPEC-SCH-01`: approved leap-day/bounds/series-edit policy and passing `SCH-BND` boundary/race evidence. Evidence: _missing_
 - [ ] `SPEC-REM-01`: approved complete catch-up tuple and passing RCT-04–07/`REM-REC` evidence with no burst. Evidence: _missing_
@@ -55,8 +55,10 @@ Every row is currently OPEN. Exact criteria are in the [Round 3 remediation repo
 
 - [ ] Current balance reconciles to the latest immutable snapshot plus only current-impact transactions in that segment. Evidence: _link_
 - [ ] Historical-only backfill appears in period/category reports, is visibly labelled, and never silently changes current balance. Evidence: _link_
-- [ ] Balance-snapshot scenarios A–G pass; H–I and J’s transition branch match approved `snapshot_correction.v1`; J’s race branches pass under the approved `SPEC-FIN-02` mechanism. Evidence: _link_
-- [ ] Snapshot/correction race tests produce exactly one winner; losing snapshot returns `FIN_SNAPSHOT_STALE_STATE` and losing correction returns `FIN_CORRECTION_STALE_STATE`, with no implicit reanchor, duplicate, branch, or partial write. Evidence: _link_
+- [ ] Balance-snapshot scenarios A–G pass; H–I and J’s transition branch match approved `snapshot_correction.v1`; J’s race branches pass under approved/evidenced `account_financial_serialization.v1`. Evidence: _link_
+- [ ] `FIN-RACE-01`–`FIN-RACE-08` pass on intended PostgreSQL/driver/pool: both forced winner orders, one account-row serialization boundary, one version increment, operation-specific stale loser, distinct-account independence, account-first user/worker/operator/domain paths, and no implicit reanchor/duplicate/partial write. Evidence: _link_
+- [ ] Retry/failure injection proves only SQLSTATE `55P03`, `40P01`, and `40001` retry once with unchanged request state; second transient returns `FINANCIAL_CONCURRENCY_BUSY`; no third attempt or connection held during jitter. Evidence: _link_
+- [ ] Commit cut-point tests prove same-key recovery after uncertain `COMMIT`; unresolved state returns `FINANCIAL_RESULT_UNKNOWN`, and no new-key duplicate/version increment is created. Evidence: _link_
 - [ ] `FIN-COR-01`–`FIN-COR-10` pass: append-only source/replacement chain, one terminal effect, closed-segment zero current-balance change, amended reports, cross-segment rejection, link matrix, and idempotent/stale outcomes. Evidence: _link_
 - [ ] Monthly income/outflow respects user-local month, status, currency, and exact integer arithmetic. Evidence: _link_
 - [ ] The 4,000,000 + 350,000 + 280,000 VND income scenario produces 4,630,000 VND only under approved confirmation semantics. Evidence: _link_
@@ -178,7 +180,7 @@ Every row is currently OPEN. Exact criteria are in the [Round 3 remediation repo
 
 - [ ] Logs are structured, correlated, redacted, retained, access-controlled, and time synchronized. Evidence: _link_
 - [ ] Canary scans confirm no secret, note, raw financial amount, cookie, auth header, or request body leaks to logs/errors/analytics. Evidence: _link_
-- [ ] Metrics cover API, auth abuse, financial-write failures, DB pool/storage/slow queries, worker queue, email, health, and release. Evidence: _link_
+- [ ] Metrics cover API, auth abuse, financial-write failures, account-lock wait/timeout, stale codes, retry SQLSTATE/attempt, uncertain-commit outcome, DB pool/storage/slow queries, worker queue, email, health, and release without financial payload. Evidence: _link_
 - [ ] Alerts have thresholds, owner, escalation, and runbook; test alerts reach responders. Evidence: _link_
 - [ ] Health/readiness endpoints are safe and deployment gates consume them correctly. Evidence: _link_
 - [ ] Incident response covers severity, containment, evidence, provider/user/regulatory communication decision, recovery, and postmortem. Evidence: _link_

@@ -16,6 +16,7 @@ Start with the [KFin Specification Foundation](docs/README.md), then review the 
 - [MVP scope](docs/product/MVP-SCOPE.md)
 - [Product decision log](docs/product/DECISION-LOG.md)
 - [SPEC-FIN-01 snapshot correction proposal](docs/product/SPEC-FIN-01-SNAPSHOT-CORRECTION.md)
+- [SPEC-FIN-02 snapshot concurrency proposal](docs/architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md)
 - [UX](docs/ux/UX-SPEC.md)
 - [UI design system](docs/ux/UI-DESIGN-SYSTEM.md)
 - [Architecture](docs/architecture/ARCHITECTURE.md)

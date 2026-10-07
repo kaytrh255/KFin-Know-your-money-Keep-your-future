@@ -1,9 +1,9 @@
 # KFin Product Decision Log
 
-**Status:** Active — Issue #1 policy proposed; approval remains open<br>
-**Version:** 0.4<br>
+**Status:** Active — FIN-01/02 policies proposed; approvals/evidence remain open<br>
+**Version:** 0.5<br>
 **Decision date:** 2026-10-07<br>
-**Source:** Interactive specification review with the project owner; Round 3 documentation remediation
+**Source:** Interactive specification review with the project owner; Round 3 remediation; GitHub Issues #1 and #3 decision candidates
 
 This log records product decisions made after the initial specification foundation was drafted. It replaces the recommendations previously listed as unresolved OQ items. A decision here changes product meaning; affected product, UX, architecture, security, database, and test specifications must remain consistent with it.
 
@@ -226,7 +226,7 @@ safe-to-spend estimate
 - Activity/detail must label historical-only records and explain why they do not affect current balance.
 - Editing a transaction cannot silently move it between balance segments.
 - Current balance and monthly net movement may not reconcile by simple all-time summation across a snapshot boundary; calculation disclosure must show the anchor.
-- Normative behavior is `FIN-SNAP-INV-01` through `FIN-SNAP-INV-10` and snapshot scenarios A–J. Issue #1 proposes exact correction/cross-segment/race outcomes under `snapshot_correction.v1`; owner approval remains `SPEC-FIN-01`, while the physical PostgreSQL race mechanism/evidence remains `SPEC-FIN-02`.
+- Normative behavior is `FIN-SNAP-INV-01` through `FIN-SNAP-INV-10` and snapshot scenarios A–J. Issue #1 proposes correction semantics under `snapshot_correction.v1`; Issue #3 proposes PostgreSQL enforcement under `account_financial_serialization.v1`. Both blockers remain OPEN pending their distinct owner approvals/evidence.
 
 ### OQ-14 — Bounded recurrence patterns
 
@@ -286,7 +286,7 @@ This map identifies the primary normative and verification destinations. It is n
 | OQ-10 | PRD-AUTH-10; UF-AUTH-07 | Database §§4.8–4.9, 15, 17; SEC-DATA; deletion/restore tests |
 | OQ-11 | PRD-AUTH-01; UF-AUTH-01 | ADR-002; Database §4.2; SEC-AUTH-14/15; valid-code/no-email-allowlist-bypass tests |
 | OQ-12 | PRD-REM-02/04/06/10/11/12; UF-REM-01 | REM-INV-01–10; RCT-01–RCT-10; ADR-008; Database §11 |
-| OQ-13 | PRD-FIN-02/08–11; UF-FIN-01/02/03/06 | FIN-SNAP-INV-01–10; snapshot A–J; SEC-APP-14/15 |
+| OQ-13 | PRD-FIN-02/08–13; UF-FIN-01/02/03/06 | FIN-SNAP-INV-01–10; snapshot A–J; `FIN-COR`; `FIN-RACE`; SEC-APP-14/15/19 |
 | OQ-14 | PRD-REM-09; UF-SCH flows | Database §7; recurrence boundary/property tests |
 | OQ-15 | PRD-PLAN-03–06; UF-PLAN-02 | Database §§9.2, 10; atomic/idempotent completion tests |
 | OQ-16 | Approved beta context and constraints | ADR-007; SEC-DATA-08; legal/residency release gate |
@@ -303,7 +303,7 @@ Round 3 records the exact decision packets below. **No row is an approved decisi
 | `SPEC-AUTH-01` | Fresh rotated session after verification **or** explicit sign-in; result/cookie/CSRF/event/multi-tab/uncertain-response contract | Single-use atomic verification; no session fixation | Product Owner; Security co-approval | Threat, flow, session-fixation, retry, content review | OPEN — decision ready |
 | `SPEC-AUTH-02` | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and behavior | Invitation code, Argon2id, digest-only secrets, generic responses, reset revokes all sessions | Security Owner; Product co-approval | Threat, runtime benchmark, provider, abuse-cost, usability, replay tests | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`: void + replacement, immutable anchor/effect, cross-segment rejection, link matrix, report effects, preview, audit and stale/idempotent outcomes | No history erasure/double effect/current-balance rewrite from closed history | Product Owner; Financial Integrity/Data/Security co-approval | Issue #1 PR review plus exact H–J and `FIN-COR-01`–`10` specifications | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | PostgreSQL linearization/lock/isolation/version mechanism, internal retry bounds and timeout-after-commit proof for the defined external contract | One latest segment; one winner/stale loser; no silent re-anchor or duplicate effect | Data Owner; Architecture/Security/Financial Integrity co-approval | Concurrency spike, race/deadlock/timeout-after-commit tests | OPEN — decision ready |
+| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: `READ COMMITTED` account-row lock, monotonic financial-state version, account-first lock order, one bounded transient retry, same-key uncertain-commit recovery and exact safe errors/bounds | One latest segment; one winner/stale loser; no silent re-anchor, duplicate effect or unbounded retry | Data Owner; Architecture/Security/Financial Integrity co-approval | ADR-009 review plus executed `FIN-RACE-01`–`08`, lock/query and commit-fault evidence | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay, mandatory fresh lender-reported balance, or explicitly bounded combination | No inferred principal, interest, fee, payoff, or outstanding | Product Owner; Financial Integrity/Data co-approval | DCT-08/09 and later-event/date-reorder proof | OPEN — decision ready |
 | `SPEC-SCH-01` | Leap-day fallback, bounds, generation horizon/batch, and exact series-edit behavior | One-off/every-N-week/month/year; monthly missing-day fallback | Product Owner; Data/Architecture co-approval | Fixed-clock boundary, load, UX and race evidence | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | At most one catch-up; no burst; no financial mutation | Product Owner; Architecture/Operations/QA co-approval | Exact RCT-04–07, outage, timezone, content evidence | OPEN — decision ready |
@@ -327,15 +327,35 @@ The Issue #1 decision candidate is:
 4. correction/void in a closed prior segment can change active report facts while current balance remains anchored exactly to the latest snapshot;
 5. generic schedule-only corrections transfer the confirmed pointer atomically, while debt and planned-purchase transactions follow the explicit reject/delegate matrix;
 6. consequence preview, bounded reason, append-only audit chain, and one terminal posted effect are mandatory;
-7. stale transaction/anchor/link/financial-state context returns `FIN_CORRECTION_STALE_STATE`, commits nothing, and requires deliberate refetch/re-preview;
+7. stale transaction/anchor/link/financial-state context returns `FIN_CORRECTION_STALE_STATE`, makes no financial/domain mutation or version increment (only a bounded stable idempotency receipt), and requires deliberate refetch/re-preview;
 8. snapshot/correction and competing-correction races have one winner and one stale loser, never silent reanchor, duplicate effect, or partial state; and
 9. compatible idempotent retry returns the first committed result, while same key/different payload is rejected.
 
-This is an explicit proposal rather than a silent implementation choice. GitHub Issue #1 and its pull request are the review record. The policy does not select the PostgreSQL lock/isolation/version primitive, so `SPEC-FIN-02` remains OPEN. `SPEC-FIN-01` also remains OPEN until named mandatory owners approve the exact policy and the governance register records the approval.
+This is an explicit proposal rather than a silent implementation choice. GitHub Issue #1 and its pull request are the review record. `SPEC-FIN-01` remains OPEN until named mandatory owners approve the exact policy and the governance register records the approval.
 
-## 6. Remaining review and release blockers
+## 6. GitHub Issue #3 — proposed `SPEC-FIN-02` decision
 
-The OQ choices are recorded, Round 3 made all twelve `SPEC-*` packets decision-ready, and Issue #1 now supplies a concrete `SPEC-FIN-01` proposal. Owner approval/evidence is still absent, so the Implementation Gate remains CLOSED. Exact decision dimensions, binary acceptance criteria, and changed-document list are centralized in the Round 3 report; status is centralized in `docs/README.md`. `RC-PROV-01` and `BETA-LEGAL-01` remain later release gates. Documentation must not choose blocker outcomes silently.
+**Status:** Proposed; approval and executed PostgreSQL evidence pending<br>
+**Source:** [SPEC-FIN-02 snapshot concurrency specification](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md)<br>
+**ADR:** [ADR-009 — Per-account Financial Serialization](../architecture/ADR/ADR-009-per-account-financial-serialization.md)<br>
+**Policy:** `account_financial_serialization.v1`
+
+The Issue #3 decision candidate is:
+
+1. every account-scoped financial mutation executes in one PostgreSQL `READ COMMITTED` transaction and locks the authenticated user’s `financial_accounts` row `FOR UPDATE` before authoritative child/domain locks;
+2. a dedicated `financial_state_version` starts at `1`, is returned with the latest snapshot ID, and increments exactly once per committed logical mutation—never for stale, rollback, rejection, or idempotent replay;
+3. after the account lock, the server checks a compatible committed idempotency result before comparing expected version/latest snapshot, then revalidates all domain state under the global lock order;
+4. two different requests from the same reviewed state have one committed winner and one operation-specific HTTP `409` stale loser; no path auto-refreshes, reanchors, or replays the user decision;
+5. only SQLSTATE `55P03`, `40P01`, and `40001` may retry internally, at most once, with unchanged key/digest/version/payload and bounded `25–75 ms` jitter inside the stated budgets;
+6. a lost `COMMIT` acknowledgement triggers at most one same-key recovery attempt; unresolved status returns `FINANCIAL_RESULT_UNKNOWN` and requires same-key retry rather than a new logical write;
+7. exact candidate limits are 2,000 ms lock wait, 5,000 ms statement timeout, 8,000 ms normal database budget, one transient retry, and one 2,000 ms uncertain-commit recovery attempt; and
+8. `FIN-RACE-01`–`FIN-RACE-08` plus lock/query review and fault injection are mandatory closure evidence.
+
+This proposal rejects advisory/distributed/global locks, optimistic-version-only multi-row writes, `SERIALIZABLE` as the primary product-conflict mechanism, and automatic refreshed-state retries. ADR-009 remains Proposed. `SPEC-FIN-02` remains OPEN until named mandatory owners approve the exact candidate and the required evidence executes and is recorded.
+
+## 7. Remaining review and release blockers
+
+The OQ choices are recorded, Round 3 made all twelve `SPEC-*` packets decision-ready, and Issues #1/#3 now supply concrete `SPEC-FIN-01`/`SPEC-FIN-02` candidates. Mandatory approvals and runtime evidence are still absent, so both blockers remain OPEN and the Implementation Gate remains CLOSED. Exact decision dimensions, binary acceptance criteria, and changed-document list are centralized in the Round 3 report; status is centralized in `docs/README.md`. `RC-PROV-01` and `BETA-LEGAL-01` remain later release gates. Documentation must not choose blocker outcomes silently.
 
 Private Beta release additionally remains blocked by:
 
@@ -346,7 +366,7 @@ Private Beta release additionally remains blocked by:
 5. Accepted architecture/security/session/PWA/deployment/notification ADRs.
 6. Validated financial scenarios, prototypes, accessibility/usability review, and complete test traceability.
 
-## 7. Change control
+## 8. Change control
 
 Changing any accepted OQ decision requires:
 

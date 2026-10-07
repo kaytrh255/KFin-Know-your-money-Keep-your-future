@@ -1,6 +1,6 @@
 # KFin Initial Screen Inventory
 
-**Status:** Draft — Issue #1 correction states proposed; specification/evidence review required<br>
+**Status:** Draft — FIN-01/02 states proposed; specification/evidence review required<br>
 **Evidence status:** Screen-list review is not visual prototype, usability, or accessibility acceptance<br>
 **Purpose:** Define the minimum screen map before visual design and implementation.<br>
 **Note:** Routes are proposals for Web/PWA navigation, not API contracts.
@@ -67,7 +67,7 @@ A dedicated result screen is used only when a persistent state is clearer than a
 | ID | Proposed route | Screen | Primary purpose | Critical states/actions |
 |---|---|---|---|---|
 | ONB-01 | `/onboarding/profile` | Personal setup | Display name, Vietnamese-first locale context, timezone, one base currency | VND/Asia-Ho-Chi-Minh suggestions are editable; currency locks after financial data |
-| ONB-02 | `/onboarding/money` | Initial balance snapshot | Explain one aggregate manual model and establish authoritative current balance | Amount, exact as-of time, snapshot/backfill explanation, no false bank-sync implication |
+| ONB-02 | `/onboarding/money` | Initial balance snapshot | Explain one aggregate manual model and establish authoritative current balance | Amount, exact as-of time, snapshot/backfill explanation, bootstrap idempotency/recovered result, no false bank-sync implication |
 | ONB-03 | `/onboarding/complete` | Setup complete | Orient user to Home and first entry | Global Add action, skip optional tutorial, honest incomplete state |
 
 The accepted one-account MVP does not expose account taxonomy in ONB-02; the underlying account ownership boundary remains internal.
@@ -79,9 +79,9 @@ The accepted one-account MVP does not expose account taxonomy in ONB-02; the und
 | HOME-01 | `/` | Home | Answer the four core questions | Authoritative balance/anchor/as-of; signed safe-to-spend through user-local month-end with balance, unpaid outgoing, active-goal, and projected-income-exclusion disclosure; needs attention; month summary; goals; incomplete data |
 | ACT-01 | `/activity` | Activity | Inspect posted current-impact and historical-only records | Date grouping, month/type/classification/balance-effect filters, snapshot-boundary markers, pagination, empty states |
 | ACT-02 | `/activity/:transactionId` | Transaction detail | Explain one actual record and its balance effect | Current-impact/historical-only label, latest versus prior snapshot segment, present-balance consequence, ownership-safe not found, linked occurrence/debt/purchase, correct/void |
-| ACT-03 | `/activity/:transactionId/edit` | Correct transaction | Review proposed append-only correction without hiding anchor impact | `snapshot_correction.v1` source/replacement chain; immutable anchor/effect; current/report/link preview; prior-segment zero-balance message; deterministic cross-segment rejection; stale-state/refetch result; owner approval and `SPEC-FIN-02` mechanism still blocked |
-| ADD-01 | overlay / `/add` fallback | Global Add | Record routine current income/expense quickly | Amount-first, implicit account, defaults, unexpected flag, pre-snapshot historical switch, offline, idempotent save |
-| ADD-02 | overlay / `/add/history` fallback | Add historical record | Backfill a record already represented by the balance snapshot | Historical-only explanation, same-day inclusion choice, current balance unchanged preview |
+| ACT-03 | `/activity/:transactionId/edit` | Correct transaction | Review proposed append-only correction without hiding anchor impact | `snapshot_correction.v1` chain/preview plus `account_financial_serialization.v1` stale, temporary busy/timeout and same-key result-unknown recovery; both owner/evidence gates remain open |
+| ADD-01 | overlay / `/add` fallback | Global Add | Record routine current income/expense quickly | Amount-first, implicit account, defaults, unexpected flag, pre-snapshot historical switch, offline, idempotent save, stale/refetch/review, temporary busy/timeout, same-key unknown-result recovery |
+| ADD-02 | overlay / `/add/history` fallback | Add historical record | Backfill a record already represented by the balance snapshot | Historical-only explanation, same-day inclusion choice, current balance unchanged preview, stale reviewed-snapshot recovery |
 | SCH-01 | `/schedule` | Schedule agenda | Understand expected inflows/outflows | Date groups, upcoming/due/overdue/projected/paid filters, exact dates, empty state |
 | SCH-02 | `/schedule/:occurrenceId` | Occurrence detail | Review and confirm/skip one occurrence | Expected vs actual, mark paid/received, skip, linked source/history |
 | SCH-03 | `/schedule/new` and `/schedule/:scheduleId/edit` | Schedule form | Define recurring income/obligation | Kind, amount, cadence, date, end rule, occurrence preview, fixed-stage reminder explanation for eligible outgoings |
@@ -129,7 +129,7 @@ Savings screens must state that current amount is user-maintained and not a veri
 | ID | Proposed route | Screen | Primary purpose | Critical states/actions |
 |---|---|---|---|---|
 | SET-01 | `/settings/profile` | Profile and preferences | Maintain display name, locale, timezone, base currency policy | Timezone/month-boundary warning; currency change blocked if unsupported |
-| SET-04 | `/settings/money` | Money setup and known-balance update | Review latest snapshot and create a new authoritative balance snapshot | Calculated vs actual amount, exact as-of time, new segment disclosure; no bank/account matching or account/transfer UI |
+| SET-04 | `/settings/money` | Money setup and known-balance update | Review latest snapshot and create a new authoritative balance snapshot | Calculated vs actual amount, exact as-of time, new segment disclosure, snapshot-stale refetch/reconfirm, temporary busy/timeout and same-key unknown-result recovery; no bank/account matching or transfer UI |
 | SEC-01 | `/settings/security` | Security overview | Navigate password, sessions, history | Verified email, last password change, concise recommendations |
 | SEC-02 | `/settings/security/password` | Change password | Reauthenticate and rotate credentials | Current/new password, policy, session consequence, durable success |
 | SEC-03 | `/settings/security/sessions` | Active sessions | Identify and revoke access | Current marker, device/time, revoke one, sign out everywhere |
@@ -211,7 +211,7 @@ Completing this list is necessary but does not close `SPEC-UX-01`. The versioned
 | `SPEC-AUTH-01` | AUTH-03/06, ONB-01 | Verification must end in one approved session or explicit-sign-in outcome, with retry/multi-tab/result copy | No session fixation; only an approved authenticated context enters onboarding | OPEN — decision ready |
 | `SPEC-AUTH-02` | AUTH-01–05, SEC-02/03 | Visible policy, expiry, limits, recovery, rotation/replay and session consequences | Invitation code mandatory; generic errors; password manager/paste support | OPEN — decision ready |
 | `SPEC-FIN-01` | ACT-02/03, ADD-01/02, SCH-02, DEBT-07, PUR-05 | Validate proposed void + replacement, immutable anchor/effect, cross-segment rejection, prior-report amendment, link matrix and stale/idempotent previews | No history erasure, silent segment movement or double effect | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | ONB-02, SET-04, ADD-01/02, ACT-03 | Validate user recovery while PostgreSQL mechanism enforces the defined one-winner/stale-loser race contract | No silent re-anchor or ambiguous successful save | OPEN — decision ready |
+| `SPEC-FIN-02` | ONB-02, SET-04, ADD-01/02, ACT-03 | Validate proposed stale refetch/review, bounded busy/timeout retry, same-key result-unknown/recovery and accessible status behavior while the account-row/version mechanism enforces one winner | No silent re-anchor, auto-submit, duplicate save, false failure or ambiguous success | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | DEBT-03/06/07 | Later-event correction must use approved replay/fresh-balance policy or explicit rejection | Never infer principal, interest, fee or outstanding | OPEN — decision ready |
 | `SPEC-SCH-01` | SCH-01–03, DEBT-02/04 | Leap-day preview, bounds, occurrence/future edit choices and split consequences | Monthly missing-day fallback fixed; unsupported scope hidden | OPEN — decision ready |
 | `SPEC-REM-01` | NOTIF-01, SCH-01/02 | Catch-up stage/result, recovery expiry and suppression explanation | Zero/one catch-up, never a burst; occurrence state stays authoritative | OPEN — decision ready |

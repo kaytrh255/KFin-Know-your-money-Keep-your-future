@@ -1,7 +1,7 @@
 # KFin Security Requirements
 
-**Status:** Draft — Issue #1 correction controls proposed; approval/evidence required<br>
-**Version:** 0.5<br>
+**Status:** Draft — FIN-01/02 controls proposed; approval/evidence required<br>
+**Version:** 0.6<br>
 **Applies to:** Web/PWA, API, worker, PostgreSQL, edge, CI/CD, providers, operator access<br>
 **Risk posture:** Sensitive personal and financial data; fail closed for identity, authorization, and financial writes
 
@@ -135,11 +135,12 @@ Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldo
 | SEC-APP-11 | Content types MUST be explicit; unexpected/mixed content is rejected; JSON parser/prototype pollution risks are tested. |
 | SEC-APP-12 | Redirects and return URLs MUST be local/allowlisted to prevent open redirect and secret leakage. |
 | SEC-APP-13 | Email/template output MUST escape untrusted content and prohibit header injection. User notes are not included by default. |
-| SEC-APP-14 | Balance-snapshot identity/effect MUST be server validated. Clients MUST NOT arbitrarily mark a transaction historical/current or attach it to another user/segment. Snapshot creation racing with transaction creation MUST serialize or fail safely. |
-| SEC-APP-15 | Historical-only transactions MUST never enter current-balance arithmetic; old snapshot segments MUST not be replayed into the latest balance. Proposed `snapshot_correction.v1` requires append-only void + replacement, immutable owner/account/currency/kind/anchor/effect, authoritative consequence preview, required reason, authorization, stale-state checks, idempotency, and audit. Cross-segment/effect requests are rejected without mutation. `SPEC-FIN-01` approval and `SPEC-FIN-02` PostgreSQL mechanism evidence remain open. |
+| SEC-APP-14 | Balance-snapshot identity/effect MUST be server validated. Clients MUST NOT arbitrarily mark a transaction historical/current or attach it to another user/segment. Under proposed `account_financial_serialization.v1`, snapshot/transaction/correction/domain writes lock the owner-scoped account row first at `READ COMMITTED`, then revalidate expected financial-state version/latest snapshot before child locks. |
+| SEC-APP-15 | Historical-only transactions MUST never enter current-balance arithmetic; old snapshot segments MUST not be replayed into the latest balance. Proposed `snapshot_correction.v1` requires append-only void + replacement, immutable owner/account/currency/kind/anchor/effect, authoritative consequence preview, required reason, authorization, stale-state checks, idempotency, and audit. Cross-segment/effect requests are rejected without mutation. `SPEC-FIN-01` approval remains open. |
 | SEC-APP-16 | Safe-to-spend MUST use the authoritative latest-snapshot-segment balance, eligible unpaid outgoing occurrences through current user-local month-end, and active goal current amounts only. Projected income inclusion and double subtraction of already-confirmed outgoings are forbidden; negative results remain signed. |
 | SEC-APP-17 | Debt processing MUST NOT infer principal, interest, fee, accrued interest, amortization, payoff, or lender outstanding. Unsafe historical payment correction/recomputation MUST be blocked under `SPEC-DEBT-01`, not approximated. |
 | SEC-APP-18 | Reminder workers MUST recheck current occurrence state and enforce occurrence + stage uniqueness. App lifecycle cannot trigger reminders or financial state; recovery from downtime/late creation/timezone change permits no multi-stage burst and remains subject to `SPEC-REM-01` selection policy. |
+| SEC-APP-19 | Proposed `account_financial_serialization.v1` MUST produce one complete winner and operation-specific stale loser, increment `financial_state_version` once per logical winner, check compatible idempotency result before stale version after the account lock, and prohibit automatic refreshed-state replay. Only SQLSTATE `55P03`, `40P01`, and `40001` may retry once with unchanged request state. Lost commit acknowledgement MUST use same-key recovery or `FINANCIAL_RESULT_UNKNOWN`; it MUST NOT create a new-key duplicate. `SPEC-FIN-02` approval and executed evidence remain open. |
 
 ## 10. Browser security headers
 
@@ -180,10 +181,11 @@ Exact thresholds are configuration reviewed through abuse/load tests; they must 
 | SEC-DB-03 | Constraints MUST enforce owner-consistent relationships, money bounds, status/link invariants, and uniqueness for idempotency/deduplication. |
 | SEC-DB-04 | Migrations MUST be reviewed, tested from current production schema, bounded for lock duration, and have compatible rollback/forward plan. |
 | SEC-DB-05 | Production data MUST NOT be copied to development/test. Test fixtures MUST be synthetic. |
-| SEC-DB-06 | Database statements/transactions MUST have timeouts appropriate to endpoint/job and release locks reliably. |
+| SEC-DB-06 | Database statements/transactions MUST release locks reliably and never perform external I/O while holding the financial account lock. Proposed financial-write bounds are 2,000 ms lock wait, 5,000 ms statement timeout, 8,000 ms normal database budget, one `25–75 ms` jittered transient retry, and one 2,000 ms uncertain-commit recovery attempt; mandatory owners/evidence must approve them before use. |
 | SEC-DB-07 | Reconciliation checks MUST detect orphan/link/dedup/money inconsistencies without logging private payload. |
 | SEC-DB-08 | Direct production data changes MUST be exceptional, approved, scripted/reviewed, backed up, and audited. |
 | SEC-DB-09 | `SPEC-SEC-01` MUST select either reviewed PostgreSQL RLS coverage/context/roles or explicit compensating controls with residual-risk acceptance. Under either branch, application authorization, same-user constraints, least privilege, deny-by-default, connection-reuse safety, and two-user tests remain mandatory. |
+| SEC-DB-10 | Every user, worker, operator, migration/recovery tool, and owning-domain path that mutates covered account financial state MUST obey the same owner-scoped account-first lock/version protocol and global child-lock order. Elevated role, ORM helper, or maintenance path is not a concurrency bypass. |
 
 ## 13. Secrets and cryptography
 

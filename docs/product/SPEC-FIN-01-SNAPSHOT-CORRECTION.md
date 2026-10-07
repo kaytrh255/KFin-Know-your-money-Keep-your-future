@@ -11,7 +11,7 @@
 
 ## 1. Purpose and decision status
 
-This specification defines the proposed MVP transaction-correction and void semantics required by `SPEC-FIN-01`. It makes prior-segment, cross-segment, reporting, linkage, idempotency, and observable concurrency outcomes deterministic without selecting the PostgreSQL serialization primitive reserved for `SPEC-FIN-02`.
+This specification defines the proposed MVP transaction-correction and void semantics required by `SPEC-FIN-01`. It makes prior-segment, cross-segment, reporting, linkage, idempotency, and observable concurrency outcomes deterministic. The separate [SPEC-FIN-02 concurrency candidate](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md) now proposes the PostgreSQL enforcement mechanism; its approval/evidence remains independent.
 
 The policy is deliberately conservative:
 
@@ -189,17 +189,17 @@ Commit MUST revalidate, in one atomic operation:
 - owning-domain links and their relevant versions match preview; and
 - idempotency key/request digest is compatible.
 
-Any stale precondition returns HTTP `409` with `FIN_CORRECTION_STALE_STATE`, commits nothing, and requires refetch + new preview + deliberate resubmission. The server MUST NOT auto-reanchor, silently change effect, or automatically replay the user’s correction against refreshed state.
+Any stale precondition returns HTTP `409` with `FIN_CORRECTION_STALE_STATE`, commits no financial/domain/link/audit mutation or version increment, and requires refetch + new preview + deliberate resubmission. The concurrency policy may persist only a bounded terminal stale idempotency receipt so the key/digest result remains stable. The server MUST NOT auto-reanchor, silently change effect, or automatically replay the user’s correction against refreshed state.
 
 ### 9.2 Snapshot/correction race
 
 Snapshot creation and correction/void share one per-account logical serialization boundary:
 
-- **Correction wins:** correction commits against the previewed latest anchor; the racing snapshot request commits nothing and returns HTTP `409` + `FIN_SNAPSHOT_STALE_STATE`, then requires deliberate retry from refreshed state.
-- **Snapshot wins:** snapshot commits as the new authoritative anchor; the correction commits nothing and returns HTTP `409` + `FIN_CORRECTION_STALE_STATE`. On deliberate retry, the source is now in a closed segment and §5.3 applies.
+- **Correction wins:** correction commits against the previewed latest anchor; the racing snapshot request makes no financial/domain mutation or version increment, returns HTTP `409` + `FIN_SNAPSHOT_STALE_STATE`, and requires deliberate retry from refreshed state.
+- **Snapshot wins:** snapshot commits as the new authoritative anchor; the correction makes no financial/domain mutation or version increment and returns HTTP `409` + `FIN_CORRECTION_STALE_STATE`. On deliberate retry, the source is now in a closed segment and §5.3 applies.
 - **Forbidden outcome:** both requests succeed from the same stale state, the correction silently moves to the new anchor, or both source and replacement effects remain active.
 
-This defines externally observable behavior and test oracles. `SPEC-FIN-02` remains OPEN to select and prove the PostgreSQL lock/isolation/version mechanism that enforces the boundary.
+This defines externally observable behavior and test oracles. Proposed `account_financial_serialization.v1` supplies the PostgreSQL account-row lock/version mechanism, but `SPEC-FIN-02` remains OPEN until owner approval and executed `FIN-RACE` evidence prove it.
 
 ### 9.3 Competing correction/void requests
 
@@ -240,7 +240,7 @@ Snapshot scenario H maps to `FIN-COR-01`; scenario I maps to `FIN-COR-02`; scena
 | Historical evidence must not be silently rewritten | §§3–4; append-only source/replacement chain and audit presentation |
 | Current balance remains based on latest authoritative segment | §5; closed-segment corrections have zero current-balance effect |
 | Cross-segment behavior explicitly defined | §6; anchor/effect/date transitions are deterministically rejected |
-| Concurrency behavior explicitly defined | §9; winner/loser/conflict/idempotency contract; physical primitive remains `SPEC-FIN-02` |
+| Concurrency behavior explicitly defined | §9; winner/loser/conflict/idempotency contract; proposed physical enforcement is `account_financial_serialization.v1`, still OPEN under `SPEC-FIN-02` |
 | Related documents synchronized | PRD, User Flows, Architecture, Database, Security, UX, Test Strategy, Release Checklist, Decision Log, blocker/governance registers |
 | Tester can derive reproducible cases | §10 and the synchronized H–J / `FIN-COR-01`–`FIN-COR-10` matrices |
 

@@ -12,6 +12,7 @@ Round 3 still records **zero Accepted ADRs**. Product decisions embedded within 
 | [ADR-006](ADR-006-mobile-strategy.md) | Web-first with future Capacitor reuse | Proposed | Product; UX/Accessibility; Architecture; Security | `SPEC-UX-01`, `SPEC-GOV-01`: compact Web/PWA usability/accessibility/device evidence absent |
 | [ADR-007](ADR-007-deployment-architecture.md) | Cloudflare + managed application + private managed PostgreSQL | Proposed | Architecture; Operations; Security; Privacy/Legal | `SPEC-DEL-01`, `SPEC-GOV-01`: restore-exclusion/owner/topology evidence absent; `RC-PROV-01` and `BETA-LEGAL-01` remain later gates |
 | [ADR-008](ADR-008-notification-architecture.md) | PostgreSQL worker/outbox for in-app reminders and required security email | Blocked | Product; Architecture; Operations; QA | `SPEC-REM-01`; complete tuple unselected and worker/race/content/accessibility evidence absent |
+| [ADR-009](ADR-009-per-account-financial-serialization.md) | `READ COMMITTED` owner-scoped account-row lock, monotonic financial-state version, bounded retry and same-key commit recovery | Proposed | Data; Architecture; Security; Financial Integrity | `SPEC-FIN-02`; exact candidate documented, but mandatory approval and executed `FIN-RACE-01`–`08`/fault/lock evidence absent |
 
 ## Coverage decision for financial and scheduling specifications
 
@@ -21,7 +22,7 @@ Round 3 does **not** create a cosmetic Accepted ADR for fixed product formulas. 
 |---|---|
 | `SPEC-AUTH-01`, `SPEC-AUTH-02` | ADR-002 and ADR-004 must agree on one approved outcome/policy and link evidence |
 | `SPEC-FIN-01` | Issue #1 proposes product/data policy `snapshot_correction.v1`; no ADR is required for its conservative record semantics unless review introduces a material architecture choice. Mandatory owner approval/evidence remains open. |
-| `SPEC-FIN-02` | **Mandatory** new ADR or explicit amendment selecting the PostgreSQL serialization/linearization mechanism that enforces the specified one-winner/endpoint-specific stale-state contract, with concurrency evidence |
+| `SPEC-FIN-02` | [ADR-009](ADR-009-per-account-financial-serialization.md) now proposes `account_financial_serialization.v1`; it remains Proposed until named owners approve exact bounds/mechanism and executed PostgreSQL `FIN-RACE-01`–`08`, lock/query, and commit-fault evidence passes |
 | `SPEC-DEBT-01` | Product/data specifications define no-inference behavior; amend/create an ADR only if replay/rebase architecture is selected |
 | `SPEC-SCH-01` | Product/data specifications define recurrence semantics; amend ADR-008 or create an ADR only for a material worker/storage mechanism change |
 | `SPEC-REM-01` | ADR-008 must record the complete approved catch-up tuple and evidence |
@@ -69,4 +70,4 @@ Review/expiry trigger:
 Supersedes/change record:
 ```
 
-All ADR statuses remain unchanged after Round 3: Proposed — ADR-001, ADR-005, ADR-006, ADR-007; Blocked — ADR-002, ADR-003, ADR-004, ADR-008; Accepted — none.
+Current ADR statuses: Proposed — ADR-001, ADR-005, ADR-006, ADR-007, ADR-009; Blocked — ADR-002, ADR-003, ADR-004, ADR-008; Accepted — none. Creating ADR-009 records a candidate and does not approve it.

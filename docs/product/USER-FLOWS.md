@@ -1,6 +1,6 @@
 # KFin Main User Flows
 
-**Status:** Draft — Issue #1 correction flow proposed; approval required<br>
+**Status:** Draft — FIN-01/02 flows proposed; approval/evidence required<br>
 **Scope:** Private Beta Web/PWA<br>
 **Related:** [PRD](PRD.md), [UX specification](../ux/UX-SPEC.md), [screen inventory](../ux/SCREEN-INVENTORY.md)
 
@@ -101,14 +101,16 @@ The policy for automatically signing in after verification is not yet approved. 
 
 ## 4. Money setup and transaction flows
 
+**Proposed concurrency policy:** [SPEC-FIN-02](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md) defines `account_financial_serialization.v1`. Every post-bootstrap account-scoped financial save carries the reviewed `financial_state_version`, latest snapshot ID, and idempotency key. The server locks the owner-scoped account row first, revalidates state, and either commits one complete winner or returns an operation-specific stale result with no mutation. One bounded transient retry may preserve the unchanged request; no retry may refresh/reanchor it silently.
+
 ### UF-FIN-01 — Establish initial balance snapshot
 
 1. Onboarding explains that KFin tracks one aggregate liquid-money amount manually and does not connect to banks.
 2. User selects one base currency (VND default), which becomes immutable after the first financial record.
 3. User enters the authoritative current balance and confirms an exact local as-of date/time.
 4. Review explains that this snapshot anchors current balance, future current-impact transactions adjust it, and older backfill can be reported without changing it.
-5. Server atomically creates the one user-owned aggregate account and its initial immutable balance snapshot.
-6. Dashboard shows the current balance with snapshot/last-activity freshness disclosure.
+5. Server atomically creates the one user-owned aggregate account, its initial immutable balance snapshot, version `1`, and idempotency result; user/account uniqueness permits one bootstrap winner.
+6. Dashboard shows the current balance, latest snapshot, financial-state version context, and snapshot/last-activity freshness disclosure.
 
 A snapshot is never silently overwritten. A later manual authoritative-balance update creates a new snapshot segment and preserves prior evidence; it is not bank/account-statement reconciliation.
 
@@ -116,8 +118,8 @@ A snapshot is never silently overwritten. A later manual authoritative-balance u
 
 1. User chooses `Add historical record`, selects a date before the latest snapshot’s local date, or selects the same local date and enters the explicit inclusion review.
 2. A pre-snapshot date is historical. On the same local date, the UI asks whether the event was already included; choosing `No` exits this historical path and previews a current-impact save.
-3. For the historical path, the form labels the transaction `Already included in current snapshot`, previews no current-balance change, and asks the user to confirm the income/expense details.
-4. Server posts the transaction with historical balance effect and links it to the relevant snapshot context.
+3. For the historical path, the form labels the transaction `Already included in current snapshot`, previews no current-balance change, captures the reviewed version/latest snapshot, and asks the user to confirm the income/expense details.
+4. Under the account lock, the server revalidates that reviewed state, posts the transaction with historical balance effect, links it to the relevant snapshot context, and increments the financial-state version once.
 5. Activity and monthly/category reports include it with a visible historical-only label; Home current balance stays unchanged.
 
 Changing `historical`/`current` meaning in one correction is rejected under proposed `snapshot_correction.v1`. Where owning-domain rules permit, the user must deliberately void the source and create a separate new transaction, each with its own consequence preview and audit evidence.
@@ -125,10 +127,11 @@ Changing `historical`/`current` meaning in one correction is rejected under prop
 ### UF-FIN-03 — Update known balance with a new snapshot
 
 1. User opens Money setup and selects `Update known balance`.
-2. KFin shows calculated current balance and asks for the user’s authoritative actual amount and exact as-of time.
+2. KFin shows calculated current balance, latest snapshot, reviewed financial-state version, and asks for the user’s authoritative actual amount and exact as-of time.
 3. If different, review explains the variance without inventing a missing income/expense transaction.
-4. User confirms; server creates a new immutable snapshot segment.
-5. Current balance now starts from the new snapshot. Prior transactions/snapshots remain inspectable and monthly reports are not rewritten.
+4. User confirms with one idempotency key. Server locks the account row, checks the reviewed version/latest snapshot, creates one immutable snapshot segment, increments the version once, and commits one result.
+5. If another financial write wins first, the snapshot commits no financial/domain mutation or version increment (only its bounded stale idempotency receipt), returns `FIN_SNAPSHOT_STALE_STATE`, and requires refetch/rebuilt preview/reconfirmation. KFin never retries against a new anchor automatically.
+6. On success, current balance starts from the new snapshot. Prior transactions/snapshots remain inspectable and monthly reports are not rewritten.
 
 ### UF-FIN-04 — Global Add expense
 
@@ -138,15 +141,16 @@ Changing `historical`/`current` meaning in one correction is rejected under prop
 2. User enters amount using a locale-appropriate numeric keypad.
 3. User chooses a recent/default category and classification; date defaults to today; the one aggregate account is implicit.
 4. Optional fields (note and different date) remain secondary. Choosing a pre-snapshot date switches to the historical-review behavior rather than silently changing balance impact.
-5. Save disables repeat taps and sends an idempotency key.
-6. On server confirmation, sheet closes, a concise undo/edit affordance may appear, and visible totals invalidate/refetch.
+5. Save disables repeat taps and sends the reviewed financial-state version/latest snapshot plus one idempotency key.
+6. Server locks the account first, revalidates anchor/version, writes the complete transaction, increments version once, and stores the result atomically. On confirmation, the sheet closes, a concise undo/edit affordance may appear, and visible totals invalidate/refetch.
 
 **Validation/recovery**
 
 - Amount must be positive and within database/product bounds.
 - Decimal rules follow the selected currency; VND rejects fractional minor units.
-- Connectivity failure keeps entered values and offers retry; it must not queue a hidden offline write.
-- If result is uncertain, client checks the request/idempotency result before offering a new save.
+- `FINANCIAL_STATE_STALE` keeps entered values, refetches account/latest-snapshot context, and requires a new review; it never silently anchors the draft elsewhere.
+- `FINANCIAL_CONCURRENCY_BUSY` or `FINANCIAL_OPERATION_TIMEOUT` keeps entered values and permits safe same-key retry; no hidden offline write is queued.
+- If commit acknowledgement is uncertain, the client keeps the draft/result-pending state and retries the same request with the same idempotency key. It never offers a new-key duplicate while `FINANCIAL_RESULT_UNKNOWN` is unresolved.
 
 **Usability target:** Valid basic entry in one surface, with no required note and no multi-page navigation.
 
@@ -162,16 +166,16 @@ Same amount-first pattern as Global Add, with **Income** selected. The date dete
 2. Detail shows amount, date, classification, `current`/`historical` effect, original snapshot anchor, latest-versus-closed segment, owning-domain link, and correction history.
 3. User chooses **Correct transaction** or **Void transaction** and provides a bounded reason.
 4. For correction, the user may propose amount, a date still valid in the original segment/effect, category/classification, unexpected flag, or note. Owner, account, currency, direction, anchor, balance effect, inclusion meaning, and owning-domain identity are not editable.
-5. Server generates an authoritative consequence preview: source/replacement values, current balance before/delta/after or explicit zero change, affected report periods, link handling, and version/state context.
+5. Server generates an authoritative consequence preview: source/replacement values, current balance before/delta/after or explicit zero change, affected report periods, link handling, financial-state version, latest snapshot ID, and source/link versions.
 6. A date/effect/anchor request requiring another segment is rejected with no write. KFin does not auto-reanchor; the user may deliberately void where allowed and add a separate new transaction.
 7. For a schedule-only link, supported correction keeps the occurrence confirmed and atomically transfers its transaction pointer. Debt uses `UF-DEBT-03`; generic debt/planned-purchase correction or linked standalone void is rejected as specified by the owning-domain matrix.
-8. User confirms the preview. Server atomically voids the source and creates one replacement, or performs one standalone void; prior rows remain inspectable and only one posted terminal effect exists.
-9. If source, anchor, relevant financial state, or link version changed, the server commits nothing and returns `FIN_CORRECTION_STALE_STATE`. User must refetch, review a new preview, and deliberately retry with a new idempotency key.
-10. Same-key/same-request retry returns the first committed result; same key/different payload is rejected.
+8. User confirms the preview with one idempotency key. Server locks the account row first, checks compatible prior result, validates reviewed version/latest snapshot, locks source/link rows in global order, atomically voids the source and creates one replacement or standalone void, increments the version once, and commits all effects or none.
+9. If source, anchor, relevant financial state, or link version changed, the server commits no financial/domain/link/audit mutation or version increment, persists only the bounded stale receipt for that key/digest, and returns `FIN_CORRECTION_STALE_STATE`. User must refetch, review a new preview, and deliberately retry with a new idempotency key.
+10. Same-key/same-request retry returns the first committed result before stale-version comparison; same key/different payload is rejected. An uncertain commit retains the same key and never invites a duplicate correction.
 
 **Prior-segment result:** Correction/void may amend reports but never changes current balance, which remains anchored to the latest snapshot.
 
-**Race result:** A snapshot/correction or correction/correction race has exactly one winner. A losing snapshot returns `FIN_SNAPSHOT_STALE_STATE`; a losing correction/void returns `FIN_CORRECTION_STALE_STATE`. Neither auto-reanchors, branches, duplicates, or partially writes. `SPEC-FIN-02` still selects the PostgreSQL mechanism enforcing this observable contract.
+**Race result:** Proposed `account_financial_serialization.v1` uses the owner-scoped account-row lock and monotonic version to produce exactly one winner. A losing snapshot returns `FIN_SNAPSHOT_STALE_STATE`; a losing correction/void returns `FIN_CORRECTION_STALE_STATE`. Neither auto-reanchors, branches, duplicates, or partially writes. Approval and executed PostgreSQL evidence remain pending under `SPEC-FIN-02`.
 
 Linked financial records must never become orphaned. Until the Issue #1 proposal receives mandatory approval, this flow remains specification-only and unavailable for implementation.
 
@@ -340,7 +344,7 @@ Before approval, product/UX review must walk through at minimum:
 - payment due date passes with no confirmation;
 - retry after an uncertain Global Add response;
 - debt payment/correction cases `DCT-01`–`DCT-09`, preserving `SPEC-DEBT-01` blocked outcomes and inferring no component/outstanding;
-- snapshot scenarios A–J, including historical-only reporting, same-day explicit inclusion, new segments, non-whole-history balance, proposed `snapshot_correction.v1`, and the remaining `SPEC-FIN-02` mechanism blocker;
+- snapshot scenarios A–J, including historical-only reporting, same-day explicit inclusion, new segments, non-whole-history balance, proposed `snapshot_correction.v1`, proposed `account_financial_serialization.v1`, and the still-missing `SPEC-FIN-02` approval/runtime evidence;
 - safe-to-spend cases `STS-01`–`STS-15`, including projected-income exclusion, no paid-outgoing double subtraction, active-goal reserve, negative result, and local month boundary;
 - manual savings amount update followed by partial linked-purchase deduction without double counting;
 - reminder cases `RCT-01`–`RCT-10`, including worker downtime, closed app, late occurrence creation, timezone change, delayed return, multiple missed stages, no burst, and `SPEC-REM-01`;
@@ -358,7 +362,7 @@ Round 3 does not choose any unresolved branch. It defines what flow evidence mus
 | `SPEC-AUTH-01` | First-use map, `UF-AUTH-01`/`02` | Fresh rotated session after verification or explicit sign-in; result, onboarding redirect, cookie/CSRF, event, multi-tab, and uncertain-response result | OTP use is atomic/single-use; no pre-auth identifier survives | Compact/expanded walkthrough, threat/session-fixation review, retry/multi-tab tests, approved Vietnamese copy | OPEN — decision ready |
 | `SPEC-AUTH-02` | `UF-AUTH-01`–`06`, session-expiry exception | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and failure path | Invitation code only; generic responses; Argon2id; digest-only secrets; reset revokes all sessions | Boundary, expiry, replay, concurrent-tab, provider-failure, benchmark and usability evidence | OPEN — decision ready |
 | `SPEC-FIN-01` | `UF-FIN-02`/`03`/`06` and linked flows | Approve proposed `snapshot_correction.v1`: void + replacement, same-anchor/effect only, cross-segment rejection, report/link/preview/audit/stale/idempotent outcomes | Append-only evidence; no silent cross-segment move, history erasure, or double effect | Issue #1 PR review, snapshot H–J, and `FIN-COR-01`–`10` walkthroughs | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | `UF-FIN-01`–`06` | Select/prove the PostgreSQL linearization/lock/isolation/version mechanism, internal retry bounds, and timeout-after-commit handling | Exactly one latest segment and defined winner/stale-loser result; no silent re-anchor | Deterministic race, deadlock and timeout-after-commit tests | OPEN — decision ready |
+| `SPEC-FIN-02` | `UF-FIN-01`–`06` | Approve/prove `account_financial_serialization.v1`: account-row lock, monotonic version, account-first order, one bounded retry, same-key uncertain-commit recovery and safe errors | Exactly one latest segment and defined winner/stale-loser result; no silent re-anchor, duplicate or unbounded retry | ADR-009 review and executed `FIN-RACE-01`–`08` with lock/query/fault evidence | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | `UF-DEBT-03` | Explicit-fact replay or fresh lender-reported balance when later events exist | No inferred debt component or outstanding; unsafe path unavailable | DCT-08/09 and later-event/date-reorder/missing-state walkthroughs | OPEN — decision ready |
 | `SPEC-SCH-01` | `UF-SCH-01`–`04` | 29-February outcome, bounds/horizon/batch, and exact occurrence/series-edit split behavior | Supported cadence and monthly missing-day fallback stay fixed; history is preserved | Fixed-clock boundary, edit-versus-worker race and UX walkthroughs | OPEN — decision ready |
 | `SPEC-REM-01` | `UF-REM-01` | Catch-up emission, precedence, recovery window, suppression record, timezone/late-creation and state-race outcomes | At most one catch-up; no burst; no financial-state mutation | Exact RCT-04–07 and outage/timezone/state-race outcomes | OPEN — decision ready |

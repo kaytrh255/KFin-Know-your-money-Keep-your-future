@@ -1,7 +1,7 @@
 # KFin Test Strategy
 
-**Status:** Draft — Issue #1 correction cases specified; no execution evidence<br>
-**Version:** 0.5<br>
+**Status:** Draft — FIN-01/02 cases specified; no execution evidence<br>
+**Version:** 0.6<br>
 **Release target:** Private Beta, at most 50 users<br>
 **Current evidence:** None; no application has been implemented or tested
 
@@ -67,7 +67,7 @@ All amounts below are exact integer VND units and validate `safe_to_spend.v1`. E
 
 ### 3.2 Balance-snapshot scenario matrix A–J
 
-Scenarios A–G retain approved required results. GitHub Issue #1 now supplies proposed exact results for H–I and J’s correction-transition branch under `snapshot_correction.v1`. J’s observable race result is also fixed as one winner + one stale loser, while `SPEC-FIN-02` remains OPEN for the PostgreSQL enforcement mechanism/evidence. The proposed rows are test specifications, not executed evidence or implementation authorization.
+Scenarios A–G retain approved required results. Issue #1 supplies proposed H–I/J correction semantics under `snapshot_correction.v1`; Issue #3 supplies proposed PostgreSQL enforcement under `account_financial_serialization.v1`. Both are test specifications only: owner approvals and runtime evidence are absent, both blockers remain OPEN, and no implementation is authorized.
 
 | Scenario | Requirement → Flow | Invariants | Fixture / action | Required result / status |
 |---|---|---|---|---|
@@ -80,7 +80,7 @@ Scenarios A–G retain approved required results. GitHub Issue #1 now supplies p
 | G — no whole-history reconciliation | PRD-DASH-03, PRD-FIN-08 → UF-DASH-01 | FIN-SNAP-INV-03, FIN-SNAP-INV-07 | Select a month containing current and historical-only records across a snapshot boundary | Monthly totals include eligible posted records; current balance uses latest segment only; disclosure explains why the figures do not reconcile by all-history summation |
 | H — correction within latest segment | PRD-FIN-04, PRD-FIN-11 → UF-FIN-06 | FIN-SNAP-INV-02, FIN-SNAP-INV-08 | Latest snapshot `1,000,000`; posted current expense `300,000`; correct amount to `250,000` with no race | Proposed Issue #1 result: atomically void source + post one same-anchor/effect replacement; balance `750,000`; report has only active `250,000`; chain/idempotency/link evidence retained. Never count both effects. |
 | I — correction concerning a closed prior segment | PRD-FIN-04, PRD-FIN-11 → UF-FIN-06 | FIN-SNAP-INV-04, FIN-SNAP-INV-08, FIN-SNAP-INV-10 | Older segment has expense `300,000`; newer authoritative snapshot is `900,000`; correct old amount to `250,000` | Proposed Issue #1 result: void + same-anchor/effect replacement; authoritative current balance remains exactly `900,000`; report replaces `300,000` with `250,000` and exposes correction history. |
-| J — crossing/racing an anchor | PRD-FIN-11 → UF-FIN-03, UF-FIN-06 | FIN-SNAP-INV-09, FIN-SNAP-INV-10 | (a) request another anchor/effect/date requiring another segment; (b) race correction against a new snapshot from the same previewed state | Proposed correction result: (a) deterministic cross-segment/effect error and no write. Race: (b) exactly one commits; losing snapshot gets `FIN_SNAPSHOT_STALE_STATE`, losing correction gets `FIN_CORRECTION_STALE_STATE`; no auto-reanchor/partial/duplicate. `SPEC-FIN-02` remains OPEN for mechanism evidence. |
+| J — crossing/racing an anchor | PRD-FIN-11–13 → UF-FIN-03, UF-FIN-06 | FIN-SNAP-INV-09, FIN-SNAP-INV-10 | (a) request another anchor/effect/date requiring another segment; (b) race correction against a new snapshot from version `N` | (a) deterministic cross-segment/effect error and no write. (b) proposed account-row lock winner commits version `N+1`; losing snapshot gets `FIN_SNAPSHOT_STALE_STATE` or losing correction gets `FIN_CORRECTION_STALE_STATE`; no auto-reanchor/partial/duplicate. Runtime evidence remains `SPEC-FIN-02`. |
 
 #### 3.2.1 `FIN-COR-01`–`FIN-COR-10` correction matrix
 
@@ -100,6 +100,33 @@ These are reproducible specification cases for the Issue #1 proposal. They are N
 | FIN-COR-10 — races | Race correction versus snapshot, correction, and link update | One winner; losing snapshot gets `FIN_SNAPSHOT_STALE_STATE`, other stale request gets `FIN_CORRECTION_STALE_STATE`; no auto-reanchor, branch, duplicate, or partial state |
 
 All ten cases additionally assert same-user/currency ownership, required reason, consequence preview, one posted terminal row, report correctness, and append-only audit. Exact PostgreSQL race execution remains `SPEC-FIN-02` evidence.
+
+#### 3.2.2 `FIN-RACE-01`–`FIN-RACE-08` PostgreSQL concurrency matrix
+
+These are reproducible tests for proposed `account_financial_serialization.v1`. They MUST run against intended PostgreSQL/driver/pool behavior with deterministic barriers; they are currently **NOT RUN**.
+
+| Case | Forced fixture/action | Required result |
+|---|---|---|
+| FIN-RACE-01 — snapshot vs transaction | Version `N`, latest `S`; force transaction-first and snapshot-first | First commit reaches `N+1`; loser gets operation-specific `409`; transaction is never moved silently to a new anchor; one effect/latest snapshot only |
+| FIN-RACE-02 — snapshot vs correction | Same reviewed state; force correction-first and snapshot-first, including schedule link | One complete winner; losing snapshot gets `FIN_SNAPSHOT_STALE_STATE` or correction gets `FIN_CORRECTION_STALE_STATE`; source/replacement/link are atomic |
+| FIN-RACE-03 — correction vs correction/void | Different keys target one posted terminal source concurrently | One source transition, at most one replacement and one version increment; loser stale; no branch/double reversal/partial link |
+| FIN-RACE-04 — snapshot vs snapshot/stale tab | Two snapshot requests use version `N`; force both orders | One immutable latest snapshot and version `N+1`; loser stale; no overwrite/duplicate anchor |
+| FIN-RACE-05 — idempotency contention | Parallel same key/digest; then same key/different digest; replay after version advance | Compatible calls return one stored result/increment; changed digest gets `IDEMPOTENCY_KEY_REUSED`; compatible replay is not stale |
+| FIN-RACE-06 — bounded database retry | Inject `55P03`, `40P01`, `40001` on attempt one/again on two; commit competitor between attempts | At most two unchanged attempts; unchanged state may commit once; changed state is stale; second transient gets `FINANCIAL_CONCURRENCY_BUSY`; no third attempt |
+| FIN-RACE-07 — commit uncertainty | Cut connection before `COMMIT`, after send, and after commit-before-response; force commit and rollback branches | Same key returns one result or executes safely once after rollback; unresolved budget gets `FINANCIAL_RESULT_UNKNOWN`; no duplicate row/effect/version increment |
+| FIN-RACE-08 — scope/order/bypass | User/worker/operator/domain writes on same account and writes on distinct synthetic accounts; instrument prohibited child-first path | Same-account writes serialize; distinct accounts do not share a global lock; all covered paths are account-first; prohibited bypass/order fails review/test |
+
+Evidence execution requirements:
+
+- record PostgreSQL/driver/ORM/pool/configuration and schema/spec/harness commits;
+- force, do not merely hope for, each winner order; run at least 100 repetitions per order for FIN-RACE-01–05 with zero forbidden result;
+- record exact injected SQLSTATE, attempt count, backoff and final state for FIN-RACE-06;
+- use connection/proxy fault injection at each FIN-RACE-07 cut point;
+- prove one version increment for a winner and zero for stale/replay/rollback;
+- capture sanitized lock/query evidence, p95/p99 lock wait/transaction duration, defects and rerun disposition; and
+- register producer, named mandatory reviewers, date and artifact digest under `EVID-FIN-CONCURRENCY`.
+
+Documentation, mocked locks, sleep-only races, or an in-memory database cannot produce closure evidence.
 
 ### 3.3 Debt-payment correction safety matrix
 
@@ -141,7 +168,7 @@ The suites below are specifications for evidence, not executed results. A blocke
 | `SPEC-AUTH-01` | `AUTH-VRF-01`–`AUTH-VRF-06`: both candidate threat reviews; fresh-identifier/no-session assertion; cookie/CSRF; multi-tab; timeout-after-consume; compact/expanded result flow/content | Product + Security; QA evidence review | Exactly one branch is approved; selected branch passes all applicable cases; rejected branch is absent from source contracts | NOT RUN — OPEN |
 | `SPEC-AUTH-02` | `AUTH-POL-01`–`AUTH-POL-12`: each invitation/password/OTP/reset/login/session/rotation/replay/password-change boundary, Argon2 benchmark, provider failure and abuse-cost tests | Security + Product; Architecture/UX/Operations/QA consultation | Every dimension has approved value/range/change owner and exact pass/fail outcomes; evidence covers lower/upper/expiry/replay/failure boundaries | NOT RUN — OPEN |
 | `SPEC-FIN-01` | Issue #1 policy review plus H–J and `FIN-COR-01`–`FIN-COR-10`: void/replacement, same/prior/cross-segment, occurrence/debt/purchase links, report periods, idempotent retry and stale state | Product + Financial Integrity + Data + Security | Owners approve `snapshot_correction.v1`; one effective result only; current-balance/history constraints hold; all supported/rejected transitions and linked effects are exact | SPECIFIED, NOT RUN — OPEN |
-| `SPEC-FIN-02` | `FIN-RACE-01`–`FIN-RACE-08`: prove the PostgreSQL primitive for snapshot wins, correction wins, parallel requests, stale client, deadlock/serialization failure, timeout-after-commit and idempotency retry | Data + Architecture + Security + Financial Integrity | Selected mechanism enforces the Issue #1 one-winner/one-stale-loser contract with no ambiguous attachment/re-anchor/duplicate effect | NOT RUN — OPEN |
+| `SPEC-FIN-02` | ADR-009 review plus `FIN-RACE-01`–`FIN-RACE-08`: account-row lock/version, both forced winner orders, idempotency contention, exact retry SQLSTATE/bounds, commit uncertainty, scope/order/bypass | Data + Architecture + Security + Financial Integrity | Owners approve `account_financial_serialization.v1`; intended PostgreSQL/driver/pool evidence proves one version-incrementing winner/stale loser, no auto-reanchor/duplicate/third retry, and same-key recovery | SPECIFIED, NOT RUN — OPEN |
 | `SPEC-DEBT-01` | DCT-08/09 plus `DEBT-HIST-01`–`DEBT-HIST-06`: later payment, later adjustment, date reorder, void, missing pre-state and partial failure | Product + Financial Integrity + Data | Approved policy yields exact safe result or explicit rejection for every branch; no inferred component/outstanding in state or preview | NOT RUN — OPEN |
 | `SPEC-SCH-01` | `SCH-BND-01`–`SCH-BND-10`: leap/non-leap recurrence, return to leap year, interval/end/horizon/batch/user bounds, occurrence edit, future split, reminder regeneration, edit/worker race | Product + Data + Architecture | Every boundary has one result; generation is bounded/idempotent; confirmed/skipped/cancelled history is preserved | NOT RUN — OPEN |
 | `SPEC-REM-01` | RCT-04–07 plus `REM-REC-01`–`REM-REC-07`: one/multiple missed stages, first overdue, recovery expiry, timezone, late creation, state change during claim and suppression audit | Product + Architecture + Operations + QA | Approved tuple produces zero/one expected catch-up; never a burst/duplicate/financial mutation; each elapsed non-selected stage is auditable | NOT RUN — OPEN |
@@ -542,7 +569,7 @@ Round 3 defines the required suites in §3.5, but no suite has been executed and
 | Priority | Blocker(s) | Test-strategy exit condition | Status |
 |---|---|---|---|
 | AUTH | `SPEC-AUTH-01`, `SPEC-AUTH-02` | Approved outcomes/values plus complete applicable `AUTH-VRF` and `AUTH-POL` evidence | OPEN |
-| FIN | `SPEC-FIN-01`, `SPEC-FIN-02` | Owners approve Issue #1 `snapshot_correction.v1`; H–J/`FIN-COR` remain reproducible; `FIN-RACE` proves the selected PostgreSQL mechanism | OPEN |
+| FIN | `SPEC-FIN-01`, `SPEC-FIN-02` | Owners approve `snapshot_correction.v1` and `account_financial_serialization.v1`; H–J/`FIN-COR` remain reproducible; executed PostgreSQL `FIN-RACE-01`–`08` and ADR-009 evidence prove the mechanism | OPEN |
 | DEBT | `SPEC-DEBT-01` | DCT-08/09 and `DEBT-HIST` outcomes are exact and preserve no-inference | OPEN |
 | SCHEDULE | `SPEC-SCH-01` | `SCH-BND` results cover all approved boundary/edit/race choices | OPEN |
 | REMINDER | `SPEC-REM-01` | RCT-04–07 and `REM-REC` use one approved tuple with no burst | OPEN |

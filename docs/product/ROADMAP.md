@@ -86,13 +86,14 @@
 - Posted current-impact/historical-only income/expense transaction model.
 - Amount-first Global Add and activity history.
 - Approved append-only transaction correction/void flow under `snapshot_correction.v1`; cross-segment moves remain rejected.
+- Approved/evidenced PostgreSQL account-row/version serialization under `account_financial_serialization.v1`, including bounded retry and same-key uncertain-commit recovery.
 - Default categories/classifications.
 - Monthly aggregation and snapshot-anchor consistency tests.
 
 **Exit gate**
 
 - Money/date/timezone invariants and idempotency pass.
-- `SPEC-FIN-01` has mandatory owner approval; H–J and `FIN-COR-01`–`10` pass under the `SPEC-FIN-02` mechanism evidence.
+- `SPEC-FIN-01` and `SPEC-FIN-02` have mandatory owner approvals; H–J/`FIN-COR-01`–`10` and PostgreSQL `FIN-RACE-01`–`08` pass with ADR-009, lock/query, latency and commit-fault evidence.
 - Representative users complete Global Add and correction tasks on small screens.
 - Cross-user tests pass for every resource.
 

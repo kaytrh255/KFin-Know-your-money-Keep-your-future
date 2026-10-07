@@ -28,7 +28,7 @@ No unresolved Product, Security, Financial Integrity, Data, Privacy, UX, or Gove
 |---|---|
 | OPEN — decision packet missing | The decision boundary or closure evidence is not sufficiently specified. This was the pre-Round-3 condition for parts of the register. |
 | OPEN — decision ready | Round 3 specifies owners, decision inputs, evidence, and acceptance criteria, but no concrete policy is selected. |
-| OPEN — approval/evidence ready | A concrete policy is fully specified and testable, but mandatory owner approval or required evidence is still absent. Issue #1 moves `SPEC-FIN-01` to this state. |
+| OPEN — approval/evidence ready | A concrete policy is fully specified and testable, but mandatory owner approval or required evidence is still absent. Issues #1/#3 move `SPEC-FIN-01`/`SPEC-FIN-02` to this state. |
 | RESOLVED | Authorized owners selected one explicit outcome, all affected specifications were synchronized, required evidence is linked and reviewed, acceptance criteria pass, and the blocker register records approver/date/version. |
 
 Writing a decision packet, selecting a preferred option in implementation, or producing documentation consistency evidence alone does not resolve a blocker.
@@ -40,7 +40,7 @@ Writing a decision packet, selecting a preferred option in implementation, or pr
 | AUTH | `SPEC-AUTH-01` | One binary post-verification question without a closure contract | Two permissible outcomes and shared safety obligations are specified; owner/evidence/criteria are explicit | OTP is single-use; verification is atomic; no pre-auth session identifier survives | OPEN — decision ready |
 | AUTH | `SPEC-AUTH-02` | Multiple auth values bundled into one broad approval statement | Policy dimensions, required inputs, and evidence are enumerated | Invitation-code mechanism, Argon2id, generic errors, digest-only secrets, reset-all-session revocation | OPEN — decision ready |
 | FIN | `SPEC-FIN-01` | Correction/void behavior was blocked in scenarios H–J without a complete decision checklist | Round 3 enumerated the dimensions; Issue #1 now proposes `snapshot_correction.v1` with append-only replacement, immutable anchor/effect, cross-segment rejection, link/report and stale/idempotent outcomes | No history erasure, no double effect, closed history cannot rewrite current balance | OPEN — approval/evidence ready |
-| FIN | `SPEC-FIN-02` | Linearizable outcome required, serialization and conflict contract unspecified | Issue #1 now proposes the external winner/stale-loser behavior; PostgreSQL linearization/lock/isolation/version mechanism, internal retry bounds and evidence remain required | Exactly one latest segment; no silent re-anchor; deterministic current balance | OPEN — decision ready |
+| FIN | `SPEC-FIN-02` | Linearizable outcome required, serialization and conflict contract unspecified | Issue #3 now proposes `account_financial_serialization.v1`: `READ COMMITTED` account-row lock, monotonic version, account-first order, bounded SQLSTATE retry and same-key uncertain-commit recovery | Exactly one latest segment; no silent re-anchor; deterministic current balance | OPEN — approval/evidence ready |
 | DEBT | `SPEC-DEBT-01` | Later-event correction offered two broad alternatives | Explicit-fact replay and mandatory fresh lender-balance options now have safety/evidence criteria | No inferred principal, interest, fee, amortization, payoff, or outstanding | OPEN — decision ready |
 | SCHEDULE | `SPEC-SCH-01` | Leap-day, bounds, and series-edit decisions were grouped but under-specified | Each decision dimension and required boundary scenarios are explicit | Supported cadence set and monthly missing-day fallback remain fixed | OPEN — decision ready |
 | REMINDER | `SPEC-REM-01` | Catch-up stage selection was blocked without a complete policy tuple | Selection, recovery window, suppression record, and state-race criteria are explicit | At most one catch-up notification; no burst; occurrence state remains financial authority | OPEN — decision ready |
@@ -61,7 +61,7 @@ The following additional source documents were changed for each blocker:
 | `SPEC-AUTH-01` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-002-authentication-strategy.md`; `architecture/ADR/ADR-004-session-management.md`; `security/SECURITY-REQUIREMENTS.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-AUTH-02` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-002-authentication-strategy.md`; `architecture/ADR/ADR-004-session-management.md`; `security/SECURITY-REQUIREMENTS.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-FIN-01` | `product/SPEC-FIN-01-SNAPSHOT-CORRECTION.md`; `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `security/SECURITY-REQUIREMENTS.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
-| `SPEC-FIN-02` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-003-database-choice.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
+| `SPEC-FIN-02` | `architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md`; `architecture/ADR/ADR-009-per-account-financial-serialization.md`; `product/PRD.md`; `product/USER-FLOWS.md`; `product/DECISION-LOG.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-003-database-choice.md`; `security/SECURITY-REQUIREMENTS.md`; `security/THREAT-MODEL.md`; `testing/TEST-STRATEGY.md`; `testing/RELEASE-CHECKLIST.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md`; `governance/APPROVAL-AND-EVIDENCE-REGISTER.md` |
 | `SPEC-DEBT-01` | `product/USER-FLOWS.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-SCH-01` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-REM-01` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-008-notification-architecture.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
@@ -150,7 +150,7 @@ The decision must also specify result-screen copy, onboarding transition, cookie
 - a date/field requiring another segment/effect is deterministically rejected, never auto-reanchored;
 - schedule-only correction transfers its confirmed pointer atomically; generic debt/planned-purchase paths reject/delegate under the owning-domain matrix;
 - preview, reason, linear audit chain, one posted terminal effect, idempotent replay, and stale-state conflict outcomes are mandatory; and
-- a snapshot/correction race has one winner and one stale loser, while `SPEC-FIN-02` still selects the PostgreSQL enforcement primitive.
+- a snapshot/correction race has one winner and one stale loser; proposed `account_financial_serialization.v1` supplies the PostgreSQL enforcement candidate while `SPEC-FIN-02` approval/evidence remains open.
 
 **Fixed constraints:** No in-place history erasure; one effective financial effect; correction of closed prior history cannot rewrite authoritative current balance; no silent segment/effect movement; same-user/currency/anchor checks remain mandatory.
 
@@ -170,33 +170,32 @@ The decision must also specify result-screen copy, onboarding transition, cookie
 
 **Before:** Specifications required one deterministic latest segment but did not select the PostgreSQL serialization mechanism or retryable conflict contract.
 
-**Issue #1 clarification:** The external race contract is now proposed as exactly one winner and one endpoint-specific stale loser (`FIN_SNAPSHOT_STALE_STATE` or `FIN_CORRECTION_STALE_STATE`), with no auto-reanchor or automatic replay; compatible idempotent retry returns the first committed result. This narrows but does not resolve `SPEC-FIN-02`.
+**Decision required:** Approve the explicit Issue #3 candidate `account_financial_serialization.v1` and ADR-009:
 
-**Decision required:** Select and document one PostgreSQL mechanism that defines:
+- every covered post-bootstrap mutation runs at PostgreSQL `READ COMMITTED` and first locks the owner-scoped `financial_accounts` row `FOR UPDATE`;
+- dedicated `financial_state_version` plus reviewed latest snapshot are revalidated post-lock; one logical winner increments exactly once;
+- a compatible committed idempotency result is checked after account lock and before stale-version comparison;
+- child/domain locks follow one account-first table-rank/ascending-ID order for user, worker, operator and recovery paths;
+- stale state is never retried or reanchored; only SQLSTATE `55P03`, `40P01`, or `40001` may retry once with the unchanged key/digest/version/payload;
+- candidate bounds are 2,000 ms lock, 5,000 ms statement, 8,000 ms normal budget, 25–75 ms jitter, and one additional 2,000 ms uncertain-commit recovery attempt;
+- a lost commit acknowledgement uses the same key/protocol; unresolved status returns `FINANCIAL_RESULT_UNKNOWN`, never a new-key duplicate; and
+- safe metrics and deterministic PostgreSQL `FIN-RACE-01`–`08` evidence prove the mechanism.
 
-- the per-account linearization point for snapshot creation and current-impact/correction writes;
-- lock/isolation/version ordering and transaction boundaries;
-- how snapshot-wins and correction-wins branches enforce the specified stale-loser result;
-- deadlock/serialization-failure retry limits without replaying against changed user-visible state;
-- timeout-after-commit idempotency lookup;
-- worker/operator behavior under the same account context; and
-- diagnostics that prove the contract without sensitive payload.
+**Alternatives rejected by the candidate:** advisory/distributed/global locks; optimistic-version-only multi-row writes; `SERIALIZABLE` as the primary user-conflict mechanism; and automatic retry against refreshed state.
 
-Candidate mechanisms may be evaluated, but Round 3 does not select row locking, advisory locking, or serializable isolation.
-
-**Fixed constraints:** Exactly one latest segment; no ambiguous attachment; no silent re-anchor; no duplicate effect; old segments never re-enter current balance.
+**Fixed constraints:** Exactly one latest segment; no ambiguous attachment; no silent re-anchor; no duplicate effect; old segments never re-enter current balance; no unbounded or third retry.
 
 **Accountable owner:** Data Owner.<br>
 **Required co-approvers:** Architecture Owner, Security Owner, Financial Integrity Owner.<br>
 **Consulted roles:** Product Owner, QA Owner, Operations Owner.
 
-**Required evidence:** PostgreSQL concurrency spike on the intended transaction layer; deterministic race tests; deadlock/timeout behavior; idempotency timeout-after-commit proof; query/lock review; documented operational diagnostics without sensitive payload.
+**Required evidence:** Mandatory owner/ADR review; deterministic forced-order PostgreSQL `FIN-RACE-01`–`08`; exact SQLSTATE attempt/bound proof; connection/proxy commit cut points; user/worker/operator/domain lock-query review; sanitized lock diagnostics; intended beta p95/p99 lock/transaction timing; defect and rerun disposition.
 
-**Acceptance criteria:** Scenario J has one approved transaction-order/conflict result for every race branch; the selected mechanism and API contract are recorded in an accepted ADR amendment or new ADR; Database, Architecture, Security, Flow, and Test documents agree; evidence and approvers are linked.
+**Acceptance criteria:** Mandatory owners approve exact mechanism/bounds; ADR-009 becomes Accepted only with evidence; scenario J and all `FIN-RACE` branches produce one version-incrementing winner/stale loser; same-key recovery never duplicates; every covered path is account-first; Database, Architecture, Security, Flow, UX and Test documents agree; approval/evidence metadata is linked.
 
-**Primary blocker-specific documents (see §3.1 for the complete change matrix):** Architecture, Database, Test Strategy, Decision Log, ADR Index, this report.
+**Primary blocker-specific documents (see §3.1 for the complete change matrix):** Dedicated SPEC-FIN-02 document, ADR-009, PRD, User Flows, Architecture, Database, Security, Threat Model, UX, Test Strategy, Release Checklist, Decision Log, Governance Register, ADR Index, this report.
 
-**After:** **OPEN — decision ready.** No serialization primitive was selected.
+**After:** **OPEN — approval/evidence ready.** Issue #3 makes the mechanism and evidence oracles explicit; mandatory approval and runtime PostgreSQL evidence are not present.
 
 ## 6. DEBT decision packet
 
@@ -434,10 +433,11 @@ Round 3 does not change any ADR status:
 | ADR-006 | Proposed | UX/governance evidence remains absent |
 | ADR-007 | Proposed | `SPEC-DEL-01` lifecycle architecture boundary clarified; governance/provider/legal evidence remains absent |
 | ADR-008 | Blocked | `SPEC-REM-01` policy tuple and closure evidence clarified; no catch-up policy selected |
+| ADR-009 | Proposed (Issue #3 follow-up) | Records `account_financial_serialization.v1`; mandatory approval and PostgreSQL `FIN-RACE`/fault/lock evidence are absent |
 
-**Accepted — none.** Proposed — ADR-001, ADR-005, ADR-006, ADR-007. Blocked — ADR-002, ADR-003, ADR-004, ADR-008.
+**Accepted — none.** Proposed — ADR-001, ADR-005, ADR-006, ADR-007, ADR-009. Blocked — ADR-002, ADR-003, ADR-004, ADR-008.
 
-`SPEC-FIN-02` resolution must create or amend an ADR before that blocker can close. Round 3 does not create an ADR that pretends an unselected serialization option is a decision.
+Issue #3 creates the required ADR candidate but does not accept it or resolve `SPEC-FIN-02`. Closure still requires named approval and executed evidence; documenting the choice is not proof.
 
 ## 13. Validation and change scope
 

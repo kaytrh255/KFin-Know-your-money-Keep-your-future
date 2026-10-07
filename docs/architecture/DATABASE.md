@@ -1,8 +1,8 @@
 # KFin Database Specification
 
-**Status:** Draft conceptual/logical model — Issue #1 correction model proposed; approval required<br>
+**Status:** Draft conceptual/logical model — FIN-01/02 models proposed; approval/evidence required<br>
 **Database:** Proposed PostgreSQL<br>
-**Decision baseline:** OQ-01 through OQ-19 recorded; Round 3 leaves all affected physical, concurrency, isolation, and legal-lifecycle choices open
+**Decision baseline:** OQ-01 through OQ-19 recorded; `SPEC-FIN-02` now has a concrete unapproved mechanism while all other affected approval/evidence/legal-lifecycle gates remain open
 
 This document defines an intended model and invariants, not executable schema or migrations. Names may be refined during reviewed physical design, but financial meaning and ownership constraints must not be weakened silently.
 
@@ -238,14 +238,17 @@ MVP ships reviewed system categories. A user cannot mutate global rows. Custom c
 - `name` — system/default aggregate label; not an exposed account taxonomy
 - `account_type` fixed to `aggregate_liquid` in MVP
 - `currency CHAR(3)` equal to user base currency
-- `created_at`, `updated_at`, `version`
+- `financial_state_version BIGINT NOT NULL` — starts at `1` with initial snapshot and increments once per committed account-scoped financial mutation
+- `created_at`, `updated_at`, `version` — `version` is account metadata concurrency and is distinct from financial-state authority
 
 Rules:
 
 - Exactly one account may exist per user in MVP; account picker, archive, transfer, and multiple account types are absent.
 - Currency cannot change after the first snapshot/financial record.
+- `financial_state_version` is server-controlled, cannot wrap/decrement, increments once for one complete logical winner, and does not change for stale/rejected/rollback/idempotent-replay outcomes.
 - Negative current balance is valid and must not be silently clamped.
-- Future multi-account support requires a migration that deliberately removes the one-user uniqueness and specifies transfers plus any bank/account-statement reconciliation workflow.
+- The owner-scoped account row is the proposed `account_financial_serialization.v1` PostgreSQL lock target; a covered path cannot substitute a child row, advisory lock, or process mutex.
+- Future multi-account support requires a migration that deliberately removes the one-user uniqueness and specifies transfers plus ascending account-lock order and any bank/account-statement reconciliation workflow.
 
 ### 5.3 `balance_snapshots`
 
@@ -266,7 +269,7 @@ Rules:
 - Snapshots are immutable; correction creates a new snapshot with explicit reason rather than overwriting.
 - `(account_id, effective_at)` is unique; latest snapshot is selected deterministically by `effective_at DESC`.
 - Creating a post-onboarding snapshot begins a new balance segment and does not mutate old transactions; this is a manual known-balance update, not a bank/account-statement reconciliation workflow.
-- A new user-created snapshot must be strictly later than the current latest snapshot under the approved serialized comparison; backdated and future-dated snapshot insertion is forbidden.
+- A new user-created snapshot must be strictly later than the current latest snapshot under the proposed account-row lock and post-lock version/latest-snapshot comparison; backdated and future-dated snapshot insertion is forbidden.
 - A recovery-created snapshot requires elevated operational procedure and audit.
 
 ## 6. Posted transactions
@@ -321,9 +324,25 @@ The reviewed physical design MUST enforce or transactionally prove:
 - one idempotency result identifies the complete source/replacement/link/audit outcome; and
 - report/current-balance queries count only `posted` rows and therefore one terminal effect.
 
-The exact PostgreSQL constraint/index/locking combination remains physical design under `SPEC-FIN-02`; these observable integrity results do not.
+The correction-chain constraints remain subject to physical constraint review. Their concurrency boundary is proposed explicitly by `account_financial_serialization.v1`; approval and PostgreSQL evidence remain under `SPEC-FIN-02`.
 
-### 6.2 Balance and monthly calculation
+### 6.2 Proposed per-account serialization and version protocol
+
+The normative candidate is [SPEC-FIN-02 — Snapshot Concurrency](SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md):
+
+1. Every post-bootstrap account-scoped financial attempt is an explicit PostgreSQL `READ COMMITTED` transaction.
+2. Its first authoritative domain lock is the owner-scoped `financial_accounts` row `FOR UPDATE`.
+3. Under that lock, check a compatible committed idempotency result before expected-version comparison; a valid success or stale replay returns without increment.
+4. Otherwise compare `expected_financial_state_version` and reviewed latest snapshot ID to post-lock authoritative state.
+5. A mismatch commits only a bounded terminal stale idempotency receipt—no financial/domain/link/audit mutation and no version increment—then returns the operation-specific stale code with no auto-reanchor/retry.
+6. Lock child rows only after the account in this rank: existing snapshots → transactions → scheduled occurrences → debt aggregate/payment/adjustment → planned purchases → savings goals → result/audit inserts, using ascending UUID within a rank; then revalidate ownership, anchor/effect, terminal/link state and consequences.
+7. Apply all domain/audit/link changes, increment `financial_state_version` exactly once, store the idempotency result, and commit atomically.
+
+Bootstrap account + initial snapshot uses user/account uniqueness and one idempotency key, then stores version `1` because no account row exists to lock. Workers, operator/recovery tools, and owning-domain paths have no bypass.
+
+Candidate bounds are `lock_timeout = 2,000 ms`, statement timeout `5,000 ms`, normal database budget `8,000 ms`, one internal retry after `25–75 ms` jitter only for SQLSTATE `55P03`, `40P01`, or `40001`, and one same-key commit-uncertainty recovery attempt within `2,000 ms`. These are proposed policy values, not approved framework defaults.
+
+### 6.3 Balance and monthly calculation
 
 For latest snapshot `S`:
 
@@ -342,10 +361,10 @@ Rules:
 - Latest-segment current correction contributes replacement minus source exactly once; latest historical and every closed-segment correction/void contribute zero to current balance. A closed-segment source originally marked `current` is not replayed after correction.
 - Current balance therefore cannot be reconstructed from an unbounded all-history transaction sum across snapshot boundaries. Reporting APIs must expose the snapshot anchor and components.
 - Use checked integer arithmetic and a database view/query; do not maintain a mutable balance cache in MVP.
-- Snapshot creation and correction/void share a logical per-account serialization boundary: exactly one request commits against one previewed state and the loser receives a stable stale-state conflict with no auto-reanchor/retry. `SPEC-FIN-02` remains a blocker for the exact PostgreSQL lock/isolation/version primitive and evidence, not for this external outcome.
-- These rules implement `FIN-SNAP-INV-01` through `FIN-SNAP-INV-10`; scenarios A–J in the test strategy are mandatory acceptance evidence.
+- Snapshot creation and every account-scoped financial mutation share the §6.2 account-row boundary. Exactly one request from one reviewed version increments and commits; the waiter returns an operation-specific stale conflict with no auto-reanchor or refreshed-state retry. `SPEC-FIN-02` remains OPEN for approval and executed evidence, not for lack of a concrete mechanism.
+- These rules implement `FIN-SNAP-INV-01` through `FIN-SNAP-INV-10`; scenarios A–J plus `FIN-RACE-01`–`08` in the test strategy are mandatory acceptance evidence.
 
-### 6.3 Safe-to-spend query contract
+### 6.4 Safe-to-spend query contract
 
 The database/reporting query implements formula version `safe_to_spend.v1`, `PRD-DASH-07`, and `FIN-STS-INV-01` through `FIN-STS-INV-07` without a mutable source-of-truth cache:
 
@@ -564,13 +583,14 @@ Outbox insertion occurs in the domain transaction. Payload must not contain OTP/
 
 ### 12.1 `idempotency_keys`
 
-- `id`, `user_id`, `operation`, `key_digest`
+- `id`, `user_id`, `account_id NULL`, `operation`, `key_digest`
 - canonical request digest
+- `prior_financial_state_version NULL`, `committed_financial_state_version NULL`
 - response status and bounded response reference/result
-- `created_at`, `expires_at`
-- unique `(user_id, operation, key_digest)`
+- `correlation_id`, `created_at`, `expires_at`
+- unique `(user_id, account_id, operation, key_digest)` for account financial operations; an equivalent explicit null-safe scope is required for non-account operations
 
-A reused key with a different request digest returns a deterministic conflict. Retention must cover retry windows and is not permanent.
+For a successful serialized financial mutation, the committed row is inserted in the same transaction as the domain effect. A stale loser commits only a bounded terminal stale receipt, with no financial/domain mutation or version increment, so its key/digest result remains stable. After locking the account, the server checks this row before expected-version comparison. A reused key with a different request digest returns `IDEMPOTENCY_KEY_REUSED`. An uncertain `COMMIT` is recovered only through the same key/digest/account protocol; it is never retried with a new key. Retention must cover retry windows and is not permanent.
 
 ### 12.2 `audit_events`
 
@@ -690,6 +710,8 @@ Automated or operator-safe checks should detect:
 - savings scalar value without exactly one corresponding old/new change record for each update;
 - planned-purchase goal decrease outside allowed bounds or repeated by duplicate completion;
 - transaction/snapshot user, currency, segment, or balance-effect mismatch;
+- account `financial_state_version`/idempotency result inconsistent with a committed logical mutation;
+- covered financial write path that omitted the account-first lock/version protocol;
 - current-balance query including historical/old-segment records;
 - orphaned same-user links;
 - duplicate logical occurrences/reminder stages/jobs;
@@ -702,13 +724,13 @@ Checks emit identifiers/counts and safe error codes, not notes or complete finan
 
 ## 19. Open physical-design decisions
 
-Product meaning is set by OQ-01 through OQ-19. Round 3 makes each affected physical decision reviewable without selecting it:
+Product meaning is set by OQ-01 through OQ-19. Round 3 made each physical decision reviewable; Issue #3 now adds one concrete unapproved `SPEC-FIN-02` candidate while all approval/evidence gates remain:
 
 | Blocker | Exact data decision | Immutable data constraints | Required evidence / acceptance condition | Accountable owner | Status |
 |---|---|---|---|---|---|
 | `SPEC-AUTH-02` | Invitation/challenge/session values; keyed-digest construction; challenge supersession; rotation/grace/replay and last-seen write behavior | No plaintext reusable secret; generic responses; reset revokes all sessions | Benchmark/threat/replay/provider evidence; Security + Product approve every value and all auth/session documents agree | Security Owner | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`: void + replacement, immutable anchor/effect, cross-segment rejection, exact link/report/audit/preview/idempotent/stale outcomes | No in-place erasure, double effect, silent segment movement, or rewrite of current balance from closed history | Issue #1 PR review; H–J and `FIN-COR-01`–`10` are reproducible; Product + Financial Integrity + Data + Security approve | Product Owner | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Choose the PostgreSQL per-account linearization/lock/isolation/version primitive and transaction ordering that enforces the specified winner/stale-loser contract | One latest segment; deterministic attachment; no silent re-anchor or duplicate effect | PostgreSQL race/deadlock/timeout evidence; scenario J race branches pass; accepted ADR amendment/new ADR | Data Owner | OPEN — decision ready |
+| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: owner-scoped account `FOR UPDATE` at `READ COMMITTED`, dedicated version, account-first row order, exact bounds/retry SQLSTATEs and same-key uncertain-commit recovery | One latest segment; one version increment/winner; stable stale loser; no silent re-anchor, duplicate effect or third retry | ADR-009 review; executed `FIN-RACE-01`–`08`; lock/query review; connection fault injection; mandatory owner approval | Data Owner | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported outstanding for corrections with later events; date reorder/void/partial-failure behavior | No inferred component, amortization, payoff, or outstanding; unsafe path unavailable | DCT-08/09 and multi-event results fixed; Product + Financial Integrity + Data approve | Product Owner | OPEN — decision ready |
 | `SPEC-SCH-01` | 29-February policy; interval/end/horizon/batch/active-series limits; split-point and occurrence/future edit behavior | Monthly missing-day fallback and supported cadence stay fixed; generated rows idempotent; history preserved | Boundary/load/edit-race tests; Product + Data + Architecture approve all fields and bounds | Product Owner | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up stage-or-none precedence, recovery age, suppression status/reason, timezone/late-creation/state-race behavior | Occurrence + stage uniqueness; at most one catch-up; no burst or financial mutation | RCT-04–07 exact results plus outage/timezone/race proof; Product + Architecture + Operations + QA approve | Product Owner | OPEN — decision ready |

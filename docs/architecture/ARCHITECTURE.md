@@ -1,6 +1,6 @@
 # KFin Architecture Specification
 
-**Status:** Draft — Issue #1 correction contract proposed; approval/evidence required<br>
+**Status:** Draft — FIN-01/02 contracts proposed; approval/evidence required<br>
 **Architecture style:** Proposed modular monolith<br>
 **Scale target:** Private Beta, at most 50 real users<br>
 **Related ADRs:** [ADR index](ADR/README.md)
@@ -213,10 +213,25 @@ The following identifiers are normative and are traced to the A–J scenario mat
 - **FIN-SNAP-INV-06 — New anchor:** a manual known-balance update creates a new immutable snapshot and segment. It does not rewrite an older anchor or transaction and is not a bank/account-statement reconciliation.
 - **FIN-SNAP-INV-07 — No whole-history sum:** current balance must never be calculated as an initial balance plus every transaction in account history. Monthly net movement therefore need not reconcile to current balance across a snapshot boundary.
 - **FIN-SNAP-INV-08 — Correction evidence:** under proposed `snapshot_correction.v1`, every supported correction atomically voids the posted terminal source and creates one replacement in a linear append-only chain. A standalone void creates no replacement. Source/replacement effects, reason, actor, time, link transition, versions, idempotency result, and consequence preview remain attributable; in-place erasure, branching successors, and two posted terminal effects are prohibited.
-- **FIN-SNAP-INV-09 — Concurrency safety boundary:** correction/void and snapshot creation share one logical per-account serialization boundary. If both act on the same previewed state, exactly one commits; a losing snapshot returns `FIN_SNAPSHOT_STALE_STATE`, while a losing correction/void returns `FIN_CORRECTION_STALE_STATE`. Neither auto-retries/reanchors or partially writes. `SPEC-FIN-02` remains OPEN only for selection and evidence of the PostgreSQL lock/isolation/version primitive enforcing this observable contract.
+- **FIN-SNAP-INV-09 — Concurrency safety boundary:** under proposed `account_financial_serialization.v1`, every account-scoped financial mutation uses one owner-scoped `financial_accounts` row lock at PostgreSQL `READ COMMITTED`, post-lock latest-snapshot/`financial_state_version` validation, and account-first child locks. Two requests from the same reviewed state yield exactly one version-incrementing commit; a losing snapshot returns `FIN_SNAPSHOT_STALE_STATE`, correction/void returns `FIN_CORRECTION_STALE_STATE`, and another financial write returns `FINANCIAL_STATE_STALE`. No loser auto-retries/reanchors or partially writes. `SPEC-FIN-02` remains OPEN for approval and executed PostgreSQL evidence.
 - **FIN-SNAP-INV-10 — Cross-segment safety boundary:** a supported replacement preserves the source snapshot anchor, `current`/`historical` effect, and inclusion meaning. A closed-segment correction/void may amend reports but has zero authoritative-current-balance effect. Any date/field request requiring another anchor/effect is rejected as `FIN_CORRECTION_CROSS_SEGMENT_UNSUPPORTED` or `FIN_CORRECTION_EFFECT_CHANGE_UNSUPPORTED`; movement is never implicit.
 
 The complete Issue #1 candidate, including editable fields, link matrix, previews, error outcomes, and reproducible cases, is [SPEC-FIN-01 — Snapshot Correction Semantics](../product/SPEC-FIN-01-SNAPSHOT-CORRECTION.md). These invariant refinements are proposed pending mandatory owner approval and do not authorize implementation.
+
+### Proposed PostgreSQL account serialization
+
+The complete Issue #3 mechanism is [SPEC-FIN-02 — Snapshot Concurrency](SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md) and [ADR-009](ADR/ADR-009-per-account-financial-serialization.md). The architecture candidate requires:
+
+- explicit `READ COMMITTED`; the owner-scoped account row `FOR UPDATE` is the first authoritative domain lock;
+- a dedicated `financial_state_version` and reviewed latest snapshot ID on every confirmed account-scoped mutation;
+- authoritative idempotency lookup after the account lock and before stale-version comparison;
+- account → snapshot → transaction → owning-domain child lock order, with IDs ascending inside a rank;
+- exactly one version increment for one complete committed logical mutation and none for stale/replay/rollback;
+- one internal retry only for SQLSTATE `55P03`, `40P01`, or `40001`, preserving key/digest/version/payload;
+- same-key recovery when commit acknowledgement is uncertain; and
+- no external call, user wait, or report rendering while locks are held.
+
+Candidate bounds are 2,000 ms lock wait, 5,000 ms statement timeout, 8,000 ms normal database budget, one retry after 25–75 ms jitter, and one 2,000 ms commit-recovery attempt. They are unapproved until mandatory owner review and `FIN-RACE-01`–`08` evidence; framework defaults cannot replace them.
 
 ### Safe-to-spend invariants
 
@@ -257,6 +272,8 @@ The following operations must be atomic:
 - account-deletion state transition/purge checkpoint + required audit/tombstone metadata;
 - security-sensitive state change + required audit event;
 - domain state change + transactional outbox entry when external delivery is required.
+
+Every listed operation that creates/changes an account snapshot or transaction additionally uses the `account_financial_serialization.v1` protocol. Account lock acquisition precedes child locks; latest snapshot/version/idempotency are rechecked under that lock; commit increments the account financial-state version once. Bootstrap account + initial snapshot instead relies on user/account uniqueness and initializes version `1` atomically because no account row exists yet.
 
 Email delivery itself cannot be part of a database transaction. For outbox-eligible non-secret messages, the outbox records intent atomically and the worker retries delivery idempotently. Secret-bearing authentication email follows the immediate ephemeral delivery exception in section 13. Delivery failure never rolls back already committed financial truth.
 
@@ -329,6 +346,7 @@ Structured fields may include timestamp, level, environment, service/process, re
 - Job queue depth/oldest age/retry/dead-letter.
 - Email accepted/bounced/failed by template type.
 - Financial-write success/failure and idempotency conflicts, without amounts.
+- Per-account financial lock wait/timeout, stale-result code, retry SQLSTATE/attempt, retry exhaustion, and uncertain-commit recovery outcome—without raw account IDs, amounts, notes, SQL, or keys.
 - Process health, restarts, CPU, memory.
 
 ### Health
@@ -429,7 +447,7 @@ Release Candidate additionally requires selected providers/domain/region/budget,
 | `SPEC-AUTH-01` | If verification creates a session, define a fresh post-verification credential boundary, cookie/CSRF issuance and replay/uncertain-result behavior; otherwise prove no authenticated session is issued | Threat/session-fixation review and multi-tab/timeout tests on the intended same-origin path | Product and Security select one outcome; ADR-002/004, flows and tests contain no alternative behavior | OPEN — decision ready |
 | `SPEC-AUTH-02` | Define every auth/session value plus rotation, grace, replay containment, revocation and provider-failure semantics | Argon2/runtime benchmark, provider quota assumptions, concurrency/replay and abuse tests | Security/Product approval with exact configurable bounds and change authority | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve `snapshot_correction.v1`: append-only void + replacement, immutable anchor/effect, deterministic cross-segment rejection, closed-segment zero-balance effect, link matrix and stale/idempotent contract | Issue #1 review, H–J and `FIN-COR-01`–`10` specification walkthrough, threat/UX review | Product + Financial Integrity + Data + Security approve the exact version and all source documents agree | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Select the PostgreSQL linearization/lock/isolation/version primitive that enforces the already-defined one-winner/one-stale-loser external contract | PostgreSQL concurrency spike, deterministic race/deadlock/timeout tests, query/lock review | Scenario J race branches pass and an accepted ADR amendment/new ADR links mechanism evidence | OPEN — decision ready |
+| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: `READ COMMITTED` account-row lock, dedicated version, account-first order, exact transient retry and uncertain-commit recovery bounds | ADR-009 review; deterministic PostgreSQL `FIN-RACE-01`–`08`; query/lock and proxy fault evidence | Mandatory owners approve exact policy/bounds; ADR-009 becomes Accepted only with evidence; every covered path proves one winner/stale loser | OPEN — approval/evidence ready |
 | `SPEC-SEC-01` | Select RLS policy/context/roles or approve complete compensating controls and residual risk; application authorization remains mandatory either way | Table/action matrix, pool-context leakage, two-user, worker/operator/migration tests | ADR-003 records one posture, exhaustive scope, named approvers and evidence | OPEN — decision ready |
 | `SPEC-SCH-01` | Approve generation horizon/batch/series bounds and edit-versus-worker transaction behavior | Fixed-clock boundary/load/race evidence at beta scale | PRD, Database, worker design and tests use one bounded policy | OPEN — decision ready |
 | `SPEC-REM-01` | Approve catch-up policy tuple and worker state-race/suppression behavior | Exact RCT-04–07, outage, timezone and late-creation evidence | ADR-008 and all reminder contracts agree without relaxing one-catch-up/no-burst | OPEN — decision ready |

@@ -1,7 +1,7 @@
 # Approval and Evidence Register
 
-**Status:** Controlled template; Issue #1 candidate recorded, approvals/evidence incomplete<br>
-**Version:** 0.2<br>
+**Status:** Controlled template; FIN-01/02 candidates recorded, approvals/evidence incomplete<br>
+**Version:** 0.3<br>
 **Last reviewed:** 2026-10-07<br>
 **Implementation Gate:** CLOSED
 
@@ -68,7 +68,7 @@ These rules are unapproved and remain part of `SPEC-GOV-01`.
 | `SPEC-AUTH-01` | Product Owner | Security Owner | Post-verification outcome and threat/flow/test evidence | Missing | OPEN |
 | `SPEC-AUTH-02` | Security Owner | Product Owner | Complete auth/session policy values and benchmark/threat/usability evidence | Missing | OPEN |
 | `SPEC-FIN-01` | Product Owner | Financial Integrity, Data, Security Owners | Approve Issue #1 `snapshot_correction.v1`; H–J/`FIN-COR-01`–`10`; linked-domain/threat/UX review | Decision candidate documented; approvers/PR approval missing | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Data Owner | Architecture, Security, Financial Integrity Owners | PostgreSQL serialization-mechanism ADR and `FIN-RACE` evidence proving the defined external contract | Missing | OPEN |
+| `SPEC-FIN-02` | Data Owner | Architecture, Security, Financial Integrity Owners | Approve Issue #3 `account_financial_serialization.v1`/ADR-009 bounds and mechanism; executed `FIN-RACE-01`–`08`, lock/query, latency and commit-fault evidence | Decision/ADR candidates documented; approvers/runtime evidence missing | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Product Owner | Financial Integrity, Data Owners | Historical correction policy and DCT evidence | Missing | OPEN |
 | `SPEC-SCH-01` | Product Owner | Data, Architecture Owners | Leap-day/bounds/series-edit policy and boundary evidence | Missing | OPEN |
 | `SPEC-REM-01` | Product Owner | Architecture, Operations, QA Owners | Catch-up policy tuple and RCT evidence | Missing | OPEN |
@@ -85,6 +85,7 @@ Values below must not be guessed from framework defaults. Each final limit requi
 | Limit family | Exact decisions required | Accountable owner | Required co-approvers | Approved value | Evidence | Status |
 |---|---|---|---|---|---|---|
 | Money | Per-entry min/max, absolute-account bounds, currency minor-unit precision/scale, aggregate overflow behavior; no conversion behavior is introduced | Financial Integrity Owner | Product, Data Owners | Unset | Missing | OPEN |
+| Financial concurrency | Account lock/statement/request budgets, transient SQLSTATE set, retry count/jitter, commit-recovery budget and error contract | Data Owner | Architecture, Security, Financial Integrity Owners | Candidate: 2,000 ms lock; 5,000 ms statement; 8,000 ms normal budget; one retry at 25–75 ms; one 2,000 ms recovery | `FIN-RACE`/latency/fault evidence missing | OPEN — approval/evidence ready |
 | Free text | Display name, category/name, notes, cancellation/correction reason, security-event safe detail | Product Owner | Security, Privacy/Legal, UX Owners | Unset | Missing | OPEN |
 | Pagination | Default/max page size, cursor lifetime, stable ordering, bounded in-scope history/report range | Architecture Owner | Product, Data, QA Owners | Unset | Missing | OPEN |
 | Schedule | Interval maximum, end/duration maximum, active series/user, generation horizon, per-run batch | Product Owner | Architecture, Data, Operations Owners | Unset | Missing | OPEN |
@@ -100,7 +101,7 @@ Values below must not be guessed from framework defaults. Each final limit requi
 | `EVID-AUTH-THREAT` | Threat and abuse review | Registration, verification, login, reset, session replay/revocation | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-AUTH-BENCH` | Runtime benchmark | Argon2id and selected request/session limits on intended runtime | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-FIN-CORRECTION` | Financial correction decision evidence | Issue #1 policy review; snapshot H–J; `FIN-COR-01`–`10`; linked domains, reports, idempotency/stale outcomes | Unassigned | Specification exists; PR/approval evidence missing | Not evaluated | OPEN |
-| `EVID-FIN-CONCURRENCY` | PostgreSQL concurrency evidence | Snapshot/transaction races, timeout-after-commit, deadlock/retry | Unassigned | Missing | Not evaluated | OPEN |
+| `EVID-FIN-CONCURRENCY` | PostgreSQL concurrency decision/runtime evidence | Issue #3/ADR-009 review; `FIN-RACE-01`–`08`; both forced orders; version/idempotency; exact SQLSTATE retry bounds; commit cut points; account scope/bypass; lock/latency evidence | Unassigned | Specification/ADR candidates exist; approval and execution artifacts missing | Not evaluated | OPEN |
 | `EVID-DEBT` | Debt correction evidence | DCT-08/09 and later-event/missing-state variants | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-SCHEDULE` | Recurrence evidence | Leap years, short months, timezone, series edits, bounds | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-REMINDER` | Reminder recovery evidence | RCT-04–07, outage/late creation/state races | Unassigned | Missing | Not evaluated | OPEN |

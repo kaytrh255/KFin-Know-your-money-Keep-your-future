@@ -1,8 +1,8 @@
 # Product Requirements Document
 
 **Product:** KFin — Know your money, Keep your future<br>
-**Status:** Draft — Issue #1 correction policy proposed; approval required<br>
-**Version:** 0.5<br>
+**Status:** Draft — FIN-01/02 policies proposed; approval/evidence required<br>
+**Version:** 0.6<br>
 **Date:** 2026-10-07<br>
 **Target release:** Private Beta, at most 50 real users
 
@@ -117,10 +117,16 @@ MVP exposes exactly one aggregate liquid-money account per user. Multiple accoun
 | PRD-FIN-09 | Creating a new manual authoritative-balance snapshot MUST start a new balance segment without deleting or rewriting earlier transactions/snapshots. This is not a bank/account-statement reconciliation workflow. |
 | PRD-FIN-10 | If same-day timing makes snapshot inclusion ambiguous, KFin MUST ask whether the transaction is already included rather than infer silently. |
 | PRD-FIN-11 | A transaction correction MUST never silently change balance effect or snapshot anchor. Under proposed `snapshot_correction.v1`, a request requiring another segment/effect is rejected; supported same-anchor/effect correction requires consequence preview, stale-state protection, and append-only audit evidence. |
+| PRD-FIN-12 | Every account-scoped financial mutation MUST execute under proposed `account_financial_serialization.v1`: one owner-scoped PostgreSQL account-row lock at `READ COMMITTED`, post-lock latest-snapshot/version validation, account-first child-lock ordering, and exactly one financial-state-version increment for one committed logical winner. |
+| PRD-FIN-13 | A stale reviewed state MUST commit no financial/domain/link/audit mutation or version increment; only a bounded terminal idempotency receipt may persist to keep the key/digest result stable. It MUST NOT be auto-reanchored or replayed against refreshed state. Transient database retries are bounded and preserve the original key/digest/version/payload; timeout after an uncertain commit MUST recover with the same idempotency key or return an explicit unknown-result state. |
 
 #### Issue #1 proposed correction policy
 
-The complete decision candidate is [SPEC-FIN-01 — Snapshot Correction Semantics](SPEC-FIN-01-SNAPSHOT-CORRECTION.md). It defines append-only void + replacement, zero current-balance effect for closed-segment correction, amended report behavior, deterministic cross-segment/effect rejection, owning-domain link handling, consequence preview, and stale/idempotent concurrency outcomes. It remains proposed pending mandatory owner approval; the PostgreSQL serialization primitive remains `SPEC-FIN-02`.
+The complete decision candidate is [SPEC-FIN-01 — Snapshot Correction Semantics](SPEC-FIN-01-SNAPSHOT-CORRECTION.md). It defines append-only void + replacement, zero current-balance effect for closed-segment correction, amended report behavior, deterministic cross-segment/effect rejection, owning-domain link handling, consequence preview, and stale/idempotent concurrency outcomes. It remains proposed pending mandatory owner approval.
+
+#### Issue #3 proposed concurrency policy
+
+The physical enforcement candidate is [SPEC-FIN-02 — Snapshot Concurrency](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md). It selects an owner-scoped `financial_accounts` row lock at PostgreSQL `READ COMMITTED`, dedicated monotonic `financial_state_version`, deterministic account-first lock order, one bounded retry for exact transient SQLSTATEs, and same-key recovery after uncertain commit. The policy and ADR-009 remain proposed; owner approval and executed `FIN-RACE-01`–`08` PostgreSQL evidence are absent.
 
 ### 7.3 Income
 
@@ -285,7 +291,7 @@ Round 3 makes the following decisions/evidence **ready for authorized review**; 
 | `SPEC-AUTH-01` | Fresh rotated session after verification or explicit sign-in, with result/cookie/CSRF/event/multi-tab/retry behavior | Product Owner; Security co-approval | OPEN — decision ready |
 | `SPEC-AUTH-02` | Complete invitation/password/OTP/reset/abuse/session/rotation/password-change policy | Security Owner; Product co-approval | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve `snapshot_correction.v1` from Issue #1: append-only correction/void, immutable anchor/effect, cross-segment rejection, exact report/link/audit/stale/idempotent outcomes | Product Owner; Financial Integrity/Data/Security co-approval | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | PostgreSQL linearization/lock/isolation/version mechanism and evidence for the defined one-winner/stale-loser contract | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — decision ready |
+| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account-row lock at `READ COMMITTED`, monotonic version, account-first order, exact retry/timeout-after-commit bounds, stale/error contract and `FIN-RACE-01`–`08` evidence | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported balance for historical correction with later events | Product Owner; Financial Integrity/Data co-approval | OPEN — decision ready |
 | `SPEC-SCH-01` | Leap-day fallback, recurrence/generation bounds, and exact series-edit behavior | Product Owner; Data/Architecture co-approval | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | Product Owner; Architecture/Operations/QA co-approval | OPEN — decision ready |

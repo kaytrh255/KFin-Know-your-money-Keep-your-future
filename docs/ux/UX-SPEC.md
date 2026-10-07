@@ -1,7 +1,7 @@
 # KFin UX Specification
 
-**Status:** Draft — Issue #1 correction UX specified; acceptance evidence absent<br>
-**Version:** 0.5<br>
+**Status:** Draft — FIN-01/02 UX states specified; acceptance evidence absent<br>
+**Version:** 0.6<br>
 **Platforms:** Responsive Web and installable PWA<br>
 **Accessibility target:** WCAG 2.2 AA for all MVP core flows<br>
 **Evidence status:** Specification review only — no visual prototype, usability study, or accessibility validation has passed
@@ -133,6 +133,17 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - Failure keeps input and focuses/announces the error summary.
 - Offline mode never implies that a write is queued or complete.
 - An Undo affordance may open a confirmed reversal/removal path; it must not be a client-only illusion.
+
+### Financial concurrency and uncertain-result recovery — Issue #3 proposal
+
+- A financial form/preview carries the reviewed latest snapshot and financial-state version invisibly; the UI never exposes editable lock/version controls.
+- An operation-specific stale response preserves safe draft input, announces that financial state changed, refetches authoritative state, and requires a rebuilt consequence preview plus deliberate reconfirmation. It never auto-submits after refresh.
+- `FINANCIAL_CONCURRENCY_BUSY` and `FINANCIAL_OPERATION_TIMEOUT` are temporary-save failures. Keep the draft, use calm retry guidance, and retry only with the same idempotency key while the request remains unchanged.
+- `FINANCIAL_RESULT_UNKNOWN` is neither success nor failure. Show `Checking whether your save completed`, disable a new logical save, and retry/status-check with the same key. Do not show Undo, duplicate-entry guidance, or a success total until the committed result is recovered.
+- A recovered compatible result uses the original success presentation exactly once. Same key/different payload requires a fresh deliberate action and never merges drafts.
+- Messages never expose SQLSTATE, lock/table names, attempt internals, other activity, raw keys, or financial payload from diagnostics.
+
+These states are evidence targets for proposed `account_financial_serialization.v1`; they are not visual/usability/accessibility acceptance and remain unavailable for implementation until approval/evidence.
 
 ### Transaction correction review — Issue #1 proposal
 
@@ -312,7 +323,8 @@ Evidence cannot be final for an unresolved policy. Prototypes may compare option
 
 - `SPEC-AUTH-01`: verification result, onboarding transition, session/sign-in copy, retry and multi-tab states;
 - `SPEC-AUTH-02`: visible password/OTP/reset/session guidance and abuse/recovery consequences;
-- `SPEC-FIN-01`: approve and validate `snapshot_correction.v1` correction/void distinction, old/new chain, prior-segment zero-balance disclosure, cross-segment rejection, link handling, stale conflict and uncertain-result recovery; `SPEC-FIN-02` still governs mechanism evidence;
+- `SPEC-FIN-01`: approve and validate `snapshot_correction.v1` correction/void distinction, old/new chain, prior-segment zero-balance disclosure, cross-segment rejection and link handling;
+- `SPEC-FIN-02`: approve/prove `account_financial_serialization.v1` and validate operation-specific stale, bounded-busy/timeout, same-key result-unknown/recovery, no-auto-submit copy and focus/announcement behavior;
 - `SPEC-DEBT-01`: no-inference blocked state and explicit lender-balance path;
 - `SPEC-SCH-01`: leap-day copy, bounds and occurrence/series-edit choices;
 - `SPEC-REM-01`: catch-up result and explanation without notification burst;

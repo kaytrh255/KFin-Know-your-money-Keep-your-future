@@ -34,7 +34,7 @@ Both branches require application authorization, server-derived identity, same-u
 
 **Acceptance condition:** one branch is recorded here with named Security/Data/Architecture approvers, date, exact scope, rejected alternative/rationale, evidence links, and review trigger; connection reuse and all special roles have deterministic tests. Until then `SPEC-SEC-01` and this ADR remain **Blocked / OPEN — decision ready**.
 
-`SPEC-FIN-02` is a separate pre-financial-implementation decision: Issue #1 proposes the external one-winner/endpoint-specific stale-state contract (`FIN_SNAPSHOT_STALE_STATE` or `FIN_CORRECTION_STALE_STATE`), but the per-account PostgreSQL serialization/lock/isolation/version mechanism must be captured in an explicit amendment to an accepted ADR or a new ADR with concurrency evidence. Selecting PostgreSQL or documenting the external result alone does not select/prove that mechanism.
+`SPEC-FIN-02` is a separate pre-financial-implementation decision. [ADR-009](ADR-009-per-account-financial-serialization.md) and the [dedicated concurrency specification](../SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md) now propose an owner-scoped account-row lock at `READ COMMITTED`, monotonic financial-state version, account-first lock order, bounded retry, and same-key uncertain-commit recovery. ADR-009 remains Proposed and `SPEC-FIN-02` remains OPEN until mandatory approval and executed PostgreSQL evidence; selecting PostgreSQL or documenting a candidate alone does not prove the mechanism.
 
 ## Alternatives considered
 

@@ -1,6 +1,6 @@
 # KFin MVP Scope
 
-**Status:** Draft — scope unchanged; Issue #1 correction policy proposed, blockers remain open<br>
+**Status:** Draft — scope unchanged; FIN-01/02 policies proposed, blockers remain open<br>
 **Release:** Private Beta (maximum 50 real users)<br>
 **Implementation gate:** CLOSED until specification approval and blocker resolution
 
@@ -110,6 +110,7 @@ An item is in scope only when it is listed here and supported by approved produc
 | Quick expense | A user can record a valid basic expense on one mobile surface with clear success/failure and no duplicate on retry. |
 | Balance snapshot | Current balance reconciles to the latest snapshot segment; historical backfill is labelled and cannot silently change it. |
 | Transaction correction | Approved `snapshot_correction.v1` preserves append-only source/replacement evidence, keeps prior-segment correction out of current balance, rejects cross-segment/effect movement, preserves owning links, and has deterministic stale/idempotent outcomes. |
+| Financial concurrency/recovery | Approved/evidenced `account_financial_serialization.v1` yields one account-scoped winner and stale loser, bounded transient retry, and same-key uncertain-commit recovery without silent reanchor or duplicate effect. |
 | Monthly overview | Aggregates reconcile exactly to all posted terminal transactions for the selected timezone/month, including labelled historical-only records and amended correction history. |
 | Safe-to-spend | `STS-01`–`STS-15` prove authoritative current balance minus eligible unpaid outgoings through current user-local month-end minus active goal current amounts, with projected income excluded and negative result preserved. |
 | Recurrence | Occurrences are generated idempotently and remain projected until explicitly confirmed. |
