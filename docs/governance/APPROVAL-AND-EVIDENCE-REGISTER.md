@@ -1,7 +1,7 @@
 # Approval and Evidence Register
 
-**Status:** Controlled template; assignments, approvals, and evidence are incomplete<br>
-**Version:** 0.1<br>
+**Status:** Controlled template; Issue #1 candidate recorded, approvals/evidence incomplete<br>
+**Version:** 0.2<br>
 **Last reviewed:** 2026-10-07<br>
 **Implementation Gate:** CLOSED
 
@@ -67,8 +67,8 @@ These rules are unapproved and remain part of `SPEC-GOV-01`.
 |---|---|---|---|---|---|
 | `SPEC-AUTH-01` | Product Owner | Security Owner | Post-verification outcome and threat/flow/test evidence | Missing | OPEN |
 | `SPEC-AUTH-02` | Security Owner | Product Owner | Complete auth/session policy values and benchmark/threat/usability evidence | Missing | OPEN |
-| `SPEC-FIN-01` | Product Owner | Financial Integrity, Data, Security Owners | Correction model plus H–J and linked-domain evidence | Missing | OPEN |
-| `SPEC-FIN-02` | Data Owner | Architecture, Security, Financial Integrity Owners | Serialization decision/ADR and concurrency evidence | Missing | OPEN |
+| `SPEC-FIN-01` | Product Owner | Financial Integrity, Data, Security Owners | Approve Issue #1 `snapshot_correction.v1`; H–J/`FIN-COR-01`–`10`; linked-domain/threat/UX review | Decision candidate documented; approvers/PR approval missing | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | Data Owner | Architecture, Security, Financial Integrity Owners | PostgreSQL serialization-mechanism ADR and `FIN-RACE` evidence proving the defined external contract | Missing | OPEN |
 | `SPEC-DEBT-01` | Product Owner | Financial Integrity, Data Owners | Historical correction policy and DCT evidence | Missing | OPEN |
 | `SPEC-SCH-01` | Product Owner | Data, Architecture Owners | Leap-day/bounds/series-edit policy and boundary evidence | Missing | OPEN |
 | `SPEC-REM-01` | Product Owner | Architecture, Operations, QA Owners | Catch-up policy tuple and RCT evidence | Missing | OPEN |
@@ -99,7 +99,7 @@ Values below must not be guessed from framework defaults. Each final limit requi
 | `EVID-AUTH-POLICY` | Auth/session decision evidence | All `SPEC-AUTH-01`/`02` dimensions | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-AUTH-THREAT` | Threat and abuse review | Registration, verification, login, reset, session replay/revocation | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-AUTH-BENCH` | Runtime benchmark | Argon2id and selected request/session limits on intended runtime | Unassigned | Missing | Not evaluated | OPEN |
-| `EVID-FIN-CORRECTION` | Financial state evidence | Snapshot H–J, linked domains, reports, idempotency | Unassigned | Missing | Not evaluated | OPEN |
+| `EVID-FIN-CORRECTION` | Financial correction decision evidence | Issue #1 policy review; snapshot H–J; `FIN-COR-01`–`10`; linked domains, reports, idempotency/stale outcomes | Unassigned | Specification exists; PR/approval evidence missing | Not evaluated | OPEN |
 | `EVID-FIN-CONCURRENCY` | PostgreSQL concurrency evidence | Snapshot/transaction races, timeout-after-commit, deadlock/retry | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-DEBT` | Debt correction evidence | DCT-08/09 and later-event/missing-state variants | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-SCHEDULE` | Recurrence evidence | Leap years, short months, timezone, series edits, bounds | Unassigned | Missing | Not evaluated | OPEN |

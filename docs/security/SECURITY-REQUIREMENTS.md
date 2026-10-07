@@ -1,7 +1,7 @@
 # KFin Security Requirements
 
-**Status:** Draft — Round 3 security decision contracts recorded; approval/evidence required<br>
-**Version:** 0.4<br>
+**Status:** Draft — Issue #1 correction controls proposed; approval/evidence required<br>
+**Version:** 0.5<br>
 **Applies to:** Web/PWA, API, worker, PostgreSQL, edge, CI/CD, providers, operator access<br>
 **Risk posture:** Sensitive personal and financial data; fail closed for identity, authorization, and financial writes
 
@@ -136,7 +136,7 @@ Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldo
 | SEC-APP-12 | Redirects and return URLs MUST be local/allowlisted to prevent open redirect and secret leakage. |
 | SEC-APP-13 | Email/template output MUST escape untrusted content and prohibit header injection. User notes are not included by default. |
 | SEC-APP-14 | Balance-snapshot identity/effect MUST be server validated. Clients MUST NOT arbitrarily mark a transaction historical/current or attach it to another user/segment. Snapshot creation racing with transaction creation MUST serialize or fail safely. |
-| SEC-APP-15 | Historical-only transactions MUST never enter current-balance arithmetic; old snapshot segments MUST not be replayed into the latest balance. Snapshot/effect corrections require consequence preview, authorization, version checks, and audit. Cross-segment correction behavior remains blocked by `SPEC-FIN-01`; racing serialization remains blocked by `SPEC-FIN-02`. |
+| SEC-APP-15 | Historical-only transactions MUST never enter current-balance arithmetic; old snapshot segments MUST not be replayed into the latest balance. Proposed `snapshot_correction.v1` requires append-only void + replacement, immutable owner/account/currency/kind/anchor/effect, authoritative consequence preview, required reason, authorization, stale-state checks, idempotency, and audit. Cross-segment/effect requests are rejected without mutation. `SPEC-FIN-01` approval and `SPEC-FIN-02` PostgreSQL mechanism evidence remain open. |
 | SEC-APP-16 | Safe-to-spend MUST use the authoritative latest-snapshot-segment balance, eligible unpaid outgoing occurrences through current user-local month-end, and active goal current amounts only. Projected income inclusion and double subtraction of already-confirmed outgoings are forbidden; negative results remain signed. |
 | SEC-APP-17 | Debt processing MUST NOT infer principal, interest, fee, accrued interest, amortization, payoff, or lender outstanding. Unsafe historical payment correction/recomputation MUST be blocked under `SPEC-DEBT-01`, not approximated. |
 | SEC-APP-18 | Reminder workers MUST recheck current occurrence state and enforce occurrence + stage uniqueness. App lifecycle cannot trigger reminders or financial state; recovery from downtime/late creation/timezone change permits no multi-stage burst and remains subject to `SPEC-REM-01` selection policy. |

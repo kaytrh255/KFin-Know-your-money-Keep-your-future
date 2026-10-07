@@ -27,7 +27,8 @@ No unresolved Product, Security, Financial Integrity, Data, Privacy, UX, or Gove
 | State | Meaning |
 |---|---|
 | OPEN — decision packet missing | The decision boundary or closure evidence is not sufficiently specified. This was the pre-Round-3 condition for parts of the register. |
-| OPEN — decision ready | Round 3 specifies owners, decision inputs, evidence, and acceptance criteria, but an authorized decision or required evidence is still absent. This is the post-Round-3 condition. |
+| OPEN — decision ready | Round 3 specifies owners, decision inputs, evidence, and acceptance criteria, but no concrete policy is selected. |
+| OPEN — approval/evidence ready | A concrete policy is fully specified and testable, but mandatory owner approval or required evidence is still absent. Issue #1 moves `SPEC-FIN-01` to this state. |
 | RESOLVED | Authorized owners selected one explicit outcome, all affected specifications were synchronized, required evidence is linked and reviewed, acceptance criteria pass, and the blocker register records approver/date/version. |
 
 Writing a decision packet, selecting a preferred option in implementation, or producing documentation consistency evidence alone does not resolve a blocker.
@@ -38,8 +39,8 @@ Writing a decision packet, selecting a preferred option in implementation, or pr
 |---|---|---|---|---|---|
 | AUTH | `SPEC-AUTH-01` | One binary post-verification question without a closure contract | Two permissible outcomes and shared safety obligations are specified; owner/evidence/criteria are explicit | OTP is single-use; verification is atomic; no pre-auth session identifier survives | OPEN — decision ready |
 | AUTH | `SPEC-AUTH-02` | Multiple auth values bundled into one broad approval statement | Policy dimensions, required inputs, and evidence are enumerated | Invitation-code mechanism, Argon2id, generic errors, digest-only secrets, reset-all-session revocation | OPEN — decision ready |
-| FIN | `SPEC-FIN-01` | Correction/void behavior was blocked in scenarios H–J without a complete decision checklist | Record model, link effects, reporting, idempotency, and cross-segment support decisions are enumerated | No history erasure, no double effect, closed history cannot rewrite current balance | OPEN — decision ready |
-| FIN | `SPEC-FIN-02` | Linearizable outcome required, serialization and conflict contract unspecified | Required linearization point, conflict behavior, idempotency behavior, and spike evidence are explicit | Exactly one latest segment; no silent re-anchor; deterministic current balance | OPEN — decision ready |
+| FIN | `SPEC-FIN-01` | Correction/void behavior was blocked in scenarios H–J without a complete decision checklist | Round 3 enumerated the dimensions; Issue #1 now proposes `snapshot_correction.v1` with append-only replacement, immutable anchor/effect, cross-segment rejection, link/report and stale/idempotent outcomes | No history erasure, no double effect, closed history cannot rewrite current balance | OPEN — approval/evidence ready |
+| FIN | `SPEC-FIN-02` | Linearizable outcome required, serialization and conflict contract unspecified | Issue #1 now proposes the external winner/stale-loser behavior; PostgreSQL linearization/lock/isolation/version mechanism, internal retry bounds and evidence remain required | Exactly one latest segment; no silent re-anchor; deterministic current balance | OPEN — decision ready |
 | DEBT | `SPEC-DEBT-01` | Later-event correction offered two broad alternatives | Explicit-fact replay and mandatory fresh lender-balance options now have safety/evidence criteria | No inferred principal, interest, fee, amortization, payoff, or outstanding | OPEN — decision ready |
 | SCHEDULE | `SPEC-SCH-01` | Leap-day, bounds, and series-edit decisions were grouped but under-specified | Each decision dimension and required boundary scenarios are explicit | Supported cadence set and monthly missing-day fallback remain fixed | OPEN — decision ready |
 | REMINDER | `SPEC-REM-01` | Catch-up stage selection was blocked without a complete policy tuple | Selection, recovery window, suppression record, and state-race criteria are explicit | At most one catch-up notification; no burst; occurrence state remains financial authority | OPEN — decision ready |
@@ -59,7 +60,7 @@ The following additional source documents were changed for each blocker:
 |---|---|
 | `SPEC-AUTH-01` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-002-authentication-strategy.md`; `architecture/ADR/ADR-004-session-management.md`; `security/SECURITY-REQUIREMENTS.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-AUTH-02` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-002-authentication-strategy.md`; `architecture/ADR/ADR-004-session-management.md`; `security/SECURITY-REQUIREMENTS.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
-| `SPEC-FIN-01` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
+| `SPEC-FIN-01` | `product/SPEC-FIN-01-SNAPSHOT-CORRECTION.md`; `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `security/SECURITY-REQUIREMENTS.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-FIN-02` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `architecture/ADR/ADR-003-database-choice.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-DEBT-01` | `product/USER-FLOWS.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
 | `SPEC-SCH-01` | `product/USER-FLOWS.md`; `architecture/ARCHITECTURE.md`; `architecture/DATABASE.md`; `architecture/ADR/README.md`; `security/THREAT-MODEL.md`; `ux/UX-SPEC.md`; `ux/SCREEN-INVENTORY.md` |
@@ -141,16 +142,15 @@ The decision must also specify result-screen copy, onboarding transition, cookie
 
 **Before:** Snapshot scenarios H–J retained blockers, but the complete set of choices required to remove them was not centralized.
 
-**Decision required:** Approve all of the following:
+**Decision required:** Approve the explicit Issue #1 candidate `snapshot_correction.v1`:
 
-- append-only correction representation, including whether every supported correction uses void + replacement;
-- difference between correction and void and their API/state transitions;
-- link behavior for schedule occurrences, debt payments, and planned purchases;
-- current-month and prior-month reporting effects;
-- supported/rejected balance-effect and snapshot-segment transitions;
-- user consequence preview and reason requirements;
-- idempotency retry response and stale-version behavior;
-- audit-chain fields and UI history presentation.
+- every supported correction atomically voids the posted terminal source and creates one replacement; standalone void creates none;
+- replacement anchor, `current`/`historical` effect, inclusion meaning, owner/account/currency, and direction remain immutable;
+- correction of a closed segment can amend active report facts but has zero current-balance effect;
+- a date/field requiring another segment/effect is deterministically rejected, never auto-reanchored;
+- schedule-only correction transfers its confirmed pointer atomically; generic debt/planned-purchase paths reject/delegate under the owning-domain matrix;
+- preview, reason, linear audit chain, one posted terminal effect, idempotent replay, and stale-state conflict outcomes are mandatory; and
+- a snapshot/correction race has one winner and one stale loser, while `SPEC-FIN-02` still selects the PostgreSQL enforcement primitive.
 
 **Fixed constraints:** No in-place history erasure; one effective financial effect; correction of closed prior history cannot rewrite authoritative current balance; no silent segment/effect movement; same-user/currency/anchor checks remain mandatory.
 
@@ -158,27 +158,29 @@ The decision must also specify result-screen copy, onboarding transition, cookie
 **Required co-approvers:** Financial Integrity Owner, Data Owner, Security Owner.<br>
 **Consulted roles:** UX/Accessibility Owner, QA Owner, Architecture Owner.
 
-**Required evidence:** Completed expected results for snapshot scenarios H–J; linked-domain correction walkthroughs; threat review; idempotency and stale-write test design; UX consequence-preview review.
+**Required evidence:** Mandatory owner review of the Issue #1 pull request; reproducibility review of H–J and `FIN-COR-01`–`FIN-COR-10`; linked-domain walkthroughs; threat review; idempotency/stale-state test-design review; UX consequence-preview review.
 
-**Acceptance criteria:** H–J contain no unknown correction result attributable to `SPEC-FIN-01`; supported and rejected transitions are exhaustive; DB/API/UI/audit/report behavior is deterministic; all affected requirements and tests agree; named approvers/date/evidence are recorded.
+**Acceptance criteria:** Mandatory owners approve the exact policy/version; H–J and `FIN-COR-01`–`10` contain no unknown `SPEC-FIN-01` outcome; supported/rejected transitions and links are exhaustive; DB/API/UI/audit/report behavior agrees; approval identity/date/commit/PR and evidence are recorded. PostgreSQL mechanism evidence remains under `SPEC-FIN-02`.
 
-**Primary blocker-specific documents (see §3.1 for the complete change matrix):** Architecture, Database, Test Strategy, Decision Log, ADR Index, this report.
+**Primary blocker-specific documents (see §3.1 for the complete change matrix):** Dedicated SPEC-FIN-01 document, PRD, User Flows, Architecture, Database, Security, UX, Test Strategy, Release Checklist, Decision Log, Governance Register, ADR Index, this report.
 
-**After:** **OPEN — decision ready.** Safety invariants remain fixed; correction model remains unselected.
+**After:** **OPEN — approval/evidence ready.** Issue #1 makes the correction model explicit and testable; mandatory approval/evidence is not yet present.
 
 ### 5.2 `SPEC-FIN-02` — Snapshot/transaction serialization
 
 **Before:** Specifications required one deterministic latest segment but did not select the PostgreSQL serialization mechanism or retryable conflict contract.
 
-**Decision required:** Select and document one mechanism that defines:
+**Issue #1 clarification:** The external race contract is now proposed as exactly one winner and one endpoint-specific stale loser (`FIN_SNAPSHOT_STALE_STATE` or `FIN_CORRECTION_STALE_STATE`), with no auto-reanchor or automatic replay; compatible idempotent retry returns the first committed result. This narrows but does not resolve `SPEC-FIN-02`.
 
-- the per-account linearization point for snapshot creation and current-impact transaction writes;
-- lock/isolation ordering and transaction boundaries;
-- behavior when a snapshot wins, a transaction wins, or a client holds a stale version;
-- whether the server rejects, retries internally, or requires deliberate user retry;
-- stable idempotency result after timeout/commit uncertainty;
-- conflict error code, safe message, and consequence preview;
-- worker/operator behavior under the same account context.
+**Decision required:** Select and document one PostgreSQL mechanism that defines:
+
+- the per-account linearization point for snapshot creation and current-impact/correction writes;
+- lock/isolation/version ordering and transaction boundaries;
+- how snapshot-wins and correction-wins branches enforce the specified stale-loser result;
+- deadlock/serialization-failure retry limits without replaying against changed user-visible state;
+- timeout-after-commit idempotency lookup;
+- worker/operator behavior under the same account context; and
+- diagnostics that prove the contract without sensitive payload.
 
 Candidate mechanisms may be evaluated, but Round 3 does not select row locking, advisory locking, or serializable isolation.
 

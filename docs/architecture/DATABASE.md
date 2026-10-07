@@ -1,6 +1,6 @@
 # KFin Database Specification
 
-**Status:** Draft conceptual/logical model — Round 3 physical-decision packets recorded; approval required<br>
+**Status:** Draft conceptual/logical model — Issue #1 correction model proposed; approval required<br>
 **Database:** Proposed PostgreSQL<br>
 **Decision baseline:** OQ-01 through OQ-19 recorded; Round 3 leaves all affected physical, concurrency, isolation, and legal-lifecycle choices open
 
@@ -302,8 +302,26 @@ Invariants:
 - Income cannot have an expense class and must set `is_unexpected = false`.
 - An expense may retain its essential/daily class while independently being unexpected.
 - Voided transactions do not affect balance or period aggregates.
-- Any approved correction/void action must be atomic, preserve old/new-or-void effect plus actor/reason/relationship/idempotency evidence, and obey `FIN-SNAP-INV-08`. Whether the API uses void + replacement for each case, how linked occurrences/reports change, and which prior/cross-segment transitions are supported remain blocked by `SPEC-FIN-01`; racing snapshot creation is blocked by `SPEC-FIN-02`. An audit row alone is not permission to guess either the model or new anchor.
+- Under proposed `snapshot_correction.v1`, every supported correction atomically marks the posted terminal source `voided` and creates exactly one posted replacement with `supersedes_transaction_id = source.id`. Standalone void creates no replacement. In-place correction, successor branching, correction of a non-terminal source, and more than one posted terminal row are prohibited.
+- Replacement `user_id`, `account_id`, currency, kind, `balance_snapshot_id`, `balance_effect`, and inclusion meaning equal the source. A request/date requiring another segment/effect is rejected without mutation. Closed-segment correction/void has zero current-balance effect.
+- Schedule-only supported correction atomically transfers `scheduled_occurrences.confirmed_transaction_id` to the replacement while retaining audit linkage. Generic debt/planned-purchase correction and linked standalone void follow the explicit reject/delegate matrix in the product correction specification; no link is detached or partially updated.
+- Correction/void preserves actor/reason/time, old/new values, anchor/effect context, owning-domain transition, versions, correlation, idempotency request digest/result, and consequence preview under `FIN-SNAP-INV-08`.
 - Link tables/columns below prevent one posted transaction from satisfying multiple incompatible domain actions.
+
+#### 6.1.1 Proposed correction-chain constraints
+
+The reviewed physical design MUST enforce or transactionally prove:
+
+- `supersedes_transaction_id` references a same-user, same-account source and is unique when present, so one source cannot branch;
+- source and replacement cannot be the same row;
+- a correction source is `posted` and terminal at validation, then becomes `voided` in the same transaction that creates the replacement;
+- immutable authority fields listed above match across source/replacement;
+- a standalone void and correction cannot both win for one source;
+- no hard delete removes a transaction or correction-chain member;
+- one idempotency result identifies the complete source/replacement/link/audit outcome; and
+- report/current-balance queries count only `posted` rows and therefore one terminal effect.
+
+The exact PostgreSQL constraint/index/locking combination remains physical design under `SPEC-FIN-02`; these observable integrity results do not.
 
 ### 6.2 Balance and monthly calculation
 
@@ -320,10 +338,11 @@ Rules:
 
 - `historical` transactions never enter current-balance arithmetic, even if created after `S`.
 - Transactions attached to an older snapshot segment no longer enter current balance after a newer snapshot becomes authoritative; the newer user-entered amount supersedes the old segment as the current anchor.
-- Monthly income/outflow includes every posted transaction by `occurred_on`, both `current` and visibly labelled `historical`, and excludes voided records.
+- Monthly income/outflow includes every posted terminal transaction by `occurred_on`, both `current` and visibly labelled `historical`, and excludes voided chain members. If correction changes month/category, reports remove the source effect, add the replacement effect, show an amended marker, and retain chain drill-down.
+- Latest-segment current correction contributes replacement minus source exactly once; latest historical and every closed-segment correction/void contribute zero to current balance. A closed-segment source originally marked `current` is not replayed after correction.
 - Current balance therefore cannot be reconstructed from an unbounded all-history transaction sum across snapshot boundaries. Reporting APIs must expose the snapshot anchor and components.
 - Use checked integer arithmetic and a database view/query; do not maintain a mutable balance cache in MVP.
-- Snapshot creation and concurrent transaction creation require serialization/version policy so a transaction cannot attach ambiguously to the segment being closed. The exact stale-write retry/re-anchor/user-choice behavior is `SPEC-FIN-02` and remains a blocker.
+- Snapshot creation and correction/void share a logical per-account serialization boundary: exactly one request commits against one previewed state and the loser receives a stable stale-state conflict with no auto-reanchor/retry. `SPEC-FIN-02` remains a blocker for the exact PostgreSQL lock/isolation/version primitive and evidence, not for this external outcome.
 - These rules implement `FIN-SNAP-INV-01` through `FIN-SNAP-INV-10`; scenarios A–J in the test strategy are mandatory acceptance evidence.
 
 ### 6.3 Safe-to-spend query contract
@@ -688,8 +707,8 @@ Product meaning is set by OQ-01 through OQ-19. Round 3 makes each affected physi
 | Blocker | Exact data decision | Immutable data constraints | Required evidence / acceptance condition | Accountable owner | Status |
 |---|---|---|---|---|---|
 | `SPEC-AUTH-02` | Invitation/challenge/session values; keyed-digest construction; challenge supersession; rotation/grace/replay and last-seen write behavior | No plaintext reusable secret; generic responses; reset revokes all sessions | Benchmark/threat/replay/provider evidence; Security + Product approve every value and all auth/session documents agree | Security Owner | OPEN — decision ready |
-| `SPEC-FIN-01` | Append-only correction/void representation; supported segment/effect transitions; links, report/audit and idempotent/stale response | No in-place erasure, double effect, silent segment movement, or rewrite of current balance from closed history | Snapshot H–J and linked-domain tests have exact outcomes; Product + Financial Integrity + Data + Security approve | Product Owner | OPEN — decision ready |
-| `SPEC-FIN-02` | Per-account linearization point; lock/isolation ordering; transaction boundaries; winner/conflict/retry/idempotency behavior | One latest segment; deterministic attachment; no silent re-anchor or duplicate effect | PostgreSQL race/deadlock/timeout evidence; scenario J fully expected; accepted ADR amendment/new ADR | Data Owner | OPEN — decision ready |
+| `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`: void + replacement, immutable anchor/effect, cross-segment rejection, exact link/report/audit/preview/idempotent/stale outcomes | No in-place erasure, double effect, silent segment movement, or rewrite of current balance from closed history | Issue #1 PR review; H–J and `FIN-COR-01`–`10` are reproducible; Product + Financial Integrity + Data + Security approve | Product Owner | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | Choose the PostgreSQL per-account linearization/lock/isolation/version primitive and transaction ordering that enforces the specified winner/stale-loser contract | One latest segment; deterministic attachment; no silent re-anchor or duplicate effect | PostgreSQL race/deadlock/timeout evidence; scenario J race branches pass; accepted ADR amendment/new ADR | Data Owner | OPEN — decision ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported outstanding for corrections with later events; date reorder/void/partial-failure behavior | No inferred component, amortization, payoff, or outstanding; unsafe path unavailable | DCT-08/09 and multi-event results fixed; Product + Financial Integrity + Data approve | Product Owner | OPEN — decision ready |
 | `SPEC-SCH-01` | 29-February policy; interval/end/horizon/batch/active-series limits; split-point and occurrence/future edit behavior | Monthly missing-day fallback and supported cadence stay fixed; generated rows idempotent; history preserved | Boundary/load/edit-race tests; Product + Data + Architecture approve all fields and bounds | Product Owner | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up stage-or-none precedence, recovery age, suppression status/reason, timezone/late-creation/state-race behavior | Occurrence + stage uniqueness; at most one catch-up; no burst or financial mutation | RCT-04–07 exact results plus outage/timezone/race proof; Product + Architecture + Operations + QA approve | Product Owner | OPEN — decision ready |

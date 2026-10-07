@@ -1,8 +1,8 @@
 # Product Requirements Document
 
 **Product:** KFin — Know your money, Keep your future<br>
-**Status:** Draft — Round 3 decision packets recorded; approval required<br>
-**Version:** 0.4<br>
+**Status:** Draft — Issue #1 correction policy proposed; approval required<br>
+**Version:** 0.5<br>
 **Date:** 2026-10-07<br>
 **Target release:** Private Beta, at most 50 real users
 
@@ -109,14 +109,18 @@ MVP exposes exactly one aggregate liquid-money account per user. Multiple accoun
 | PRD-FIN-01 | Onboarding MUST create one user-owned aggregate account and an initial balance snapshot with amount, currency, and visible as-of time. |
 | PRD-FIN-02 | Current balance MUST equal the latest balance snapshot plus posted balance-impacting inflows minus posted balance-impacting outflows attached to that snapshot segment. |
 | PRD-FIN-03 | A transaction MUST record positive amount, base currency, local occurrence date, type, category/classification, balance effect, and creation/update timestamps. A note is optional. |
-| PRD-FIN-04 | The user MUST be able to create, inspect, correct, and void their own transactions with clear effects on current balance and monthly reporting. |
+| PRD-FIN-04 | The user MUST be able to create, inspect, and use supported correction/void paths for their own transactions with clear current-balance, report, link, and audit consequences. The proposed Issue #1 policy uses append-only void + replacement; unsupported linked/cross-segment paths fail without mutation. |
 | PRD-FIN-05 | All MVP financial records MUST use the user’s one base currency. Cross-currency aggregation, conversion, and invented exchange rates are prohibited. |
 | PRD-FIN-06 | Financial writes MUST be idempotent against accidental duplicate submission where a client request identifier is supplied. |
 | PRD-FIN-07 | Mutations affecting financial values MUST be attributable in an audit trail without storing secrets or unnecessary sensitive payloads. |
 | PRD-FIN-08 | A transaction explicitly entered as pre-snapshot historical backfill MUST appear in period/category reports but MUST NOT alter current balance. It MUST be visibly labelled as already included in the snapshot. |
 | PRD-FIN-09 | Creating a new manual authoritative-balance snapshot MUST start a new balance segment without deleting or rewriting earlier transactions/snapshots. This is not a bank/account-statement reconciliation workflow. |
 | PRD-FIN-10 | If same-day timing makes snapshot inclusion ambiguous, KFin MUST ask whether the transaction is already included rather than infer silently. |
-| PRD-FIN-11 | Changing a transaction’s balance effect or anchor MUST be a deliberate correction with consequence preview, concurrency protection, and audit evidence. |
+| PRD-FIN-11 | A transaction correction MUST never silently change balance effect or snapshot anchor. Under proposed `snapshot_correction.v1`, a request requiring another segment/effect is rejected; supported same-anchor/effect correction requires consequence preview, stale-state protection, and append-only audit evidence. |
+
+#### Issue #1 proposed correction policy
+
+The complete decision candidate is [SPEC-FIN-01 — Snapshot Correction Semantics](SPEC-FIN-01-SNAPSHOT-CORRECTION.md). It defines append-only void + replacement, zero current-balance effect for closed-segment correction, amended report behavior, deterministic cross-segment/effect rejection, owning-domain link handling, consequence preview, and stale/idempotent concurrency outcomes. It remains proposed pending mandatory owner approval; the PostgreSQL serialization primitive remains `SPEC-FIN-02`.
 
 ### 7.3 Income
 
@@ -138,7 +142,7 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 | PRD-EXP-02 | Default categories MUST cover rent, electricity, water, internet, required subscriptions, food, transportation, entertainment, shopping, repair, emergency, unexpected bills, and other. |
 | PRD-EXP-03 | Global Add MUST allow a basic expense to be recorded from any primary screen without navigating through several pages. |
 | PRD-EXP-04 | A fixed recurring essential expense MAY create scheduled occurrences but MUST NOT create a paid transaction without user confirmation. |
-| PRD-EXP-05 | Editing or deleting an expense MUST immediately and consistently update derived balances and monthly summaries. |
+| PRD-EXP-05 | A supported expense correction or void MUST atomically and consistently update derived balances and monthly summaries while preserving append-only source evidence. |
 | PRD-EXP-06 | “Unexpected” MUST be a purposeful orthogonal flag, not inferred from category or amount; an unexpected expense can still retain its essential/daily class. |
 
 ### 7.5 Debt
@@ -280,8 +284,8 @@ Round 3 makes the following decisions/evidence **ready for authorized review**; 
 |---|---|---|---|
 | `SPEC-AUTH-01` | Fresh rotated session after verification or explicit sign-in, with result/cookie/CSRF/event/multi-tab/retry behavior | Product Owner; Security co-approval | OPEN — decision ready |
 | `SPEC-AUTH-02` | Complete invitation/password/OTP/reset/abuse/session/rotation/password-change policy | Security Owner; Product co-approval | OPEN — decision ready |
-| `SPEC-FIN-01` | Correction/void/link/report/audit/retry model | Product Owner; Financial Integrity/Data/Security co-approval | OPEN — decision ready |
-| `SPEC-FIN-02` | Snapshot/transaction linearization and conflict/retry contract | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — decision ready |
+| `SPEC-FIN-01` | Approve `snapshot_correction.v1` from Issue #1: append-only correction/void, immutable anchor/effect, cross-segment rejection, exact report/link/audit/stale/idempotent outcomes | Product Owner; Financial Integrity/Data/Security co-approval | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | PostgreSQL linearization/lock/isolation/version mechanism and evidence for the defined one-winner/stale-loser contract | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — decision ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported balance for historical correction with later events | Product Owner; Financial Integrity/Data co-approval | OPEN — decision ready |
 | `SPEC-SCH-01` | Leap-day fallback, recurrence/generation bounds, and exact series-edit behavior | Product Owner; Data/Architecture co-approval | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | Product Owner; Architecture/Operations/QA co-approval | OPEN — decision ready |

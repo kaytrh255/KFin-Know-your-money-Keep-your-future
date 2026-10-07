@@ -1,6 +1,6 @@
 # KFin Initial Screen Inventory
 
-**Status:** Draft — Round 3 decision dependencies recorded; specification/evidence review required<br>
+**Status:** Draft — Issue #1 correction states proposed; specification/evidence review required<br>
 **Evidence status:** Screen-list review is not visual prototype, usability, or accessibility acceptance<br>
 **Purpose:** Define the minimum screen map before visual design and implementation.<br>
 **Note:** Routes are proposals for Web/PWA navigation, not API contracts.
@@ -79,7 +79,7 @@ The accepted one-account MVP does not expose account taxonomy in ONB-02; the und
 | HOME-01 | `/` | Home | Answer the four core questions | Authoritative balance/anchor/as-of; signed safe-to-spend through user-local month-end with balance, unpaid outgoing, active-goal, and projected-income-exclusion disclosure; needs attention; month summary; goals; incomplete data |
 | ACT-01 | `/activity` | Activity | Inspect posted current-impact and historical-only records | Date grouping, month/type/classification/balance-effect filters, snapshot-boundary markers, pagination, empty states |
 | ACT-02 | `/activity/:transactionId` | Transaction detail | Explain one actual record and its balance effect | Current-impact/historical-only label, latest versus prior snapshot segment, present-balance consequence, ownership-safe not found, linked occurrence/debt/purchase, correct/void |
-| ACT-03 | `/activity/:transactionId/edit` | Correct transaction | Correct one record without hiding anchor impact | Fixed no-history-erasure/current-balance safety; balance/report/link consequence preview; conflict/version error; `SPEC-FIN-01`/`SPEC-FIN-02` blocked states for unsupported cross-segment/racing actions |
+| ACT-03 | `/activity/:transactionId/edit` | Correct transaction | Review proposed append-only correction without hiding anchor impact | `snapshot_correction.v1` source/replacement chain; immutable anchor/effect; current/report/link preview; prior-segment zero-balance message; deterministic cross-segment rejection; stale-state/refetch result; owner approval and `SPEC-FIN-02` mechanism still blocked |
 | ADD-01 | overlay / `/add` fallback | Global Add | Record routine current income/expense quickly | Amount-first, implicit account, defaults, unexpected flag, pre-snapshot historical switch, offline, idempotent save |
 | ADD-02 | overlay / `/add/history` fallback | Add historical record | Backfill a record already represented by the balance snapshot | Historical-only explanation, same-day inclusion choice, current balance unchanged preview |
 | SCH-01 | `/schedule` | Schedule agenda | Understand expected inflows/outflows | Date groups, upcoming/due/overdue/projected/paid filters, exact dates, empty state |
@@ -210,8 +210,8 @@ Completing this list is necessary but does not close `SPEC-UX-01`. The versioned
 |---|---|---|---|---|
 | `SPEC-AUTH-01` | AUTH-03/06, ONB-01 | Verification must end in one approved session or explicit-sign-in outcome, with retry/multi-tab/result copy | No session fixation; only an approved authenticated context enters onboarding | OPEN — decision ready |
 | `SPEC-AUTH-02` | AUTH-01–05, SEC-02/03 | Visible policy, expiry, limits, recovery, rotation/replay and session consequences | Invitation code mandatory; generic errors; password manager/paste support | OPEN — decision ready |
-| `SPEC-FIN-01` | ACT-02/03, ADD-01/02, SCH-02, DEBT-07, PUR-05 | Correction/void/link/report/audit and idempotent/stale consequence previews | No history erasure, silent segment movement or double effect | OPEN — decision ready |
-| `SPEC-FIN-02` | ONB-02, SET-04, ADD-01/02, ACT-03 | Snapshot/transaction race conflict and deliberate retry result | No silent re-anchor or ambiguous successful save | OPEN — decision ready |
+| `SPEC-FIN-01` | ACT-02/03, ADD-01/02, SCH-02, DEBT-07, PUR-05 | Validate proposed void + replacement, immutable anchor/effect, cross-segment rejection, prior-report amendment, link matrix and stale/idempotent previews | No history erasure, silent segment movement or double effect | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | ONB-02, SET-04, ADD-01/02, ACT-03 | Validate user recovery while PostgreSQL mechanism enforces the defined one-winner/stale-loser race contract | No silent re-anchor or ambiguous successful save | OPEN — decision ready |
 | `SPEC-DEBT-01` | DEBT-03/06/07 | Later-event correction must use approved replay/fresh-balance policy or explicit rejection | Never infer principal, interest, fee or outstanding | OPEN — decision ready |
 | `SPEC-SCH-01` | SCH-01–03, DEBT-02/04 | Leap-day preview, bounds, occurrence/future edit choices and split consequences | Monthly missing-day fallback fixed; unsupported scope hidden | OPEN — decision ready |
 | `SPEC-REM-01` | NOTIF-01, SCH-01/02 | Catch-up stage/result, recovery expiry and suppression explanation | Zero/one catch-up, never a burst; occurrence state stays authoritative | OPEN — decision ready |

@@ -1,6 +1,6 @@
 # KFin Main User Flows
 
-**Status:** Draft — Round 3 flow decision packets recorded; approval required<br>
+**Status:** Draft — Issue #1 correction flow proposed; approval required<br>
 **Scope:** Private Beta Web/PWA<br>
 **Related:** [PRD](PRD.md), [UX specification](../ux/UX-SPEC.md), [screen inventory](../ux/SCREEN-INVENTORY.md)
 
@@ -120,7 +120,7 @@ A snapshot is never silently overwritten. A later manual authoritative-balance u
 4. Server posts the transaction with historical balance effect and links it to the relevant snapshot context.
 5. Activity and monthly/category reports include it with a visible historical-only label; Home current balance stays unchanged.
 
-Changing historical/current balance effect later is a deliberate correction with consequence preview, optimistic concurrency control, and audit evidence.
+Changing `historical`/`current` meaning in one correction is rejected under proposed `snapshot_correction.v1`. Where owning-domain rules permit, the user must deliberately void the source and create a separate new transaction, each with its own consequence preview and audit evidence.
 
 ### UF-FIN-03 — Update known balance with a new snapshot
 
@@ -154,15 +154,26 @@ Changing historical/current balance effect later is a deliberate correction with
 
 Same amount-first pattern as Global Add, with **Income** selected. The date determines the confirmed monthly aggregate. A current-impact save increases current balance; a pre-snapshot historical save is reported but leaves current balance fixed.
 
-### UF-FIN-06 — Edit or remove a transaction
+### UF-FIN-06 — Correct or void a transaction
 
-1. User opens Activity and selects a transaction.
-2. Detail shows amount, date, classification, current-impact or historical-only effect, snapshot segment, linked schedule/debt/purchase if any, and last update.
-3. Edit validates all affected invariants and previews balance/report effects, especially when crossing a snapshot boundary or changing a linked item.
-4. Remove uses the approved delete/void policy and asks confirmation with concrete impact.
-5. Server applies one consistent transaction, records audit metadata, and recalculates summaries.
+**Proposed policy:** `snapshot_correction.v1` in [SPEC-FIN-01](SPEC-FIN-01-SNAPSHOT-CORRECTION.md); mandatory owner approval is pending.
 
-Linked financial records must not become orphaned. Exact historical edit/void semantics remain a specification/physical-design decision that blocks financial implementation.
+1. User opens Activity and selects the posted terminal transaction in a correction chain.
+2. Detail shows amount, date, classification, `current`/`historical` effect, original snapshot anchor, latest-versus-closed segment, owning-domain link, and correction history.
+3. User chooses **Correct transaction** or **Void transaction** and provides a bounded reason.
+4. For correction, the user may propose amount, a date still valid in the original segment/effect, category/classification, unexpected flag, or note. Owner, account, currency, direction, anchor, balance effect, inclusion meaning, and owning-domain identity are not editable.
+5. Server generates an authoritative consequence preview: source/replacement values, current balance before/delta/after or explicit zero change, affected report periods, link handling, and version/state context.
+6. A date/effect/anchor request requiring another segment is rejected with no write. KFin does not auto-reanchor; the user may deliberately void where allowed and add a separate new transaction.
+7. For a schedule-only link, supported correction keeps the occurrence confirmed and atomically transfers its transaction pointer. Debt uses `UF-DEBT-03`; generic debt/planned-purchase correction or linked standalone void is rejected as specified by the owning-domain matrix.
+8. User confirms the preview. Server atomically voids the source and creates one replacement, or performs one standalone void; prior rows remain inspectable and only one posted terminal effect exists.
+9. If source, anchor, relevant financial state, or link version changed, the server commits nothing and returns `FIN_CORRECTION_STALE_STATE`. User must refetch, review a new preview, and deliberately retry with a new idempotency key.
+10. Same-key/same-request retry returns the first committed result; same key/different payload is rejected.
+
+**Prior-segment result:** Correction/void may amend reports but never changes current balance, which remains anchored to the latest snapshot.
+
+**Race result:** A snapshot/correction or correction/correction race has exactly one winner. A losing snapshot returns `FIN_SNAPSHOT_STALE_STATE`; a losing correction/void returns `FIN_CORRECTION_STALE_STATE`. Neither auto-reanchors, branches, duplicates, or partially writes. `SPEC-FIN-02` still selects the PostgreSQL mechanism enforcing this observable contract.
+
+Linked financial records must never become orphaned. Until the Issue #1 proposal receives mandatory approval, this flow remains specification-only and unavailable for implementation.
 
 ## 5. Recurring income and obligation flows
 
@@ -329,7 +340,7 @@ Before approval, product/UX review must walk through at minimum:
 - payment due date passes with no confirmation;
 - retry after an uncertain Global Add response;
 - debt payment/correction cases `DCT-01`–`DCT-09`, preserving `SPEC-DEBT-01` blocked outcomes and inferring no component/outstanding;
-- snapshot scenarios A–J, including historical-only reporting, same-day explicit inclusion, new segments, non-whole-history balance, and `SPEC-FIN-01`/`SPEC-FIN-02` blockers;
+- snapshot scenarios A–J, including historical-only reporting, same-day explicit inclusion, new segments, non-whole-history balance, proposed `snapshot_correction.v1`, and the remaining `SPEC-FIN-02` mechanism blocker;
 - safe-to-spend cases `STS-01`–`STS-15`, including projected-income exclusion, no paid-outgoing double subtraction, active-goal reserve, negative result, and local month boundary;
 - manual savings amount update followed by partial linked-purchase deduction without double counting;
 - reminder cases `RCT-01`–`RCT-10`, including worker downtime, closed app, late occurrence creation, timezone change, delayed return, multiple missed stages, no burst, and `SPEC-REM-01`;
@@ -346,8 +357,8 @@ Round 3 does not choose any unresolved branch. It defines what flow evidence mus
 |---|---|---|---|---|---|
 | `SPEC-AUTH-01` | First-use map, `UF-AUTH-01`/`02` | Fresh rotated session after verification or explicit sign-in; result, onboarding redirect, cookie/CSRF, event, multi-tab, and uncertain-response result | OTP use is atomic/single-use; no pre-auth identifier survives | Compact/expanded walkthrough, threat/session-fixation review, retry/multi-tab tests, approved Vietnamese copy | OPEN — decision ready |
 | `SPEC-AUTH-02` | `UF-AUTH-01`–`06`, session-expiry exception | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and failure path | Invitation code only; generic responses; Argon2id; digest-only secrets; reset revokes all sessions | Boundary, expiry, replay, concurrent-tab, provider-failure, benchmark and usability evidence | OPEN — decision ready |
-| `SPEC-FIN-01` | `UF-FIN-02`/`03`/`06` and linked flows | Correction versus void transitions, snapshot/link/report effects, preview, audit and retry/stale-version result | Append-only evidence; no silent cross-segment move, history erasure, or double effect | Snapshot H–J plus schedule/debt/purchase correction walkthroughs | OPEN — decision ready |
-| `SPEC-FIN-02` | `UF-FIN-01`–`06` | Snapshot/transaction race winner, conflict/retry/idempotency response and user recovery | Exactly one latest segment; no silent re-anchor | Deterministic race and timeout-after-commit walkthrough/tests | OPEN — decision ready |
+| `SPEC-FIN-01` | `UF-FIN-02`/`03`/`06` and linked flows | Approve proposed `snapshot_correction.v1`: void + replacement, same-anchor/effect only, cross-segment rejection, report/link/preview/audit/stale/idempotent outcomes | Append-only evidence; no silent cross-segment move, history erasure, or double effect | Issue #1 PR review, snapshot H–J, and `FIN-COR-01`–`10` walkthroughs | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | `UF-FIN-01`–`06` | Select/prove the PostgreSQL linearization/lock/isolation/version mechanism, internal retry bounds, and timeout-after-commit handling | Exactly one latest segment and defined winner/stale-loser result; no silent re-anchor | Deterministic race, deadlock and timeout-after-commit tests | OPEN — decision ready |
 | `SPEC-DEBT-01` | `UF-DEBT-03` | Explicit-fact replay or fresh lender-reported balance when later events exist | No inferred debt component or outstanding; unsafe path unavailable | DCT-08/09 and later-event/date-reorder/missing-state walkthroughs | OPEN — decision ready |
 | `SPEC-SCH-01` | `UF-SCH-01`–`04` | 29-February outcome, bounds/horizon/batch, and exact occurrence/series-edit split behavior | Supported cadence and monthly missing-day fallback stay fixed; history is preserved | Fixed-clock boundary, edit-versus-worker race and UX walkthroughs | OPEN — decision ready |
 | `SPEC-REM-01` | `UF-REM-01` | Catch-up emission, precedence, recovery window, suppression record, timezone/late-creation and state-race outcomes | At most one catch-up; no burst; no financial-state mutation | Exact RCT-04–07 and outage/timezone/state-race outcomes | OPEN — decision ready |

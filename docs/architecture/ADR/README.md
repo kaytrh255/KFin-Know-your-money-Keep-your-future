@@ -20,8 +20,8 @@ Round 3 does **not** create a cosmetic Accepted ADR for fixed product formulas. 
 | Blocker | ADR coverage required before closure |
 |---|---|
 | `SPEC-AUTH-01`, `SPEC-AUTH-02` | ADR-002 and ADR-004 must agree on one approved outcome/policy and link evidence |
-| `SPEC-FIN-01` | Product/data specifications may define the record semantics; amend/create an ADR if the approved correction model introduces a material architecture choice |
-| `SPEC-FIN-02` | **Mandatory** new ADR or explicit amendment selecting the PostgreSQL serialization/linearization and conflict mechanism with concurrency evidence |
+| `SPEC-FIN-01` | Issue #1 proposes product/data policy `snapshot_correction.v1`; no ADR is required for its conservative record semantics unless review introduces a material architecture choice. Mandatory owner approval/evidence remains open. |
+| `SPEC-FIN-02` | **Mandatory** new ADR or explicit amendment selecting the PostgreSQL serialization/linearization mechanism that enforces the specified one-winner/endpoint-specific stale-state contract, with concurrency evidence |
 | `SPEC-DEBT-01` | Product/data specifications define no-inference behavior; amend/create an ADR only if replay/rebase architecture is selected |
 | `SPEC-SCH-01` | Product/data specifications define recurrence semantics; amend ADR-008 or create an ADR only for a material worker/storage mechanism change |
 | `SPEC-REM-01` | ADR-008 must record the complete approved catch-up tuple and evidence |

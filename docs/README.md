@@ -1,7 +1,7 @@
 # KFin Specification Foundation
 
-**Status:** Draft — Round 3 decision packets complete; owner decisions/evidence blocked<br>
-**Version:** 0.4<br>
+**Status:** Draft — Issue #1 correction policy proposed; owner decisions/evidence blocked<br>
+**Version:** 0.5<br>
 **Date:** 2026-10-07<br>
 **Implementation gate:** CLOSED
 
@@ -16,6 +16,7 @@ The words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, and **MAY** are no
 | Product | [PRD](product/PRD.md) | Product goals, users, outcomes, and requirements |
 | Product | [MVP scope](product/MVP-SCOPE.md) | Private Beta boundaries and acceptance outcomes |
 | Product | [Decision log](product/DECISION-LOG.md) | Accepted/deferred OQ decisions, rationale, and consequences |
+| Product | [SPEC-FIN-01 snapshot correction](product/SPEC-FIN-01-SNAPSHOT-CORRECTION.md) | Proposed append-only correction, prior-segment, cross-segment, linkage, and concurrency contract for Issue #1 |
 | Product | [Roadmap](product/ROADMAP.md) | Specification and release phases; future candidates |
 | Product | [User flows](product/USER-FLOWS.md) | Main journeys and failure/recovery paths |
 | UX | [UX specification](ux/UX-SPEC.md) | Information architecture, interaction rules, responsive behavior |
@@ -91,8 +92,8 @@ Every open `SPEC-*` row keeps the Implementation Gate CLOSED. Round 3 changed ea
 |---|---|---|---|
 | SPEC-AUTH-01 | OPEN — decision ready | Before authentication implementation | Product + Security approval of exactly one post-verification outcome (fresh rotated authenticated session or explicit sign-in), including cookies/CSRF, result UX, events, multi-tab, and uncertain-response behavior. |
 | SPEC-AUTH-02 | OPEN — decision ready | Before authentication/session implementation | Security + Product approval of every invitation, password, OTP, reset, abuse, session-lifetime, rotation/replay, and known-password-change value/behavior with threat, benchmark, usability, and provider evidence. Invitation-code admission itself is already Accepted. |
-| SPEC-FIN-01 | OPEN — decision ready | Before transaction correction implementation | Product + Financial Integrity + Data + Security approval of append-only correction/void transitions, snapshot/link/report effects, consequence preview, audit chain, and idempotent/stale-write results, with H–J evidence. |
-| SPEC-FIN-02 | OPEN — decision ready | Before financial schema/API implementation | Data + Architecture + Security + Financial Integrity approval of the per-account linearization mechanism, lock/isolation order, winner/conflict/retry/idempotency contract, and PostgreSQL race evidence. |
+| SPEC-FIN-01 | OPEN — approval/evidence ready | Before transaction correction implementation | Issue #1 now has proposed policy `snapshot_correction.v1`: append-only void + replacement, same-anchor/effect corrections, deterministic rejection of cross-segment/effect moves, zero current-balance effect for closed-segment corrections, explicit link rules, and stale-state/idempotency outcomes. Product + Financial Integrity + Data + Security approval and recorded PR evidence remain required. |
+| SPEC-FIN-02 | OPEN — decision ready | Before financial schema/API implementation | Data + Architecture + Security + Financial Integrity approval of the PostgreSQL per-account linearization/lock/isolation/version mechanism, bounded internal retry and timeout-after-commit handling, with race evidence proving the defined one-winner/stale-loser contract. |
 | SPEC-DEBT-01 | OPEN — decision ready | Before debt-payment correction implementation | Product + Financial Integrity + Data approval of explicit-fact replay or mandatory fresh lender-reported outstanding (or a precisely bounded combination), including later-event/date-reorder/void outcomes and DCT-08/09 evidence. |
 | SPEC-SCH-01 | OPEN — decision ready | Before recurrence implementation | Product + Data + Architecture approval of yearly 29-February behavior, recurrence/generation/series bounds, and exact `this occurrence` / `this and future` semantics with boundary and race evidence. |
 | SPEC-REM-01 | OPEN — decision ready | Before reminder implementation | Product + Architecture + Operations + QA approval of one catch-up policy tuple: emission, stage precedence, recovery window, first-overdue treatment, suppression record, timezone/late-creation and state-race outcomes. Burst delivery remains prohibited. |

@@ -1,6 +1,6 @@
 # KFin Private Beta Release Checklist
 
-**Status:** Template — Round 3 pre-implementation gate added; no item is currently complete<br>
+**Status:** Template — Issue #1 correction gate specified; no item is currently complete<br>
 **Use:** One copy per release candidate and per cohort expansion<br>
 **Rule:** Every checked item requires linked, dated evidence. A checkbox without evidence is not a pass.
 
@@ -10,8 +10,8 @@ Round 3 defined decision/evidence packets but closed no blocker. This checklist 
 
 - [ ] `SPEC-AUTH-01`: one authorized post-verification outcome, synchronized auth/session/UX contracts, and passing `AUTH-VRF` evidence. Evidence: _missing_
 - [ ] `SPEC-AUTH-02`: every auth/session value and behavior approved, synchronized, and supported by `AUTH-POL` threat/benchmark/provider/usability/replay evidence. Evidence: _missing_
-- [ ] `SPEC-FIN-01`: approved correction/void/link/report/audit/retry model and exact H–J/`FIN-COR` results. Evidence: _missing_
-- [ ] `SPEC-FIN-02`: approved serialization/conflict ADR and passing `FIN-RACE` PostgreSQL evidence. Evidence: _missing_
+- [ ] `SPEC-FIN-01`: Product + Financial Integrity + Data + Security approve Issue #1 `snapshot_correction.v1`; synchronized H–J/`FIN-COR-01`–`10` specifications and PR/approval record are linked. Evidence: _missing_
+- [ ] `SPEC-FIN-02`: approved PostgreSQL serialization-mechanism ADR and passing `FIN-RACE` evidence prove the defined one-winner/stale-loser contract. Evidence: _missing_
 - [ ] `SPEC-DEBT-01`: approved later-event correction policy and exact DCT-08/09/`DEBT-HIST` results preserving no-inference. Evidence: _missing_
 - [ ] `SPEC-SCH-01`: approved leap-day/bounds/series-edit policy and passing `SCH-BND` boundary/race evidence. Evidence: _missing_
 - [ ] `SPEC-REM-01`: approved complete catch-up tuple and passing RCT-04–07/`REM-REC` evidence with no burst. Evidence: _missing_
@@ -55,13 +55,14 @@ Every row is currently OPEN. Exact criteria are in the [Round 3 remediation repo
 
 - [ ] Current balance reconciles to the latest immutable snapshot plus only current-impact transactions in that segment. Evidence: _link_
 - [ ] Historical-only backfill appears in period/category reports, is visibly labelled, and never silently changes current balance. Evidence: _link_
-- [ ] Balance-snapshot scenarios A–G pass; `SPEC-FIN-01` is resolved for H–I and `SPEC-FIN-01`/`SPEC-FIN-02` are resolved for J before those correction/race paths are implemented and tested. Evidence: _link_
-- [ ] Snapshot creation versus transaction creation/correction race tests yield one approved deterministic segment/result without implicit re-anchoring. Evidence: _link_
+- [ ] Balance-snapshot scenarios A–G pass; H–I and J’s transition branch match approved `snapshot_correction.v1`; J’s race branches pass under the approved `SPEC-FIN-02` mechanism. Evidence: _link_
+- [ ] Snapshot/correction race tests produce exactly one winner; losing snapshot returns `FIN_SNAPSHOT_STALE_STATE` and losing correction returns `FIN_CORRECTION_STALE_STATE`, with no implicit reanchor, duplicate, branch, or partial write. Evidence: _link_
+- [ ] `FIN-COR-01`–`FIN-COR-10` pass: append-only source/replacement chain, one terminal effect, closed-segment zero current-balance change, amended reports, cross-segment rejection, link matrix, and idempotent/stale outcomes. Evidence: _link_
 - [ ] Monthly income/outflow respects user-local month, status, currency, and exact integer arithmetic. Evidence: _link_
 - [ ] The 4,000,000 + 350,000 + 280,000 VND income scenario produces 4,630,000 VND only under approved confirmation semantics. Evidence: _link_
 - [ ] Scheduled income/obligations never become actual/paid solely because time passes. Evidence: _link_
 - [ ] Global Add retry/parallel/timeout cases create exactly one transaction. Evidence: _link_
-- [ ] Transaction edit/correction/removal policy updates aggregates and linked records consistently. Evidence: _link_
+- [ ] Transaction correction/void never edits history in place; only the terminal posted replacement affects aggregates, owning links follow the approved matrix, and unsupported domain/cross-segment paths commit nothing. Evidence: _link_
 - [ ] Debt cases `DCT-01`–`DCT-09` pass under the approved `SPEC-DEBT-01` disposition; no path infers principal, interest, fee, accrued interest, amortization, payoff, or lender outstanding. Evidence: _link_
 - [ ] Manual savings current amount/as-of changes safe-to-spend but not cash/monthly flow; every update has one old/new audit record. Evidence: _link_
 - [ ] Planned purchase completion applies at most one user-confirmed linked-goal scalar deduction within bounds and never auto-archives/zeroes the goal. Evidence: _link_

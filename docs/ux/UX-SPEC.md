@@ -1,7 +1,7 @@
 # KFin UX Specification
 
-**Status:** Draft — Round 3 evidence manifest defined; acceptance evidence absent<br>
-**Version:** 0.4<br>
+**Status:** Draft — Issue #1 correction UX specified; acceptance evidence absent<br>
+**Version:** 0.5<br>
 **Platforms:** Responsive Web and installable PWA<br>
 **Accessibility target:** WCAG 2.2 AA for all MVP core flows<br>
 **Evidence status:** Specification review only — no visual prototype, usability study, or accessibility validation has passed
@@ -133,6 +133,19 @@ Desktop may place snapshot and spendable cards side by side and use a right rail
 - Failure keeps input and focuses/announces the error summary.
 - Offline mode never implies that a write is queued or complete.
 - An Undo affordance may open a confirmed reversal/removal path; it must not be a client-only illusion.
+
+### Transaction correction review — Issue #1 proposal
+
+- Label actions distinctly as `Correct transaction` (source remains as voided evidence and one replacement is posted) and `Void transaction` (no replacement).
+- Show source and proposed values, required reason, snapshot anchor/as-of, `current`/`historical`, and latest-versus-closed segment before confirmation.
+- For a closed-segment or historical correction, state explicitly: `Current balance change: 0`; show affected report periods and an amended-history marker.
+- For a latest current correction, show current balance before, signed delta, and after; do not count source and replacement simultaneously.
+- Never offer anchor/effect controls. If a date would cross the anchor, show the deterministic unsupported result and explain deliberate void + separate entry where permitted.
+- Show owning-domain context. Schedule-only pointer transfer is part of one save; debt/planned-purchase paths route to or require their owning-domain behavior and never detach silently.
+- On `FIN_CORRECTION_STALE_STATE`, keep safe draft values, announce that financial state changed, refresh the source/anchor, and require a new preview and explicit confirmation. Do not auto-submit.
+- Detail/history exposes the append-only chain. A correction badge is not a substitute for accessible old/new values.
+
+These states specify evidence targets for proposed `snapshot_correction.v1`; they do not constitute visual, usability, accessibility, or owner acceptance.
 
 ## 7. Schedule and payment UX
 
@@ -299,7 +312,7 @@ Evidence cannot be final for an unresolved policy. Prototypes may compare option
 
 - `SPEC-AUTH-01`: verification result, onboarding transition, session/sign-in copy, retry and multi-tab states;
 - `SPEC-AUTH-02`: visible password/OTP/reset/session guidance and abuse/recovery consequences;
-- `SPEC-FIN-01`/`02`: correction consequence preview, blocked transition, conflict and uncertain-result recovery;
+- `SPEC-FIN-01`: approve and validate `snapshot_correction.v1` correction/void distinction, old/new chain, prior-segment zero-balance disclosure, cross-segment rejection, link handling, stale conflict and uncertain-result recovery; `SPEC-FIN-02` still governs mechanism evidence;
 - `SPEC-DEBT-01`: no-inference blocked state and explicit lender-balance path;
 - `SPEC-SCH-01`: leap-day copy, bounds and occurrence/series-edit choices;
 - `SPEC-REM-01`: catch-up result and explanation without notification burst;
