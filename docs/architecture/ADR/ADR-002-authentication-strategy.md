@@ -1,0 +1,108 @@
+# ADR-002 — Authentication Strategy
+
+**Status:** Proposed<br>
+**Date:** 2026-10-07<br>
+**Decision owners:** Unassigned<br>
+**Related:** [Security requirements](../../security/SECURITY-REQUIREMENTS.md), [ADR-004](ADR-004-session-management.md)
+
+## Context
+
+KFin stores highly sensitive personal financial information. Private Beta needs registration, email OTP verification, password login, recovery/change, persistent access, abuse protection, and future MFA compatibility. It must avoid permanent tokens, account enumeration, plaintext/reversible passwords, and unnecessary identity-provider dependence.
+
+The exact invitation policy, UI language, email provider, legal terms, and MFA roadmap are unresolved.
+
+## Decision
+
+Use first-party **verified email + password** authentication with these boundaries:
+
+- Private Beta registration is invite-controlled if OQ-11 accepts the recommendation.
+- Normalize email consistently while preserving a presentation form.
+- Hash passwords using Argon2id with unique salts and parameters benchmarked to current OWASP guidance on production hardware. Store the encoded hash only.
+- Enforce a reviewed password policy, permit paste/password managers, reject common/known-compromised passwords through a privacy-safe mechanism, and do not force arbitrary periodic password changes.
+- Verify email through cryptographically random, purpose-bound, expiring, attempt-limited, single-use OTP challenges. Because numeric OTP entropy is low, store a keyed digest/hash, not a plain fast hash.
+- Password reset uses a high-entropy single-use URL secret or separately approved challenge, with digest-only storage, short expiry, strict attempt/use limits, and generic request response.
+- Send secret-bearing OTP/reset email immediately after the challenge digest is committed, while plaintext exists only in request-process memory. The ordinary durable outbox must never contain that plaintext. Provider failure/uncertainty leads to generic guidance and a controlled resend that supersedes according to policy. An asynchronous encrypted secret envelope is not selected without a separate key-management decision.
+- Registration, login, verification, resend, and reset apply layered IP + normalized-account/target + device/risk abuse controls with generic errors.
+- Password reset revokes every active session. Known-password change reauthenticates, revokes other sessions, and rotates the current session under the proposed policy.
+- Record sanitized security events and send safe account-security notifications where appropriate.
+- Design user/challenge/session records so TOTP/WebAuthn MFA can be added through a future specification, but do not implement MFA in MVP.
+
+Proposed initial policy values (not accepted until security/UX review):
+
+- minimum 12 characters, maximum at least 128 characters;
+- OTP lifetime 10 minutes, at most 5 verification attempts;
+- resend cooldown 60 seconds plus hourly/daily caps;
+- reset link lifetime no more than 30 minutes;
+- no security-question recovery.
+
+Limits are centrally configurable within secure bounds, monitored, and tuned without revealing account existence.
+
+## Alternatives considered
+
+### Managed identity provider
+
+**Benefits:** mature MFA/social login/risk tools, lower cryptographic implementation burden.<br>
+**Not selected yet because:** cost, data residency, provider lock-in, UI/session integration, and beta requirements are unknown. This may become preferable after provider/legal review and should be fairly reassessed before implementation.
+
+### Passwordless email magic links only
+
+**Benefits:** no user password database, simple UX for some users.<br>
+**Rejected for MVP proposal because:** email account availability becomes the sole recurring factor; link scanning/delivery delays and device transfer can confuse users; the explicit requirement calls for email/password login.
+
+### Social sign-in
+
+**Benefits:** convenient and delegated credential security.<br>
+**Rejected now because:** not required, introduces providers/tracking/account-linking complexity, and does not remove need for recovery/security policy.
+
+### Home-grown reversible encryption or fast password hashes
+
+Rejected categorically: compromise would expose credentials and violates security requirements.
+
+## Reasoning
+
+- Meets explicit product requirements with understood controls.
+- Argon2id limits offline password-cracking rate.
+- Generic, rate-controlled workflows reduce enumeration and automated abuse.
+- Separate purpose-bound challenges reduce cross-flow token replay.
+- Session mechanics remain independently testable under ADR-004.
+- Future MFA is possible without complicating the first release now.
+
+## Consequences
+
+### Positive
+
+- Familiar consumer experience and password-manager support.
+- Full server-side control over verification, revocation, and audit.
+- No dependency on social identities.
+
+### Negative / risks
+
+- KFin owns high-risk credential and recovery implementation.
+- Email delivery and provider reputation become availability dependencies.
+- Immediate secret-bearing delivery adds bounded provider latency and a commit/send uncertainty window; controlled resend must resolve it without revealing account state.
+- OTP endpoints attract abuse and cost attacks.
+- Invite/email normalization and account-enumeration details are easy to implement incorrectly.
+- Password compromise remains possible before MFA exists.
+
+### Required controls
+
+- Vetted crypto libraries only; no custom cryptography.
+- Security test matrix for timing/content enumeration, brute force, replay, resend, expiry, concurrency, and session invalidation.
+- Credential secrets never logged/analysed.
+- Email templates never include passwords/OTPs in observability payloads.
+- Incident and compromised-account recovery procedure before beta.
+
+## Validation before acceptance
+
+- Decide invite model and email provider/residency.
+- Benchmark Argon2id under intended runtime and concurrency.
+- Threat review all auth state transitions and race conditions.
+- Test password manager, autofill, OTP paste, screen reader, rate-limit, and email failure behavior.
+- Determine breached-password service/privacy approach.
+
+## Revisit when
+
+- MFA is promoted;
+- account takeover signals show password-only risk is unacceptable;
+- managed identity total risk/cost becomes lower;
+- native clients or a new regulatory requirement change authentication assurance.
