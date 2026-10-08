@@ -90,6 +90,7 @@ Local verification of the fix head: frozen install, evidence harness `16/16`, `t
 |---|---|---|---|
 | [`37801117962`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37801117962) | `c0f52c9e544275352d36c477eb00ec809e655aad` | **SUCCESS**; all `10` job steps passed, including frozen install, evidence-harness validation, typecheck, credential-free tests, and the isolated real-PostgreSQL integration stage | Synthetic implementation evidence for this milestone and regression coverage for Milestones 01–03 |
 | [`37801626110`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37801626110) | `38ef5e3c3a081e1355409c6eaa297742f98de6df` | **SUCCESS**; documentation-only head, same `10` steps passed | Confirms the verification record commit did not change behaviour |
+| [`37807783638`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37807783638) | `7842744efb47985caaabebbeeed25bf05d61c45c` | **SUCCESS**; all `10` steps passed on the review-fix head, including the isolated real-PostgreSQL integration stage that now contains the idle-clamp and single-connection-pool regression cases | Synthetic evidence for the four review fixes plus regression coverage for Milestones 01–04 |
 
 The CI integration stage provisions ephemeral PostgreSQL `17.6`. The sandbox verification instance was PostgreSQL `16.2`; no PostgreSQL-version-specific behaviour is relied upon by this milestone.
 
