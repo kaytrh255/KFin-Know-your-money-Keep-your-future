@@ -2,9 +2,10 @@
 
 **Recorded:** 2026-10-08<br>
 **Frozen SDD baseline:** `a48d2c5683550859c1b4e19e9d06750616adc0a2`<br>
-**Environment:** Local Arena workspace; Node.js `v22.22.3`; no PostgreSQL/Supabase credentials, binaries, or container runtime
+**Local environment:** Arena workspace; Node.js `v22.22.3`; no PostgreSQL/Supabase credentials, binaries, or container runtime<br>
+**CI environment:** GitHub Actions `ubuntu-latest`; Node.js `22.22.0`; ephemeral synthetic `postgres:17.6-alpine`
 
-This record distinguishes credential-free implementation verification from real PostgreSQL/FIN-RACE evidence. No owner approval, ADR acceptance, blocker closure, production readiness, or Supabase result is implied.
+This record distinguishes local credential-free verification, the narrow foundation integration run against real PostgreSQL, and the still-unexecuted FIN-RACE closure matrix. No owner approval, ADR acceptance, blocker closure, production readiness, Supabase result, or FIN-RACE PASS is implied.
 
 ## Commands actually executed
 
@@ -49,9 +50,17 @@ The final ignored local FIN-02 artifact is under `.artifacts/spec-fin-02/milesto
 - `FIN-RACE-01..08`: **BLOCKED** locally. No case executed against PostgreSQL; no case is labelled PASS.
 - The conditional financial-foundation integration test is implementation test infrastructure, not a FIN-RACE substitute. A mocked protocol/unit result cannot close SPEC-FIN-02.
 
-## CI status at this record revision
+## GitHub Actions execution history
 
-A GitHub Actions workflow was added to run the actual migration and conditional integration test against an ephemeral synthetic PostgreSQL 17.6 service. At the time this local record was written, that workflow had **NOT RUN** on the implementation commit. Its eventual result must be recorded from the check itself; the workflow definition is not evidence of execution.
+The workflow uses only synthetic test data and an ephemeral `postgres:17.6-alpine` service. The following checks actually ran:
+
+| Run | Head | Observed result | Disposition |
+|---|---|---|---|
+| [`37751096435`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37751096435) | `10e0e4e5b2f1258387c9cb44acc3d5efe1d0e68c` | **FAILURE** at `Validate evidence harness`; later steps did not run | The default shallow checkout did not provide the frozen baseline history required by the harness. Checkout was changed to `fetch-depth: 0`; no test PASS was claimed. |
+| [`37751251597`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37751251597) | `d4fa3057c557ecf40c7534c53aa75d97b1ef0109` | Harness, typecheck, and credential-free tests passed; the real-PostgreSQL integration step **FAILED** | PostgreSQL `date` was decoded as a JavaScript `Date` where the local-date classifier requires `YYYY-MM-DD`. Database boundary selects were corrected to return date-only values as text; no integration PASS was claimed for this run. |
+| [`37751446740`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37751446740) | `d8213b4b12e25b69b2679af4552afd88da46c27d` | **SUCCESS**; install, frozen-baseline harness checks, typecheck, `43` credential-free tests, and the single guarded foundation integration test all completed successfully | The integration test applied the real migration in an isolated schema and exercised bootstrap, serialization, replay, balance segmentation, stale-state rejection, and two-user isolation against PostgreSQL 17.6. |
+
+The successful foundation integration run is real PostgreSQL implementation evidence, but it is not the separately specified fault/race matrix. It does not execute or close `FIN-RACE-01..08`, does not establish Supabase pool behavior, and does not approve production settings.
 
 ## Open items retained
 

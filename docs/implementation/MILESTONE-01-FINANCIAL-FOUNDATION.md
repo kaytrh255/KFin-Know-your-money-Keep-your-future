@@ -75,14 +75,15 @@ Critical transaction control uses reviewed explicit SQL on a checked-out node-po
 - Unit/domain/contract/API/static-protocol suites run without credentials.
 - The integration suite in `packages/database/test/financial-foundation.integration.test.ts` requires both `TEST_DATABASE_URL` and `KFIN_INTEGRATION_TARGET=non-production` and otherwise reports skipped.
 - The integration suite creates an isolated disposable schema, applies the actual migration, exercises user/bootstrap/transaction/replay/current-balance/new-snapshot/stale/owner-isolation behavior, then drops the schema.
-- The independent FIN-02 closure harness remains separate under `evidence/spec-fin-02`.
+- GitHub Actions run [`37751446740`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37751446740) executed that guarded test successfully against an ephemeral synthetic PostgreSQL 17.6 service after two transparently retained failed correction runs.
+- The independent FIN-02 closure harness remains separate under `evidence/spec-fin-02`; the foundation integration test is not a substitute for `FIN-RACE-01..08`.
 
 Execution results are recorded only after commands run; see the change-set verification section below and the separate [kickoff evidence status](../evidence/2026-10-08-IMPLEMENTATION-KICKOFF-STATUS.md).
 
 ## Known limitations and OPEN items
 
-1. No `DATABASE_URL`/`TEST_DATABASE_URL`, PostgreSQL binary, container runtime, or Supabase target was available in this environment. The real-PostgreSQL integration suite did not execute; migration/runtime behavior is not presented as PostgreSQL PASS evidence.
-2. `FIN-RACE-01..08` remain **BLOCKED**, and current FIN-RACE-08 harness scope still predates the complete accepted domain-claim matrix.
+1. No `DATABASE_URL`/`TEST_DATABASE_URL`, PostgreSQL binary, container runtime, or Supabase target was available in the local Arena environment, so the local integration command skipped. GitHub Actions did execute the foundation integration test successfully against ephemeral PostgreSQL 17.6; this is narrow implementation evidence, not Supabase, production, or FIN-RACE closure evidence.
+2. `FIN-RACE-01..08` remain **BLOCKED** and unexecuted, and current FIN-RACE-08 harness scope still predates the complete accepted domain-claim matrix.
 3. `FIN-LINK-01..06` and `FIN-OCC-01..04` remain **NOT RUN — implementation prerequisite**. Schedule, debt, purchase, and occurrence services are deliberately out of this milestone.
 4. Authentication/session delivery is not implemented. The standalone server fails all protected routes closed; tests inject a trusted principal. No user-ID header or development bypass is accepted.
 5. PostgreSQL RLS remains a proposed defense-in-depth decision, not silently accepted here. Application owner scoping and composite database constraints are implemented; RLS approval/role-policy evidence remains OPEN.
@@ -104,9 +105,11 @@ Local verification on 2026-10-08 observed:
 - FIN-02 harness unit/static suite executed `16/16` passing tests;
 - TypeScript application and test typecheck completed;
 - credential-free Vitest suite executed `43` passing tests with `0` failures;
-- the one conditional PostgreSQL integration test was skipped because no target was configured;
+- the one conditional PostgreSQL integration test was skipped locally because no target was configured;
 - explicit credential-free FIN-02 evidence execution returned exit code `2`, overall `BLOCKED`, PostgreSQL `NOT OBSERVED`, and no FIN-RACE runtime assertions;
 - production dependency audit reported no known vulnerabilities and production package metadata listed only Apache-2.0, BSD-3-Clause, ISC, and MIT licenses; and
 - `git diff --check` completed successfully.
 
-See [Milestone 01 verification](../evidence/2026-10-08-MILESTONE-01-VERIFICATION.md) for the commands, boundaries, artifact digest, and retained OPEN statuses. A passing unit/static command must not be interpreted as real PostgreSQL, Supabase, owner-approval, or release evidence.
+GitHub Actions subsequently recorded two failed correction runs and then successful run [`37751446740`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37751446740) on `d8213b4b12e25b69b2679af4552afd88da46c27d`. The successful run completed the harness checks, typecheck, `43` credential-free tests, and the single isolated foundation integration test against PostgreSQL 17.6. The integration failure exposed PostgreSQL `date` decoding at the driver boundary; the implementation now explicitly selects date-only values as text before domain classification.
+
+See [Milestone 01 verification](../evidence/2026-10-08-MILESTONE-01-VERIFICATION.md) for the commands, run history, boundaries, artifact digest, and retained OPEN statuses. A passing foundation integration command must not be interpreted as FIN-RACE closure, Supabase behavior evidence, owner approval, production readiness, or release evidence.
