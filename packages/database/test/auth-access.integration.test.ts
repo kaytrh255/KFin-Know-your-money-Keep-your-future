@@ -634,14 +634,87 @@ integration('trusted private beta access on real PostgreSQL', () => {
       expect(event.sessionId === null || UUID_LIKE.test(event.sessionId)).toBe(true);
     }
 
+    // Regression (QA finding F-1): "log out everywhere" must terminate the
+    // session that issued it too, because a live token after a global sign-out
+    // is exactly the credential the user is trying to destroy.
+    const secondRelogin = await repo.login({
+      email: secondEmail,
+      password: 'correct horse battery staple',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    const secondSessions = await repo.listSessions(secondRegistered.userId, {
+      limit: 50,
+      currentSessionId: secondVerified.session.session.id,
+    });
+    expect(secondSessions.items).toHaveLength(2);
+
     const revokedAll = await repo.logoutAll(secondRegistered.userId, {
       correlationId: randomUUID(),
       ipAddress: source(network),
-    }, secondVerified.session.session.id);
-    expect(revokedAll).toBe(0);
-    expect(await repo.authenticate(secondVerified.session.sessionToken)).toMatchObject({
-      userId: secondRegistered.userId,
     });
+    expect(revokedAll).toBe(2);
+    expect(await repo.authenticate(secondVerified.session.sessionToken)).toBeNull();
+    expect(await repo.authenticate(secondRelogin.session.sessionToken)).toBeNull();
+
+    const revokedRows = await database.query<{ revoked: number; reason: string | null }>(
+      `SELECT count(*) FILTER (WHERE revoked_at IS NOT NULL)::int AS revoked,
+              min(revocation_reason) AS reason
+         FROM sessions WHERE user_id = $1`,
+      [secondRegistered.userId],
+    );
+    expect(revokedRows.rows[0]).toMatchObject({ revoked: 2, reason: 'user_logout_all' });
+    const liveTokens = await database.query<{ live: number }>(
+      `SELECT count(*)::int AS live
+         FROM session_tokens t
+         JOIN sessions s ON s.id = t.session_id
+        WHERE s.user_id = $1 AND t.retired_at IS NULL`,
+      [secondRegistered.userId],
+    );
+    expect(liveTokens.rows[0]?.live).toBe(0);
+    expect((await repo.listSessions(secondRegistered.userId, { limit: 50 })).items).toHaveLength(0);
+
+    // The other owner's session is untouched.
+    expect(await repo.authenticate(firstVerified.session.sessionToken)).toMatchObject({
+      userId: firstRegistered.userId,
+    });
+  });
+
+  it('revokes the requesting session on logout-all so its token cannot be replayed', async () => {
+    const network = 32;
+    const repo = repository();
+    const invitation = await invite();
+    const email = `beta-${randomUUID()}@example.invalid`;
+    const registered = await register(repo, invitation.code, email, network);
+    const verified = await repo.verifyEmail({
+      email,
+      oneTimeCode: registered.delivery.oneTimeCode,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+      userAgent: AGENT,
+    });
+    const relogin = await repo.login({
+      email,
+      password: 'correct horse battery staple',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+      userAgent: AGENT,
+    });
+    expect(await repo.authenticate(verified.session.sessionToken)).not.toBeNull();
+    expect(await repo.authenticate(relogin.session.sessionToken)).not.toBeNull();
+
+    expect(await repo.logoutAll(registered.userId, {
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+      userAgent: AGENT,
+    })).toBe(2);
+
+    // Both tokens are dead immediately: no grace window survives a global
+    // sign-out, so a captured token cannot be replayed afterwards.
+    expect(await repo.authenticate(verified.session.sessionToken)).toBeNull();
+    expect(await repo.authenticate(relogin.session.sessionToken)).toBeNull();
+    const events = await repo.listSecurityEvents(registered.userId, { limit: 50 });
+    expect(events.items.map((event) => event.eventType)).toContain('logout_all');
   });
 
   it('re-checks account status on every session use', async () => {

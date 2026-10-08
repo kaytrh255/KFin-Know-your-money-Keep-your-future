@@ -34,7 +34,7 @@ Excluded and deliberately not implemented: account-deletion request/cancel/purge
 | `POST` | `/api/v1/auth/verify-email` | Consumes the OTP, activates the account, issues a fresh rotated session and CSRF token |
 | `POST` | `/api/v1/auth/login` | Issues a session and CSRF token; generic failure for unknown and known accounts |
 | `POST` | `/api/v1/auth/logout` | Revokes the current session and clears both cookies |
-| `POST` | `/api/v1/auth/logout-all` | Revokes every session atomically, keeping the current one available |
+| `POST` | `/api/v1/auth/logout-all` | Revokes every session atomically, the requesting one included, and clears both cookies |
 | `GET` | `/api/v1/auth/sessions` | Owner-scoped bounded list; marks the current session |
 | `DELETE` | `/api/v1/auth/sessions/{id}` | Owner-scoped revocation of one other session |
 | `POST` | `/api/v1/auth/password/change` | Verifies current password, revokes other sessions, rotates the current session |

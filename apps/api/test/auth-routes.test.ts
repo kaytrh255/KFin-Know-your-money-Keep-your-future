@@ -386,6 +386,30 @@ describe('trusted beta access routes', () => {
     });
   });
 
+  it('revokes every session on logout-all, the current one included, and clears both cookies', async () => {
+    const { app, service } = await build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/logout-all',
+      headers: CSRF_HEADERS,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ revokedSessions: 3 });
+
+    // Regression (QA finding F-1): the route must not pass an `exceptSessionId`
+    // that leaves the requesting session — and therefore its token — alive
+    // after a global sign-out.
+    expect(service.logoutAll).toHaveBeenCalledTimes(1);
+    expect(service.logoutAll).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ correlationId: expect.any(String) }),
+    );
+
+    const cookies = ([] as string[]).concat(response.headers['set-cookie'] as string | string[]);
+    expect(cookies.some((cookie) => cookie.startsWith('__Host-kfin_session=;'))).toBe(true);
+    expect(cookies.some((cookie) => cookie.startsWith('kfin_csrf=;'))).toBe(true);
+  });
+
   it('clears both cookies on logout and on password reset', async () => {
     const { app } = await build();
     const logout = await app.inject({

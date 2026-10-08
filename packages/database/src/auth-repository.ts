@@ -967,11 +967,20 @@ export class PostgresAuthRepository {
     });
   }
 
-  async logoutAll(userId: string, input: AccessRequestContext, exceptSessionId?: string): Promise<number> {
+  /**
+   * Signs the user out everywhere.
+   *
+   * The session that issues the request is revoked with every other one: a
+   * global sign-out is the response to a suspected compromise, so leaving the
+   * requesting token live (and only dropping its cookie) would keep the very
+   * credential the user is trying to kill. The returned count is the number of
+   * sessions actually revoked, current one included (SEC-SES-06/08).
+   */
+  async logoutAll(userId: string, input: AccessRequestContext): Promise<number> {
     return this.withTransaction(async (client) => {
       const revoked = await this.revokeSessionRows(client, {
         userId,
-        exceptSessionId: exceptSessionId ?? null,
+        exceptSessionId: null,
         sessionId: null,
         reason: 'user_logout_all',
         now: this.now(),

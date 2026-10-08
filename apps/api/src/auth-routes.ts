@@ -106,10 +106,10 @@ export interface AuthApiService {
     userAgent: string | null;
   }): Promise<LoginResult>;
   logout(sessionId: string, input: { correlationId: string; ipAddress: string | null; userAgent: string | null }): Promise<boolean>;
+  /** Revokes every session of the user, including the requesting one. */
   logoutAll(
     userId: string,
     input: { correlationId: string; ipAddress: string | null; userAgent: string | null },
-    exceptSessionId?: string,
   ): Promise<number>;
   listSessions(
     userId: string,
@@ -367,10 +367,11 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
     },
   }, async (request, reply) => {
     const principal = await requireAccess(request);
+    // Every session is revoked, the requesting one included; the cookies are
+    // cleared so the browser cannot keep presenting a dead token.
     const revokedSessions = await authService.logoutAll(
       principal.userId,
       requestContext(request),
-      principal.sessionId,
     );
     clearSessionCookies(reply);
     return { revokedSessions };
