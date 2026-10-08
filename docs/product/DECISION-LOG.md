@@ -16,7 +16,7 @@ This log records product decisions made after the initial specification foundati
 | OQ-01 | Accepted | Private Beta UI is Vietnamese-first. Message architecture remains English-ready for future localization. |
 | OQ-02 | Accepted | Each user has one base currency, selected during onboarding; VND is the default. No conversion or cross-currency aggregation exists in MVP. |
 | OQ-03 | Accepted | MVP exposes one aggregate liquid-money account. Multiple accounts, transfers, and bank/account-statement reconciliation workflows are future scope; OQ-13 still permits a manual authoritative balance update. |
-| OQ-04 | Accepted | Scheduled income and outgoings never auto-post. Users explicitly confirm received/paid state. |
+| OQ-04 | Accepted | Scheduled income and outgoings never auto-post. Users explicitly confirm receipt/payment; the resulting persisted occurrence state is `confirmed` (`Received`/`Paid` are presentation wording). |
 | OQ-05 | Accepted | Safe-to-spend is authoritative current balance minus unpaid outgoing occurrences due through current user-local month-end minus active savings-goal current amounts. Projected income is excluded until explicitly received and posted. |
 | OQ-06 | Accepted | MVP reminders are in-app only. No payment reminder email, push, SMS, or chat delivery. Authentication/security email remains required. |
 | OQ-07 | Accepted | Debt interest is informational only. MVP does not accrue interest, amortize debt, or predict payoff. |
@@ -79,9 +79,9 @@ This log records product decisions made after the initial specification foundati
 
 **Decision**
 
-- Scheduled inflow remains projected until `Mark received` succeeds.
-- Scheduled outflow remains upcoming/due/overdue until `Mark paid` succeeds.
-- Date passage and notification delivery have no financial authority.
+- Scheduled inflow remains persisted `scheduled`/presented Projected until `Mark received` atomically succeeds and persists `confirmed`.
+- Scheduled outflow remains persisted `scheduled`/presented Upcoming, Due today, or Overdue until `Mark paid` atomically succeeds and persists `confirmed`.
+- Paid/Received are direction-specific presentation/action labels, never persisted states. Date passage and notification delivery have no financial authority.
 
 **Consequences**
 
@@ -302,8 +302,8 @@ Round 3 records the exact decision packets below. **No row is an approved decisi
 |---|---|---|---|---|---|
 | `SPEC-AUTH-01` | Fresh rotated session after verification **or** explicit sign-in; result/cookie/CSRF/event/multi-tab/uncertain-response contract | Single-use atomic verification; no session fixation | Product Owner; Security co-approval | Threat, flow, session-fixation, retry, content review | OPEN — decision ready |
 | `SPEC-AUTH-02` | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and behavior | Invitation code, Argon2id, digest-only secrets, generic responses, reset revokes all sessions | Security Owner; Product co-approval | Threat, runtime benchmark, provider, abuse-cost, usability, replay tests | OPEN — decision ready |
-| `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`: void + replacement, immutable anchor/effect, cross-segment rejection, link matrix, report effects, preview, audit and stale/idempotent outcomes | No history erasure/double effect/current-balance rewrite from closed history | Product Owner; Financial Integrity/Data/Security co-approval | Issue #1 PR review plus exact H–J and `FIN-COR-01`–`10` specifications | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Approve `account_financial_serialization.v1`: account lock/version/order, explicit rollback before release/result/fresh retry, bounded transient retry, same-key commit recovery and exact bounds/errors | One latest segment; one winner/stale loser; no failed-transaction reuse, silent re-anchor, duplicate or unbounded retry | Data Owner; Architecture/Security/Financial Integrity co-approval | ADR-009 plus Supabase PostgreSQL `FIN-RACE`, idle-confirmed rollback/lock release/deterministic clean reuse/unconfirmed-cleanup eviction, query and commit-fault evidence | OPEN — approval/evidence ready |
+| `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`, P1 exclusive-domain-claim matrix, and P2 persisted/presentation occurrence terminology | No history erasure/double effect/incompatible owner/current-balance rewrite from closed history | Product Owner; Financial Integrity/Data/Security co-approval; Architecture on enforcement | Issue #1 PR review plus exact H–J, `FIN-COR-01`–`10`, `FIN-LINK-01`–`06`, and `FIN-OCC-01`–`04` specifications | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | Approve `account_financial_serialization.v1`: account lock/version/order, exclusive-claim check, explicit rollback before release/result/fresh retry, bounded transient retry, same-key commit recovery and exact candidate bounds/errors | One latest segment/compatible claim; one winner/stale loser; no failed-transaction reuse, silent re-anchor, duplicate or unbounded retry | Data Owner; Architecture/Security/Financial Integrity co-approval | ADR-009 plus Supabase PostgreSQL `FIN-RACE`/`FIN-LINK`, idle-confirmed rollback/lock release/deterministic clean reuse/unconfirmed-cleanup eviction, query and commit-fault evidence | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay, mandatory fresh lender-reported balance, or explicitly bounded combination | No inferred principal, interest, fee, payoff, or outstanding | Product Owner; Financial Integrity/Data co-approval | DCT-08/09 and later-event/date-reorder proof | OPEN — decision ready |
 | `SPEC-SCH-01` | Leap-day fallback, bounds, generation horizon/batch, and exact series-edit behavior | One-off/every-N-week/month/year; monthly missing-day fallback | Product Owner; Data/Architecture co-approval | Fixed-clock boundary, load, UX and race evidence | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | At most one catch-up; no burst; no financial mutation | Product Owner; Architecture/Operations/QA co-approval | Exact RCT-04–07, outage, timezone, content evidence | OPEN — decision ready |
@@ -326,10 +326,12 @@ The Issue #1 decision candidate is:
 3. a correction remains within its original segment/effect or is rejected—KFin does not auto-reanchor or convert `historical`/`current` meaning;
 4. correction/void in a closed prior segment can change active report facts while current balance remains anchored exactly to the latest snapshot;
 5. generic schedule-only corrections transfer the confirmed pointer atomically, while debt and planned-purchase transactions follow the explicit reject/delegate matrix;
-6. consequence preview, bounded reason, append-only audit chain, and one terminal posted effect are mandatory;
-7. stale transaction/anchor/link/financial-state context returns `FIN_CORRECTION_STALE_STATE`, makes no financial/domain mutation or version increment (only a bounded stable idempotency receipt), and requires deliberate refetch/re-preview;
-8. snapshot/correction and competing-correction races have one winner and one stale loser, never silent reanchor, duplicate effect, or partial state; and
-9. compatible idempotent retry returns the first committed result, while same key/different payload is rejected.
+6. one posted transaction has at most one compatible owning workflow claim; only its exact scheduled debt occurrence + debt payment is one composite debt claim, and every incompatible second claim returns `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT` from current state;
+7. persisted occurrence state remains `scheduled | confirmed | skipped | cancelled`; Paid/Received are direction-specific presentation/action wording for `confirmed`, not stored states;
+8. consequence preview, bounded reason, append-only audit chain, and one terminal posted effect are mandatory;
+9. stale transaction/anchor/link/financial-state context returns `FIN_CORRECTION_STALE_STATE`, makes no financial/domain mutation or version increment (only a bounded stable idempotency receipt), and requires deliberate refetch/re-preview;
+10. snapshot/correction, competing-correction, and incompatible-claim races have one winner and one stale loser, never silent reanchor, duplicate effect/owner, or partial state; and
+11. compatible idempotent retry returns the first committed result, while same key/different payload is rejected.
 
 This is an explicit proposal rather than a silent implementation choice. GitHub Issue #1 and its pull request are the review record. `SPEC-FIN-01` remains OPEN until named mandatory owners approve the exact policy and the governance register records the approval.
 
@@ -345,12 +347,13 @@ The Issue #3 decision candidate is:
 1. every account-scoped financial mutation executes in one PostgreSQL `READ COMMITTED` transaction and locks the authenticated user’s `financial_accounts` row `FOR UPDATE` before authoritative child/domain locks;
 2. a dedicated `financial_state_version` starts at `1`, is returned with the latest snapshot ID, and increments exactly once per committed logical mutation—never for stale, rollback, rejection, or idempotent replay;
 3. after the account lock, the server checks a compatible committed idempotency result before comparing expected version/latest snapshot, then revalidates all domain state under the global lock order;
-4. two different requests from the same reviewed state have one committed winner and one operation-specific HTTP `409` stale loser; no path auto-refreshes, reanchors, or replays the user decision;
-5. only SQLSTATE `55P03`, `40P01`, and `40001` may retry internally, at most once, with unchanged key/digest/version/payload and bounded `25–75 ms` jitter inside the stated budgets;
-6. non-retried `57014` and retryable `55P03`/`40P01`/`40001` require same-connection `ROLLBACK` plus confirmed idle state before release, timeout/busy return, or retry; statement failure is not rollback proof, each retry begins a fresh transaction, and unconfirmed cleanup evicts/closes the handle before response with no internal retry elsewhere;
-7. a lost `COMMIT` acknowledgement triggers at most one same-key recovery attempt; unresolved status returns `FINANCIAL_RESULT_UNKNOWN` and requires same-key retry rather than a new logical write;
-8. exact candidate limits are 2,000 ms lock wait, 5,000 ms statement timeout, an 8,000 ms normal budget covering attempts/rollback cleanup/backoff, one transient retry, and one 2,000 ms uncertain-commit recovery attempt; and
-9. `FIN-RACE-01`–`FIN-RACE-08` plus idle-confirmed rollback, lock release, deterministic clean reuse, unconfirmed-cleanup eviction/no-retry, query review and fault injection are mandatory closure evidence.
+4. every schedule/debt/planned-purchase link writer checks all three claim families under that lock; the exact scheduled-debt composite is compatible and every other second owner is rejected;
+5. two different requests from the same reviewed state have one committed winner and one operation-specific HTTP `409` stale loser; no path auto-refreshes, reanchors, or replays the user decision;
+6. only SQLSTATE `55P03`, `40P01`, and `40001` may retry internally, at most once, with unchanged key/digest/version/payload and bounded `25–75 ms` jitter inside the stated budgets;
+7. non-retried `57014` and retryable `55P03`/`40P01`/`40001` require same-connection `ROLLBACK` plus confirmed idle state before release, timeout/busy return, or retry; statement failure is not rollback proof, each retry begins a fresh transaction, and unconfirmed cleanup evicts/closes the handle before response with no internal retry elsewhere;
+8. a lost `COMMIT` acknowledgement triggers at most one same-key recovery attempt; unresolved status returns `FINANCIAL_RESULT_UNKNOWN` and requires same-key retry rather than a new logical write;
+9. retained candidate limits are 2,000 ms lock wait, 5,000 ms statement timeout, an 8,000 ms normal budget covering attempts/rollback cleanup/backoff, one transient retry, and one 2,000 ms uncertain-commit recovery attempt; no performance validation is claimed; and
+10. `FIN-RACE-01`–`FIN-RACE-08` plus `FIN-LINK-01`–`06`, idle-confirmed rollback, lock release, deterministic clean reuse, unconfirmed-cleanup eviction/no-retry, query review and fault injection are mandatory closure evidence.
 
 This proposal rejects advisory/distributed/global locks, optimistic-version-only multi-row writes, `SERIALIZABLE` as the primary product-conflict mechanism, and automatic refreshed-state retries. ADR-009 remains Proposed. `SPEC-FIN-02` remains OPEN until named mandatory owners approve the exact candidate and the required evidence executes and is recorded.
 

@@ -162,8 +162,9 @@ These states specify evidence targets for proposed `snapshot_correction.v1`; the
 
 - Default Schedule is an agenda list grouped by date; a dense calendar is optional and not the only representation.
 - Each row shows direction, title, expected amount, exact date, state, and source (for example Debt or Rent).
-- Paid/received items are visually secondary but still available in history.
-- `Mark paid` and `Mark received` open a review sheet showing actual amount/date; the one aggregate account is implicit.
+- Persisted states remain `scheduled`, `confirmed`, `skipped`, and `cancelled`. UX labels are direction-specific projections: outgoing `confirmed` is `Paid / Đã thanh toán`, incoming `confirmed` is `Received / Đã nhận`; outgoing `scheduled` may display derived Upcoming/Due today/Overdue.
+- Paid/received items are visually secondary but still available in history; filters with those labels query `confirmed` plus direction and do not create a `paid`/`received` storage state.
+- `Mark paid` and `Mark received` are action labels that open a review sheet showing actual amount/date; success creates/links the posted transaction and persists occurrence state `confirmed`. The one aggregate account is implicit.
 - `Dismiss notification` and `Mark paid` are never adjacent look-alike actions.
 - Overdue state is derived and uses icon + label + text contrast, not red alone.
 - Eligible outgoing-obligation notifications are evaluated server-side at 09:00 user-local time. Each 7-day, 3-day, due-today, and first-overdue stage appears at most once; overdue does not repeat.

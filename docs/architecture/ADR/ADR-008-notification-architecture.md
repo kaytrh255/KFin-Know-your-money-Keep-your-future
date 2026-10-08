@@ -23,13 +23,13 @@ Use a **PostgreSQL transactional outbox/job mechanism plus a small worker**, whi
 
 ### Scheduling and state
 
-- Schedule occurrences remain the source of due/paid/received state.
+- Schedule occurrences persist only `scheduled | confirmed | skipped | cancelled`. Due/overdue is derived from `scheduled`; Paid/Received is direction-specific presentation of `confirmed`.
 - Only eligible outgoing occurrences receive these fixed reminder stages.
 - Worker evaluates stages at 09:00 in the occurrence/user IANA timezone.
 - Stages are `seven_days`, `three_days`, `due_today`, and `first_overdue`.
 - Unique occurrence + stage key permits one in-app notification per stage.
 - `first_overdue` is created once and does not repeat daily or weekly while the item remains overdue.
-- Due-date passage creates due/overdue presentation and notification eligibility only; it never creates a transaction or marks paid.
+- Due-date passage creates due/overdue presentation and notification eligibility only; it never creates a transaction or transitions persisted state to `confirmed`.
 - Confirmation, skipping, or cancellation prevents unresolved future stage creation.
 - Cash-flow warnings use a versioned month-end calculation fingerprint; unchanged warnings are deduplicated.
 

@@ -35,6 +35,7 @@ This document is a decision candidate for review in the pull request linked from
 - **Closed segment:** a snapshot segment older than the latest authoritative snapshot.
 - **Cross-segment transition:** any request that would change snapshot anchor, change balance effect, or make the replacement date/inclusion facts invalid for the original segment/effect.
 - **Owning-domain link:** a schedule occurrence, debt payment, or planned-purchase completion whose integrity depends on the transaction.
+- **Owning-domain claim:** zero or one compatible workflow ownership for a posted transaction. A debt payment plus its exact scheduled debt occurrence is one composite debt claim, not two owners; an unrelated occurrence, debt payment, or planned-purchase completion is an incompatible second claim.
 
 `MUST`, `MUST NOT`, and `MAY` are normative.
 
@@ -155,7 +156,37 @@ A rejected cross-segment request does not mutate the source. If the user is desc
 | Schedule occurrence only | Supported only when direction/currency are unchanged; the occurrence remains confirmed and its `confirmed_transaction_id` atomically points to the replacement | Rejected with `FIN_CORRECTION_LINKED_DOMAIN_REQUIRED`; a confirmed occurrence may not be orphaned |
 | Debt payment, including a scheduled debt occurrence | Generic path rejected; use `UF-DEBT-03`. Its cash transaction must still obey this specification. If `SPEC-DEBT-01` blocks the outstanding result, the whole domain correction is rejected with no partial cash correction | Generic path rejected; use the debt correction/void flow and its no-inference rules |
 | Planned-purchase completion | Generic path rejected because purchase status and any savings-goal deduction require one owning-domain correction contract, which is not in MVP | Rejected; no transaction, purchase, or goal state changes |
-| More than one incompatible owning-domain link | Reject as an integrity error and emit a sanitized reconciliation signal | Reject as an integrity error and emit a sanitized reconciliation signal |
+| More than one incompatible owning-domain link | Reject `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT` and emit a sanitized reconciliation signal | Reject `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT` and emit a sanitized reconciliation signal |
+
+### 7.1 Exclusive owning-domain claim invariant
+
+One posted transaction MUST represent at most one owning workflow claim. The allowed shapes are exhaustive:
+
+| Link shape | Owning claim | Result |
+|---|---|---|
+| No occurrence, debt payment, or purchase completion | Standalone financial transaction | Allowed |
+| One non-debt scheduled occurrence only | Schedule claim | Allowed |
+| One debt payment only | Debt claim | Allowed |
+| One debt payment plus the exact scheduled debt occurrence referenced by that payment | One composite debt claim | Allowed only when occurrence kind/debt, owner, account, currency, direction, and transaction all agree |
+| One planned-purchase completion only | Planned-purchase claim | Allowed |
+| Schedule + planned purchase, debt + planned purchase, unrelated schedule + debt, or any second owner row | Incompatible claims | Reject `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`; no link/domain/financial mutation or version increment |
+
+The three nullable link columns/tables do not, by themselves, prove cross-table exclusivity. Enforcement is therefore a required combination, not an assumed side effect of separate `UNIQUE` constraints:
+
+1. database foreign keys/composite ownership constraints and per-table uniqueness prevent duplicate owners within each relationship;
+2. every link create, transfer, correction, confirmation, worker, operator, and recovery path uses `account_financial_serialization.v1`, locks the owner-scoped account first, then checks all three link families and locks existing owner rows in the global order;
+3. after the account lock, the transaction revalidates the complete allowed shape immediately before writing any link; and
+4. a direct writer that bypasses this check is a correctness defect and is prohibited by runtime-role/repository boundaries and architecture tests.
+
+A normal PostgreSQL `CHECK`/foreign key on one of these tables cannot inspect the other two tables. This candidate does not invent a trigger or a new ownership-registry table: the cross-table invariant is enforced transactionally by the already-required account serialization boundary, while database constraints retain same-table and ownership protection. Data, Architecture, Security, Product, and Financial Integrity reviewers MUST approve this division of enforcement before implementation.
+
+Conflict precedence is deterministic. Post-lock compatible idempotency replay is checked first, then reviewed account version/latest snapshot, then the exclusive-claim check. Two workflows racing from version `N` therefore have one winner at `N + 1`; the waiter returns its operation-specific stale result and does not create a second claim. A request made from refreshed state that attempts to claim an already-owned transaction returns HTTP `409` + `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`, persists only its bounded terminal idempotency result, and changes no domain/financial/link/audit state or version. Same key + same digest replays that stored terminal result; same key + different digest returns `IDEMPOTENCY_KEY_REUSED`.
+
+If validation discovers an already-impossible multi-claim shape, the operation fails closed with `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`, changes nothing, and emits only a sanitized reconciliation/security signal. It MUST NOT guess an owner, detach a row, or continue a correction.
+
+### 7.2 Occurrence persistence versus presentation
+
+A scheduled occurrence persists only `scheduled | confirmed | skipped | cancelled`. A linked successful correction leaves it `confirmed`. `Paid / Đã thanh toán` is the outgoing presentation of `confirmed`; `Received / Đã nhận` is the incoming presentation. Mark paid/received are command labels, not accepted domain-state values. Due/overdue is derived from `scheduled` plus date/timezone and never changes persisted state. This policy changes no enum and authorizes no migration.
 
 A schedule-only correction transfers the active pointer but preserves the old pointer relationship in append-only audit evidence. Expected schedule values remain unchanged; the replacement supplies the confirmed actual amount/date. Any stale occurrence version rejects the whole correction.
 
@@ -214,6 +245,12 @@ When two requests target the same posted terminal transaction, at most one commi
 
 The exact retention period and physical idempotency/serialization storage remain governed by approved security/data limits and `SPEC-FIN-02`.
 
+### 9.5 Authorization and invalid requests
+
+The server derives actor/owner from the authenticated session or explicitly authorized operator/worker context; it never trusts a client-supplied user ID. Source, account, snapshot, replacement, and every owning-domain row MUST be resolved through owner-scoped access. Missing and non-owned resources return the same safe unavailable result with no existence disclosure, mutation, idempotency receipt under the wrong owner, or version increment. Operator/worker paths require their approved role and still use the same owner-scoped account lock, constraints, audit, and conflict rules.
+
+Malformed input, authority-field tampering, non-terminal source, invalid chain, cross-segment/effect transition, and incompatible link shape fail with the specified stable safe code and no partial write. Security/audit telemetry is bounded and sanitized; it never includes unrestricted notes, amounts, SQL, or another user’s identifiers.
+
 ## 10. Reproducible acceptance scenarios
 
 All amounts are integer VND units. Every case asserts ownership, audit chain, one terminal posted result, report effect, idempotency, and no partial write.
@@ -231,6 +268,17 @@ All amounts are integer VND units. Every case asserts ownership, audit chain, on
 | `FIN-COR-09` — idempotency | Parallel same-key/same-payload requests, then same key/different payload | Exactly one chain/result; compatible retries return it; different payload is rejected |
 | `FIN-COR-10` — concurrency | Race correction against snapshot, another correction, and link-state update | Exactly one allowed winner per §9; a losing snapshot gets `FIN_SNAPSHOT_STALE_STATE`, other stale requests get `FIN_CORRECTION_STALE_STATE`; no auto-reanchor, branch, duplicate, or partial write |
 
+The cross-domain invariant additionally requires the following later executable cases; they are specified, **NOT RUN**:
+
+| Case | Setup / action | Expected state, version, idempotency, and error | Required proof |
+|---|---|---|---|
+| `FIN-LINK-01` — schedule claim | Account version `N`; confirm one ordinary occurrence, creating/linking transaction `T` with a unique key | Exactly one schedule claim/effect/receipt; version `N+1`; same-key/same-digest replay returns it without another increment | Transaction/occurrence/result rows, version delta, link-query trace |
+| `FIN-LINK-02` — composite debt claim | Account version `N`; confirm a scheduled debt occurrence through debt payment `P`, both referencing newly posted `T` | One compatible debt claim only when owner/account/debt/currency/direction/pointers agree; one effect/receipt; version `N+1`; replay stable | Occurrence/item/debt/payment/transaction/result joins, version, no second claim |
+| `FIN-LINK-03` — incompatible sequential claim | At current version `N`, attempt to attach already schedule-owned `T` to a purchase or unrelated debt with a new key | HTTP `409` + `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`; only one bounded terminal conflict receipt; no link/effect/audit mutation or version increment; same-key replay stable | Before/after all three link families, receipt/digest, version and audit counts |
+| `FIN-LINK-04` — incompatible concurrent claim | Two real connections/keys race schedule and purchase/debt claims for unowned `T` from version `N`; force each winner order | Account-lock winner commits one claim/receipt at `N+1`; waiter returns its operation-specific stale result/receipt; no second claim/effect; refreshed conflicting request returns terminal link conflict | Blocking/lock order, both forced orders, final claim matrix, exact receipts/version, synthetic logs |
+| `FIN-LINK-05` — ownership mismatch | Attempt a claim using another user/account/debt/occurrence/purchase | Safe unavailable/authorization result; no existence disclosure, mutation, receipt under the wrong owner, or version increment | Two-user API/repository matrix, before/after rows/version, sanitized signal |
+| `FIN-LINK-06` — impossible stored shape | Synthetic evidence fixture at version `N` contains incompatible claims; request correction/void with one key | HTTP `409` + `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`; bounded terminal receipt only; version remains `N`; no automatic repair/detach/audit mutation; replay stable | Fixture and unchanged link rows, receipt/version counts, sanitized reconciliation evidence |
+
 Snapshot scenario H maps to `FIN-COR-01`; scenario I maps to `FIN-COR-02`; scenario J’s transition branch maps to `FIN-COR-05`/`06`, while its race branch maps to `FIN-COR-10` and remains dependent on `SPEC-FIN-02` mechanism evidence.
 
 ## 11. GitHub Issue #1 acceptance trace
@@ -240,9 +288,11 @@ Snapshot scenario H maps to `FIN-COR-01`; scenario I maps to `FIN-COR-02`; scena
 | Historical evidence must not be silently rewritten | §§3–4; append-only source/replacement chain and audit presentation |
 | Current balance remains based on latest authoritative segment | §5; closed-segment corrections have zero current-balance effect |
 | Cross-segment behavior explicitly defined | §6; anchor/effect/date transitions are deterministically rejected |
+| Exclusive domain ownership is explicit | §7.1; one compatible claim, composite scheduled-debt exception, account-lock enforcement, stable conflict, and `FIN-LINK-01`–`06` |
+| Persisted occurrence state and UI wording are distinct | §7.2; only `scheduled`, `confirmed`, `skipped`, or `cancelled` persist, while Paid/Received are presentation/action wording |
 | Concurrency behavior explicitly defined | §9; winner/loser/conflict/idempotency contract; proposed physical enforcement is `account_financial_serialization.v1`, still OPEN under `SPEC-FIN-02` |
 | Related documents synchronized | PRD, User Flows, Architecture, Database, Security, UX, Test Strategy, Release Checklist, Decision Log, blocker/governance registers |
-| Tester can derive reproducible cases | §10 and the synchronized H–J / `FIN-COR-01`–`FIN-COR-10` matrices |
+| Tester can derive reproducible cases | §10 and Test Strategy’s synchronized H–J / `FIN-COR-01`–`FIN-COR-10` / `FIN-LINK-01`–`06` / `FIN-OCC-01`–`04` matrices |
 
 ## 12. Approval and gate conditions
 
@@ -250,8 +300,9 @@ Snapshot scenario H maps to `FIN-COR-01`; scenario I maps to `FIN-COR-02`; scena
 
 1. the Product Owner and mandatory Financial Integrity, Data, and Security co-approvers approve this exact policy/version;
 2. approval date, approver identities, source commit, and pull request are recorded in the Approval and Evidence Register;
-3. all synchronized documents contain no alternate correction behavior;
-4. reviewers confirm that H–J and `FIN-COR-01`–`FIN-COR-10` are reproducible test specifications; and
-5. any requested policy change is applied consistently before approval.
+3. all synchronized documents contain no alternate correction or owning-domain-claim behavior;
+4. reviewers confirm that H–J, `FIN-COR-01`–`FIN-COR-10`, `FIN-LINK-01`–`FIN-LINK-06`, and `FIN-OCC-01`–`FIN-OCC-04` are reproducible test specifications;
+5. Product/Financial Integrity/Data/Security approve the §7.1 semantic matrix, while Data/Architecture/Security approve transactional cross-table enforcement under the account lock; and
+6. any requested policy change is applied consistently before approval.
 
 Runtime test execution is not claimed by this documentation task. `SPEC-FIN-02`, every other open blocker, and the global Implementation Gate remain unaffected and CLOSED.

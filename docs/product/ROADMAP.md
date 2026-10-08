@@ -85,15 +85,15 @@
 - Manual authoritative-balance snapshot updates and explicitly labelled historical backfill.
 - Posted current-impact/historical-only income/expense transaction model.
 - Amount-first Global Add and activity history.
-- Approved append-only transaction correction/void flow under `snapshot_correction.v1`; cross-segment moves remain rejected.
-- Approved/evidenced PostgreSQL account-row/version serialization under `account_financial_serialization.v1`, including bounded retry and same-key uncertain-commit recovery.
+- Approved append-only transaction correction/void flow under `snapshot_correction.v1`; cross-segment moves remain rejected and each transaction has at most one compatible owning-domain claim.
+- Approved/evidenced PostgreSQL account-row/version serialization under `account_financial_serialization.v1`, including complete claim checks, bounded retry, and same-key uncertain-commit recovery.
 - Default categories/classifications.
 - Monthly aggregation and snapshot-anchor consistency tests.
 
 **Exit gate**
 
 - Money/date/timezone invariants and idempotency pass.
-- `SPEC-FIN-01` and `SPEC-FIN-02` have mandatory owner approvals; H–J/`FIN-COR-01`–`10` and real-PostgreSQL `FIN-RACE-01`–`08` on Supabase pass with ADR-009, idle-confirmed rollback, lock release, deterministic clean reuse, unconfirmed-cleanup eviction/no-retry, query/latency and commit-fault evidence.
+- `SPEC-FIN-01` and `SPEC-FIN-02` have mandatory owner approvals, including the exclusive-domain-claim matrix and persisted/presentation occurrence terminology; H–J/`FIN-COR-01`–`10`/`FIN-LINK-01`–`06`/`FIN-OCC-01`–`04` and real-PostgreSQL `FIN-RACE-01`–`08` on Supabase pass with ADR-009, idle-confirmed rollback, lock release, deterministic clean reuse, unconfirmed-cleanup eviction/no-retry, query/latency and commit-fault evidence.
 - Representative users complete Global Add and correction tasks on small screens.
 - Cross-user tests pass for every resource.
 

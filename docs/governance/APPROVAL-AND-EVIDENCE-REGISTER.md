@@ -1,8 +1,8 @@
 # Approval and Evidence Register
 
 **Status:** Controlled template; FIN-01/02 candidates recorded, approvals/evidence incomplete<br>
-**Version:** 0.3<br>
-**Last reviewed:** 2026-10-07<br>
+**Version:** 0.4<br>
+**Last reviewed:** 2026-10-08<br>
 **Implementation Gate:** CLOSED
 
 ## 1. Purpose
@@ -67,8 +67,8 @@ These rules are unapproved and remain part of `SPEC-GOV-01`.
 |---|---|---|---|---|---|
 | `SPEC-AUTH-01` | Product Owner | Security Owner | Post-verification outcome and threat/flow/test evidence | Missing | OPEN |
 | `SPEC-AUTH-02` | Security Owner | Product Owner | Complete auth/session policy values and benchmark/threat/usability evidence | Missing | OPEN |
-| `SPEC-FIN-01` | Product Owner | Financial Integrity, Data, Security Owners | Approve Issue #1 `snapshot_correction.v1`; H–J/`FIN-COR-01`–`10`; linked-domain/threat/UX review | Decision candidate documented; approvers/PR approval missing | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Data Owner | Architecture, Security, Financial Integrity Owners | Approve Issue #3 policy/ADR-009; execute `FIN-RACE-01`–`08` with idle-confirmed rollback, lock-release, clean reuse, unconfirmed-cleanup eviction/no-retry, query/latency and commit-fault evidence | Cleanup contract documented; approvers/Supabase PostgreSQL evidence missing | OPEN — approval/evidence ready |
+| `SPEC-FIN-01` | Product Owner | Financial Integrity, Data, Security Owners; Architecture for cross-table enforcement | Approve Issue #1 `snapshot_correction.v1`; H–J/`FIN-COR-01`–`10`; `FIN-LINK-01`–`06` exclusive-claim matrix; `FIN-OCC-01`–`04` persisted/presentation occurrence terminology; linked-domain/threat/UX review | Decision candidate documented; P1/P2 clarified; approvers/PR approval and executable link evidence missing | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | Data Owner | Architecture, Security, Financial Integrity Owners | Approve Issue #3 policy/ADR-009 and candidate bounds; execute `FIN-RACE-01`–`08` with exclusive-claim race, idle-confirmed rollback, lock-release, clean reuse, unconfirmed-cleanup eviction/no-retry, query/latency and commit-fault evidence | Cleanup and P1 concurrency contracts documented; approvers/Supabase PostgreSQL evidence missing | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Product Owner | Financial Integrity, Data Owners | Historical correction policy and DCT evidence | Missing | OPEN |
 | `SPEC-SCH-01` | Product Owner | Data, Architecture Owners | Leap-day/bounds/series-edit policy and boundary evidence | Missing | OPEN |
 | `SPEC-REM-01` | Product Owner | Architecture, Operations, QA Owners | Catch-up policy tuple and RCT evidence | Missing | OPEN |
@@ -77,6 +77,15 @@ These rules are unapproved and remain part of `SPEC-GOV-01`.
 | `SPEC-DEL-01` | Privacy/Legal Owner | Product, Security, Operations Owners | Deletion/legal/restore decision and drill evidence | Missing | OPEN |
 | `SPEC-UX-01` | UX/Accessibility Owner | Product Owner | Complete UX evidence manifest and sign-off | Missing | OPEN |
 | `SPEC-GOV-01` | Product Owner | Architecture, Engineering, Security, QA, Operations, Release, Privacy/Legal, UX/Accessibility Owners | Completed authority, limits, evidence, and sign-off registers | Missing | OPEN |
+
+### 4.1 Cross-cutting FIN remediation decisions
+
+| Decision | Required owner / co-approval | Required evidence | Current status | Can affected blocker close? |
+|---|---|---|---|---|
+| P1 semantic invariant: one posted transaction has at most one compatible workflow claim; exact scheduled-debt occurrence + debt payment is one composite claim | Product accountable; Financial Integrity, Data, Security mandatory; Architecture consulted | `FIN-LINK-01`–`06`, malicious/cross-owner matrix, linked-domain walkthrough | Specified; not approved or executed | No — approval/evidence absent |
+| P1 enforcement: per-table database uniqueness/ownership plus complete cross-table check under owner-scoped account lock for every writer; no trigger/registry invented | Data accountable; Architecture and Security mandatory; Financial Integrity/Product co-review | Real PostgreSQL `FIN-LINK-04` and `FIN-RACE-08`, query/lock traces, worker/operator/recovery bypass scan | Candidate specified; runtime evidence missing | No — approval/evidence absent |
+| P1 deterministic result: stale precedence for same-version race; current-state incompatible claim returns `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`; same-key replay remains stable | Product + Data accountable; Financial Integrity/Security mandatory | Result/idempotency/version assertions for sequential and concurrent claims | Specified; not approved or executed | No — approval/evidence absent |
+| P2 terminology: persisted occurrence state remains one of `scheduled`, `confirmed`, `skipped`, or `cancelled`; Paid/Received are direction-specific labels/actions for `confirmed`; due/overdue are derived | Product accountable; Data and UX/Accessibility mandatory review | `FIN-OCC-01`–`04`: schema/API enum tests, UI/filter mapping review, state-machine and tampered `paid`/`received` tests | Clarified; no storage rename proposed; approval/evidence missing | No — approval/evidence absent |
 
 ## 5. Physical-limit decision register
 
@@ -100,8 +109,8 @@ Values below must not be guessed from framework defaults. Each final limit requi
 | `EVID-AUTH-POLICY` | Auth/session decision evidence | All `SPEC-AUTH-01`/`02` dimensions | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-AUTH-THREAT` | Threat and abuse review | Registration, verification, login, reset, session replay/revocation | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-AUTH-BENCH` | Runtime benchmark | Argon2id and selected request/session limits on intended runtime | Unassigned | Missing | Not evaluated | OPEN |
-| `EVID-FIN-CORRECTION` | Financial correction decision evidence | Issue #1 policy review; snapshot H–J; `FIN-COR-01`–`10`; linked domains, reports, idempotency/stale outcomes | Unassigned | Specification exists; PR/approval evidence missing | Not evaluated | OPEN |
-| `EVID-FIN-CONCURRENCY` | PostgreSQL concurrency decision/runtime evidence | Issue #3/ADR-009; `FIN-RACE-01`–`08`; forced orders; version/idempotency; exact SQLSTATE bounds; idle-confirmed rollback before response/check-in/fresh retry; lock release; deterministic clean reuse; unconfirmed-cleanup eviction/no-retry; commit cut points; scope/bypass/latency | Unassigned | Contract candidate hardened; dedicated Supabase PostgreSQL execution/approval artifacts missing | Not evaluated | OPEN |
+| `EVID-FIN-CORRECTION` | Financial correction decision evidence | Issue #1 policy review; snapshot H–J; `FIN-COR-01`–`10`; `FIN-LINK-01`–`06`; `FIN-OCC-01`–`04`; exclusive linked domains, occurrence terminology, reports, idempotency/stale outcomes | Unassigned | Specification exists; P1/P2 clarified; PR/approval and executable evidence missing | Not evaluated | OPEN |
+| `EVID-FIN-CONCURRENCY` | PostgreSQL concurrency decision/runtime evidence | Issue #3/ADR-009; `FIN-RACE-01`–`08`; forced orders; exclusive-claim race; version/idempotency; exact SQLSTATE bounds; idle-confirmed rollback before response/check-in/fresh retry; lock release; deterministic clean reuse; unconfirmed-cleanup eviction/no-retry; commit cut points; scope/bypass/latency | Unassigned | Contract candidate hardened; dedicated Supabase PostgreSQL execution/approval artifacts missing | Not evaluated | OPEN |
 | `EVID-DEBT` | Debt correction evidence | DCT-08/09 and later-event/missing-state variants | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-SCHEDULE` | Recurrence evidence | Leap years, short months, timezone, series edits, bounds | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-REMINDER` | Reminder recovery evidence | RCT-04–07, outage/late creation/state races | Unassigned | Missing | Not evaluated | OPEN |

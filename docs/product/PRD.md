@@ -119,6 +119,7 @@ MVP exposes exactly one aggregate liquid-money account per user. Multiple accoun
 | PRD-FIN-11 | A transaction correction MUST never silently change balance effect or snapshot anchor. Under proposed `snapshot_correction.v1`, a request requiring another segment/effect is rejected; supported same-anchor/effect correction requires consequence preview, stale-state protection, and append-only audit evidence. |
 | PRD-FIN-12 | Every account-scoped financial mutation MUST execute under proposed `account_financial_serialization.v1`: one owner-scoped PostgreSQL account-row lock at `READ COMMITTED`, post-lock latest-snapshot/version validation, account-first child-lock ordering, and exactly one financial-state-version increment for one committed logical winner. |
 | PRD-FIN-13 | A stale reviewed state MUST commit no financial/domain/link/audit mutation or version increment; only a bounded terminal idempotency receipt may persist. It MUST NOT be auto-reanchored or replayed against refreshed state. A failed PostgreSQL statement is not proof of whole-transaction rollback: non-retried `57014` and retryable `55P03`/`40P01`/`40001` require same-connection `ROLLBACK` with confirmed idle state before response, pool release, or retry, and each retry starts a new transaction. Unconfirmed cleanup evicts/closes the handle and permits no internal retry on another connection. Timeout after uncertain `COMMIT` uses same-key recovery or an explicit unknown-result state. |
+| PRD-FIN-14 | One posted transaction MUST have at most one compatible owning-domain claim. An exact debt payment + its scheduled debt occurrence is one composite debt claim; unrelated schedule, debt, and planned-purchase ownership cannot coexist. Every linking path checks all claim families under the account lock; a current-state conflict returns HTTP `409` + `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT` with no financial/domain/link/audit mutation or version increment. |
 
 #### Issue #1 proposed correction policy
 
@@ -126,7 +127,7 @@ The complete decision candidate is [SPEC-FIN-01 — Snapshot Correction Semantic
 
 #### Issue #3 proposed concurrency policy
 
-The physical enforcement candidate is [SPEC-FIN-02 — Snapshot Concurrency](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md). It selects an account-row lock at PostgreSQL `READ COMMITTED`, monotonic `financial_state_version`, account-first order, idle-confirmed same-connection rollback before release/response/fresh retry, eviction/no-retry after unconfirmed cleanup, one bounded retry for exact SQLSTATEs, and same-key uncertain-commit recovery. The policy and ADR-009 remain proposed; owner approval and real-PostgreSQL `FIN-RACE-01`–`08` cleanup/lock/pool evidence on Supabase are absent.
+The physical enforcement candidate is [SPEC-FIN-02 — Snapshot Concurrency](../architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md). It selects an account-row lock at PostgreSQL `READ COMMITTED`, monotonic `financial_state_version`, account-first order, a complete schedule/debt/purchase claim check, idle-confirmed same-connection rollback before release/response/fresh retry, eviction/no-retry after unconfirmed cleanup, one bounded retry for exact SQLSTATEs, and same-key uncertain-commit recovery. Every timeout/retry value remains an unvalidated candidate. The policy and ADR-009 remain proposed; owner approval and real-PostgreSQL `FIN-RACE-01`–`08`/`FIN-LINK-01`–`06` cleanup/lock/pool evidence on Supabase are absent.
 
 ### 7.3 Income
 
@@ -191,7 +192,7 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 |---|---|
 | PRD-REM-01 | The schedule MUST combine upcoming fixed expenses, debt payments, and scheduled income while preserving each item’s direction and state. |
 | PRD-REM-02 | Outgoing occurrences MUST support in-app notification stages at 7 days before, 3 days before, due today, and first overdue, evaluated at 09:00 in the user’s timezone. |
-| PRD-REM-03 | Reaching a due date MUST NOT mark an occurrence paid. Only explicit confirmation or a future verified integration may do so. |
+| PRD-REM-03 | Reaching a due date MUST NOT transition an occurrence to persisted `confirmed` or present it as Paid. Only explicit confirmation or a future verified integration may do so. |
 | PRD-REM-04 | Each eligible outgoing occurrence/stage MUST create at most one notification. First-overdue notification MUST NOT repeat daily or weekly while state is unchanged. |
 | PRD-REM-05 | Payment reminders MUST be in-app only in MVP. Push, SMS, chat, and payment-reminder email are excluded; required authentication/security email remains separate. |
 | PRD-REM-06 | Notifications MUST be actionable, readable/dismissible, and deduplicated across worker retries, downtime catch-up, and timezone changes. |
@@ -201,6 +202,8 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 | PRD-REM-10 | Reminder evaluation MUST be server-side and independent of whether the Web/PWA is open. Closing or returning to the app MUST NOT replay elapsed stages, create a burst, or alter financial state; the app displays persisted notification state. |
 | PRD-REM-11 | If worker downtime, late occurrence creation, or a timezone change makes multiple stages already elapsed, one recovery evaluation MUST NOT create more than one catch-up notification for that occurrence. The exact single stage, or whether none is emitted, is **BLOCKER `SPEC-REM-01`** for Product Owner decision. |
 | PRD-REM-12 | Before catch-up insertion, the worker MUST recheck current occurrence state and uniqueness. Confirmed, skipped, or cancelled occurrences receive no new payment stage, and delayed app return never creates a notification itself. |
+
+Persisted scheduled-occurrence state is exactly `scheduled | confirmed | skipped | cancelled`. `Paid / Đã thanh toán` is the outgoing presentation of `confirmed`; `Received / Đã nhận` is the incoming presentation of `confirmed`. `Upcoming`, `Due today`, and `Overdue` are derived presentations of outgoing `scheduled`. “Mark paid/received” names commands that create/link the posted transaction and transition to `confirmed`; neither `paid` nor `received` is accepted or stored as a domain state.
 
 ### 7.9 Dashboard and reporting
 
@@ -212,7 +215,7 @@ Explicit confirmation is the approved OQ-04 policy. OQ-14 limits recurrence to o
 | PRD-DASH-04 | Users MUST be able to inspect the records behind an aggregate. |
 | PRD-DASH-05 | Charts MUST be limited to those that answer a defined user question; decorative or redundant charts are prohibited. |
 | PRD-DASH-06 | Empty/incomplete data MUST produce honest setup guidance rather than fabricated zero-confidence conclusions. |
-| PRD-DASH-07 | Safe-to-spend MUST equal authoritative current balance minus unpaid outgoing occurrences due through the end of the current user-local calendar month minus current amounts on active savings goals. Projected income MUST be excluded, paid outgoings MUST NOT be double-subtracted, and a negative result MUST NOT be clamped. |
+| PRD-DASH-07 | Safe-to-spend MUST equal authoritative current balance minus unresolved outgoing occurrences due through the end of the current user-local calendar month minus current amounts on active savings goals. Projected income MUST be excluded, outgoing `confirmed` occurrences (presented as Paid) MUST NOT be double-subtracted, and a negative result MUST NOT be clamped. |
 
 ## 8. Approved financial definitions
 
@@ -290,8 +293,8 @@ Round 3 makes the following decisions/evidence **ready for authorized review**; 
 |---|---|---|---|
 | `SPEC-AUTH-01` | Fresh rotated session after verification or explicit sign-in, with result/cookie/CSRF/event/multi-tab/retry behavior | Product Owner; Security co-approval | OPEN — decision ready |
 | `SPEC-AUTH-02` | Complete invitation/password/OTP/reset/abuse/session/rotation/password-change policy | Security Owner; Product co-approval | OPEN — decision ready |
-| `SPEC-FIN-01` | Approve `snapshot_correction.v1` from Issue #1: append-only correction/void, immutable anchor/effect, cross-segment rejection, exact report/link/audit/stale/idempotent outcomes | Product Owner; Financial Integrity/Data/Security co-approval | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account lock/version/order, idle-confirmed rollback plus unconfirmed-cleanup eviction/no-retry, exact retry/uncertain-commit bounds, stale/error contract and Supabase PostgreSQL `FIN-RACE` evidence | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — approval/evidence ready |
+| `SPEC-FIN-01` | Approve `snapshot_correction.v1`, P1 exclusive-domain-claim matrix, and P2 persisted `confirmed` versus Paid/Received presentation terminology; review H–J/`FIN-COR`/`FIN-LINK`/`FIN-OCC` evidence | Product Owner; Financial Integrity/Data/Security co-approval; Architecture enforcement review | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account lock/version/order/complete claim check, idle-confirmed rollback plus unconfirmed-cleanup eviction/no-retry, exact unvalidated candidate retry/uncertain-commit bounds, stale/error contract and Supabase PostgreSQL `FIN-RACE`/`FIN-LINK` evidence | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported balance for historical correction with later events | Product Owner; Financial Integrity/Data co-approval | OPEN — decision ready |
 | `SPEC-SCH-01` | Leap-day fallback, recurrence/generation bounds, and exact series-edit behavior | Product Owner; Data/Architecture co-approval | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up emission/precedence/window/suppression/timezone/late-creation/state-race tuple | Product Owner; Architecture/Operations/QA co-approval | OPEN — decision ready |

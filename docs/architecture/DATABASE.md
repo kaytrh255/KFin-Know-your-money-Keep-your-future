@@ -309,7 +309,7 @@ Invariants:
 - Replacement `user_id`, `account_id`, currency, kind, `balance_snapshot_id`, `balance_effect`, and inclusion meaning equal the source. A request/date requiring another segment/effect is rejected without mutation. Closed-segment correction/void has zero current-balance effect.
 - Schedule-only supported correction atomically transfers `scheduled_occurrences.confirmed_transaction_id` to the replacement while retaining audit linkage. Generic debt/planned-purchase correction and linked standalone void follow the explicit reject/delegate matrix in the product correction specification; no link is detached or partially updated.
 - Correction/void preserves actor/reason/time, old/new values, anchor/effect context, owning-domain transition, versions, correlation, idempotency request digest/result, and consequence preview under `FIN-SNAP-INV-08`.
-- Link tables/columns below prevent one posted transaction from satisfying multiple incompatible domain actions.
+- A posted transaction may satisfy at most one compatible owning-domain claim. Separate link-column uniqueness alone does **not** enforce this across schedule, debt, and planned-purchase tables; §6.1.2 defines the required combined database/transactional invariant.
 
 #### 6.1.1 Proposed correction-chain constraints
 
@@ -326,6 +326,21 @@ The reviewed physical design MUST enforce or transactionally prove:
 
 The correction-chain constraints remain subject to physical constraint review. Their concurrency boundary is proposed explicitly by `account_financial_serialization.v1`; approval and PostgreSQL evidence remain under `SPEC-FIN-02`.
 
+#### 6.1.2 Exclusive owning-domain claim
+
+A posted transaction has zero or one owning-domain claim:
+
+- an ordinary schedule occurrence is one schedule claim;
+- a debt payment is one debt claim and MAY also reference its exact scheduled debt occurrence when `debt_payments.scheduled_occurrence_id`, that occurrence’s debt schedule, and both transaction pointers identify the same owner/account/debt/transaction;
+- a planned-purchase completion is one planned-purchase claim; and
+- every other schedule + debt + purchase combination is incompatible.
+
+Database constraints MUST continue to enforce same-user/account/currency relationships and uniqueness within each link family (`scheduled_occurrences.confirmed_transaction_id`, `debt_payments.transaction_id`, and `planned_purchases.completed_transaction_id`). Those three independent constraints cannot enforce cross-table exclusivity. Every create/link/transfer/correction path MUST therefore lock the owner-scoped account first under §6.2, inspect all three link families, lock existing rows in the §6.2 order, and revalidate the complete claim shape immediately before mutation.
+
+If the reviewed account version is stale, stale handling takes precedence. Otherwise an incompatible existing/proposed claim returns HTTP `409` + `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`, stores only the bounded terminal idempotency result (no new domain/financial/link/audit effect), and increments no financial version. Compatible same-key replay returns the original result. Detection of an already-impossible shape fails closed and emits a sanitized reconciliation signal; no path guesses an owner or automatically detaches a link.
+
+This candidate deliberately reuses the selected account serialization boundary rather than inventing a cross-table trigger or ownership-registry table. A writer that bypasses the check is a correctness defect. The division between declarative per-table constraints and the mandatory serialized cross-table check requires Product/Financial Integrity/Data/Architecture/Security approval and later `FIN-LINK-01`–`FIN-LINK-06` plus `FIN-RACE-08` evidence.
+
 ### 6.2 Proposed per-account serialization and version protocol
 
 The normative candidate is [SPEC-FIN-02 — Snapshot Concurrency](SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md):
@@ -340,7 +355,7 @@ The normative candidate is [SPEC-FIN-02 — Snapshot Concurrency](SPEC-FIN-02-SN
 
 Bootstrap account + initial snapshot uses user/account uniqueness and one idempotency key, then stores version `1` because no account row exists to lock. Workers, operator/recovery tools, and owning-domain paths have no bypass.
 
-Candidate bounds are `lock_timeout = 2,000 ms`, statement timeout `5,000 ms`, normal database budget `8,000 ms` across attempts/rollback cleanup/backoff, one internal retry after `25–75 ms` jitter only for SQLSTATE `55P03`, `40P01`, or `40001`, and one same-key commit-uncertainty recovery attempt within `2,000 ms`. These are proposed policy values, not approved framework defaults.
+Unvalidated candidate bounds are `lock_timeout = 2,000 ms`, statement timeout `5,000 ms`, normal database budget `8,000 ms` across attempts/rollback cleanup/backoff, one internal retry after `25–75 ms` jitter only for SQLSTATE `55P03`, `40P01`, or `40001`, and one same-key commit-uncertainty recovery attempt within `2,000 ms`. They remain TBD for approval pending real PostgreSQL latency/cleanup/fault evidence; they are not approved framework or production defaults.
 
 A failed statement leaves the PostgreSQL transaction unusable until cleanup and is not proof that the whole transaction has rolled back. For non-retried `57014` and retryable `55P03`/`40P01`/`40001`, the server MUST issue `ROLLBACK` on the same connection and await PostgreSQL `ReadyForQuery(I)` or a documented driver-equivalent idle guarantee before release, timeout/busy result, or retry. Cleanup uses a bounded scope that remains usable after request cancellation. Every retry begins with a new `BEGIN`/new transaction. If rollback/idle cannot be confirmed, the pool invalidates/closes the handle before response and starts no internal retry on another connection; connection loss after `COMMIT` follows uncertain-result recovery instead.
 
@@ -377,7 +392,7 @@ safe_to_spend
 - sum(current_amount_minor of active savings goals)
 ```
 
-Unresolved overdue outgoings are included. Scheduled/projected income, paid/confirmed/skipped/cancelled outgoings, archived goals, historical-only transactions, and prior snapshot segments are excluded from their respective terms. Confirmation moves one outgoing from the unpaid term to a posted current-balance effect atomically, preventing double subtraction. The query returns its formula version, evaluation instant, user timezone, local month-end, snapshot ID/as-of time, signed result, and drill-down identifiers. Test cases `STS-01` through `STS-15` are mandatory.
+Unresolved overdue outgoings are included. Scheduled/projected income, outgoing `confirmed` occurrences (presented as Paid), skipped/cancelled outgoings, archived goals, historical-only transactions, and prior snapshot segments are excluded from their respective terms. Confirmation moves one outgoing from the unpaid term to a posted current-balance effect atomically, preventing double subtraction. The query returns its formula version, evaluation instant, user timezone, local month-end, snapshot ID/as-of time, signed result, and drill-down identifiers. Test cases `STS-01` through `STS-15` are mandatory.
 
 ## 7. Schedules and occurrences
 
@@ -418,6 +433,19 @@ Constraints:
 - Scheduled/skipped/cancelled has no confirmed transaction.
 - `due_today` and `overdue` are derived presentation states; they are not payment states and should not require a midnight mass update.
 - Generator upserts a bounded future window and is idempotent.
+
+`scheduled`, `confirmed`, `skipped`, and `cancelled` are the only persisted occurrence states. `paid` and `received` are human-facing, direction-specific labels/actions, not stored enum values:
+
+| Persisted state/direction | Permitted presentation |
+|---|---|
+| outgoing `scheduled` | Upcoming, Due today, or Overdue, derived from `due_on` and user-local date |
+| incoming `scheduled` | Projected / expected |
+| outgoing `confirmed` | Paid / Đã thanh toán |
+| incoming `confirmed` | Received / Đã nhận |
+| `skipped` | Skipped |
+| `cancelled` | Cancelled |
+
+`Mark paid` and `Mark received` are commands. A successful command atomically creates/links the posted transaction and transitions the occurrence to persisted `confirmed`; an API/client-supplied persisted state of `paid` or `received` is invalid. Filters labelled Paid/Received query direction + `confirmed`; they do not introduce aliases into storage. No database-state rename or migration is proposed.
 
 One-off obligations may be represented by a non-recurring scheduled item with one occurrence, avoiding a second competing obligation model.
 
@@ -463,7 +491,7 @@ The current outstanding amount is explicitly user-maintained/lender-reported. It
 - **DEBT-INV-07 — Cash-only correction:** if the old and replacement payment have no explicit principal or lender-balance effect, correcting total/date/classification changes the posted cash record and history only; debt outstanding/as-of remain unchanged.
 - **DEBT-INV-08 — Unsafe historical boundary:** if a later payment/adjustment exists, an as-of reorder occurs, required pre-state is missing, or the result would require inferred principal/interest/fee/outstanding, automatic outstanding recomputation is forbidden. The exact historical correction/rebase/rejection workflow is **BLOCKER `SPEC-DEBT-01`**; an implementer may not select one.
 
-All rows/currency/user ownership must agree. The debt correction matrix in the test strategy is mandatory evidence after `SPEC-DEBT-01` is resolved.
+All rows/currency/user ownership must agree. A debt payment’s transaction link participates in §6.1.2: its optional exact scheduled debt occurrence is compatible within the same debt claim, but any unrelated schedule or planned-purchase claim is rejected. The debt correction matrix in the test strategy is mandatory evidence after `SPEC-DEBT-01` is resolved.
 
 ### 8.3 `debt_balance_adjustments`
 
@@ -536,6 +564,7 @@ Rules:
 - Linking a goal does not move money.
 - Purchase completion may atomically decrease a linked goal’s scalar current amount by a user-confirmed value (including zero) and create one `planned_purchase_use` old/new audit row. The decrease cannot exceed purchase amount or prior goal current amount.
 - Idempotency/unique linkage prevents duplicate expense creation or repeated goal decrease.
+- `completed_transaction_id` participates in §6.1.2 and cannot coexist with a schedule or debt claim for the same transaction.
 - Completing/cancelling/archiving a purchase does not auto-zero, archive, or delete a goal.
 
 ## 11. Notifications and jobs
@@ -559,7 +588,7 @@ Rules:
 - Deduplication key uniquely represents occurrence + stage; worker retries, downtime, timezone changes, and app lifecycle cannot create duplicates.
 - `first_overdue` is generated once and never repeats while the occurrence remains overdue.
 - Confirmed/skipped/cancelled occurrence cancels unresolved reminder events; the worker rechecks current version/state before insertion.
-- Reminder event or notification state never changes occurrence payment state.
+- Reminder event or notification state never changes persisted occurrence state or creates/links a transaction.
 - If downtime, late creation, or timezone change makes multiple stages elapsed, one recovery evaluation may create at most one event for that occurrence. Stage selection, non-selected-stage recording, and recovery-window semantics remain **BLOCKER `SPEC-REM-01`**.
 - App close/reopen/delayed return only affects when persisted notifications are viewed; it does not enqueue, replay, or regenerate reminder events.
 - These rules implement `REM-INV-01` through `REM-INV-10` in ADR-008.
@@ -715,7 +744,7 @@ Automated or operator-safe checks should detect:
 - account `financial_state_version`/idempotency result inconsistent with a committed logical mutation;
 - covered financial write path that omitted the account-first lock/version protocol;
 - current-balance query including historical/old-segment records;
-- orphaned same-user links;
+- orphaned same-user links or incompatible cross-table transaction claims outside the exact scheduled-debt composite;
 - duplicate logical occurrences/reminder stages/jobs;
 - cross-currency aggregate attempts;
 - balance arithmetic overflow;
@@ -731,8 +760,8 @@ Product meaning is set by OQ-01 through OQ-19. Round 3 made each physical decisi
 | Blocker | Exact data decision | Immutable data constraints | Required evidence / acceptance condition | Accountable owner | Status |
 |---|---|---|---|---|---|
 | `SPEC-AUTH-02` | Invitation/challenge/session values; keyed-digest construction; challenge supersession; rotation/grace/replay and last-seen write behavior | No plaintext reusable secret; generic responses; reset revokes all sessions | Benchmark/threat/replay/provider evidence; Security + Product approve every value and all auth/session documents agree | Security Owner | OPEN — decision ready |
-| `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`: void + replacement, immutable anchor/effect, cross-segment rejection, exact link/report/audit/preview/idempotent/stale outcomes | No in-place erasure, double effect, silent segment movement, or rewrite of current balance from closed history | Issue #1 PR review; H–J and `FIN-COR-01`–`10` are reproducible; Product + Financial Integrity + Data + Security approve | Product Owner | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account `FOR UPDATE` at `READ COMMITTED`, version/order, explicit rollback before pool release/result/fresh retry, exact bounds/SQLSTATEs and same-key commit recovery | One latest segment; one increment/winner; stale loser; no failed-transaction reuse, silent re-anchor, duplicate or third retry | ADR-009; real PostgreSQL on Supabase for `FIN-RACE-01`–`08`; idle-confirmed rollback/lock-release/clean-or-evicted pool handling and connection-fault evidence; owner approval | Data Owner | OPEN — approval/evidence ready |
+| `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`, exclusive-domain-claim matrix, and persisted/presentation occurrence terminology | No in-place erasure, double effect/incompatible owner, storage alias, silent segment movement, or rewrite of current balance from closed history | Issue #1 PR review; H–J, `FIN-COR-01`–`10`, `FIN-LINK-01`–`06`, and `FIN-OCC-01`–`04` are reproducible; Product + Financial Integrity + Data + Security approve, with Architecture enforcement review | Product Owner | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account `FOR UPDATE` at `READ COMMITTED`, version/order/complete claim check, explicit rollback before pool release/result/fresh retry, exact candidate bounds/SQLSTATEs and same-key commit recovery | One latest segment/compatible claim; one increment/winner; stale loser; no failed-transaction reuse, silent re-anchor, duplicate or third retry | ADR-009; real PostgreSQL on Supabase for `FIN-RACE-01`–`08` and `FIN-LINK-01`–`06`; idle-confirmed rollback/lock-release/clean-or-evicted pool handling and connection-fault evidence; owner approval | Data Owner | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported outstanding for corrections with later events; date reorder/void/partial-failure behavior | No inferred component, amortization, payoff, or outstanding; unsafe path unavailable | DCT-08/09 and multi-event results fixed; Product + Financial Integrity + Data approve | Product Owner | OPEN — decision ready |
 | `SPEC-SCH-01` | 29-February policy; interval/end/horizon/batch/active-series limits; split-point and occurrence/future edit behavior | Monthly missing-day fallback and supported cadence stay fixed; generated rows idempotent; history preserved | Boundary/load/edit-race tests; Product + Data + Architecture approve all fields and bounds | Product Owner | OPEN — decision ready |
 | `SPEC-REM-01` | Catch-up stage-or-none precedence, recovery age, suppression status/reason, timezone/late-creation/state-race behavior | Occurrence + stage uniqueness; at most one catch-up; no burst or financial mutation | RCT-04–07 exact results plus outage/timezone/race proof; Product + Architecture + Operations + QA approve | Product Owner | OPEN — decision ready |

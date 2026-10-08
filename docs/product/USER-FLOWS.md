@@ -177,7 +177,7 @@ Same amount-first pattern as Global Add, with **Income** selected. The date dete
 
 **Race result:** Proposed `account_financial_serialization.v1` uses the owner-scoped account-row lock and monotonic version to produce exactly one winner. A losing snapshot returns `FIN_SNAPSHOT_STALE_STATE`; a losing correction/void returns `FIN_CORRECTION_STALE_STATE`. Neither auto-reanchors, branches, duplicates, or partially writes. Approval and executed PostgreSQL evidence remain pending under `SPEC-FIN-02`.
 
-Linked financial records must never become orphaned. Until the Issue #1 proposal receives mandatory approval, this flow remains specification-only and unavailable for implementation.
+Linked financial records must never become orphaned or acquire incompatible owners. A posted transaction has at most one owning workflow claim; only a debt payment plus its exact scheduled debt occurrence forms one compatible composite claim. Every schedule/debt/purchase linking flow checks all claim families under the account lock. A refreshed-state incompatible claim returns `FIN_TRANSACTION_DOMAIN_LINK_CONFLICT`; a same-version racing loser is stale. Until the Issue #1 proposal receives mandatory approval, this flow remains specification-only and unavailable for implementation.
 
 ## 5. Recurring income and obligation flows
 
@@ -185,7 +185,7 @@ Linked financial records must never become orphaned. Until the Issue #1 proposal
 
 1. User chooses Add → Recurring income.
 2. Enters name, amount, cadence, first expected date, and optional end date; the one aggregate account is implicit.
-3. Review explicitly says occurrences are projected until confirmed received.
+3. Review explicitly says occurrences are projected until persisted `confirmed`, which is presented as Received for incoming items.
 4. Server creates schedule and generates the bounded next occurrences idempotently.
 5. Schedule and dashboard show projected values separately.
 
@@ -201,17 +201,17 @@ Linked financial records must never become orphaned. Until the Issue #1 proposal
 1. User enters payee/title, essential classification, expected amount, cadence, and first due date; the one aggregate account and fixed in-app reminder stages are implicit.
 2. Schedule generates future unpaid occurrences.
 3. An eligible fixed-stage in-app reminder navigates to occurrence detail.
-4. User selects Mark paid, verifies actual amount/date, and confirms.
-5. Server atomically records one expense and links it; occurrence becomes paid.
+4. User selects the presentation action `Mark paid`, verifies actual amount/date, and confirms.
+5. Server atomically records one expense and links it; persisted occurrence state becomes `confirmed`, presented to the user as `Paid / Đã thanh toán`.
 
-Passing the due date changes only derived due/overdue presentation and notification eligibility; it never performs steps 4–5.
+`paid` is never a stored occurrence state. Passing the due date changes only derived due/overdue presentation and notification eligibility; it never performs steps 4–5.
 
 ### UF-SCH-04 — Handle due, overdue, skip, or changed amount
 
 - Due/overdue is derived from user-local date and unresolved state.
-- User may confirm paid with an actual amount different from expected while preserving both values.
+- User may use `Mark paid` with an actual amount different from expected while preserving both values; success persists `confirmed`.
 - “Skip occurrence” requires a reason/confirmation and does not create a transaction.
-- Series-edit scope (`this occurrence` versus `this and future`) remains a pre-implementation decision. The UI must not offer an unsupported choice; paid history remains stable unless explicitly corrected.
+- Series-edit scope (`this occurrence` versus `this and future`) remains a pre-implementation decision. The UI must not offer an unsupported choice; `confirmed` history (presented as Paid/Received by direction) remains stable unless explicitly corrected.
 
 ## 6. Debt flows
 
@@ -291,7 +291,7 @@ When setup is incomplete, the dashboard explains which missing data prevents a t
 1. At the 09:00 user-local evaluation, the server worker creates at most one in-app notification for each eligible outgoing occurrence + stage (7-day, 3-day, due-today, or first-overdue), independent of whether the app is open.
 2. Before creation it rechecks current occurrence state/version and occurrence + stage uniqueness; confirmed, skipped, or cancelled items receive no new stage.
 3. User opens it and lands on the owned occurrence after authentication.
-4. User confirms paid, views details, or dismisses/marks read.
+4. User invokes `Mark paid` (which persists `confirmed` only after the linked transaction commits), views details, or dismisses/marks read.
 5. The overdue stage is created once and does not repeat daily/weekly; Schedule continues to show overdue until resolved.
 6. Reading/dismissing, closing, or later reopening the app does not mark payment complete, replay elapsed stages, or send payment-reminder email/push.
 7. If worker downtime, late occurrence creation, or timezone change makes multiple stages elapsed, one recovery evaluation creates at most one catch-up notification for the occurrence. Which single stage, if any, is selected remains **BLOCKER `SPEC-REM-01`**; no burst is allowed.
@@ -329,7 +329,7 @@ When setup is incomplete, the dashboard explains which missing data prevents a t
 
 - Financial commit remains authoritative.
 - Outbox/job retries use bounded exponential backoff and idempotency.
-- Notification failure does not change an occurrence to paid or roll back a confirmed transaction.
+- Notification failure does not transition an occurrence to persisted `confirmed` or roll back a confirmed transaction.
 - Operators can inspect sanitized job status and dead-letter state.
 
 ## 10. Flow validation scenarios
@@ -345,7 +345,7 @@ Before approval, product/UX review must walk through at minimum:
 - retry after an uncertain Global Add response;
 - debt payment/correction cases `DCT-01`–`DCT-09`, preserving `SPEC-DEBT-01` blocked outcomes and inferring no component/outstanding;
 - snapshot scenarios A–J, including historical-only reporting, same-day explicit inclusion, new segments, non-whole-history balance, proposed `snapshot_correction.v1`, proposed `account_financial_serialization.v1`, and the still-missing `SPEC-FIN-02` approval/runtime evidence;
-- safe-to-spend cases `STS-01`–`STS-15`, including projected-income exclusion, no paid-outgoing double subtraction, active-goal reserve, negative result, and local month boundary;
+- safe-to-spend cases `STS-01`–`STS-15`, including projected-income exclusion, no outgoing-`confirmed` (Paid presentation) double subtraction, active-goal reserve, negative result, and local month boundary;
 - manual savings amount update followed by partial linked-purchase deduction without double counting;
 - reminder cases `RCT-01`–`RCT-10`, including worker downtime, closed app, late occurrence creation, timezone change, delayed return, multiple missed stages, no burst, and `SPEC-REM-01`;
 - recurrence on the 29th/30th/31st and leap day;
@@ -361,8 +361,8 @@ Round 3 does not choose any unresolved branch. It defines what flow evidence mus
 |---|---|---|---|---|---|
 | `SPEC-AUTH-01` | First-use map, `UF-AUTH-01`/`02` | Fresh rotated session after verification or explicit sign-in; result, onboarding redirect, cookie/CSRF, event, multi-tab, and uncertain-response result | OTP use is atomic/single-use; no pre-auth identifier survives | Compact/expanded walkthrough, threat/session-fixation review, retry/multi-tab tests, approved Vietnamese copy | OPEN — decision ready |
 | `SPEC-AUTH-02` | `UF-AUTH-01`–`06`, session-expiry exception | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and failure path | Invitation code only; generic responses; Argon2id; digest-only secrets; reset revokes all sessions | Boundary, expiry, replay, concurrent-tab, provider-failure, benchmark and usability evidence | OPEN — decision ready |
-| `SPEC-FIN-01` | `UF-FIN-02`/`03`/`06` and linked flows | Approve proposed `snapshot_correction.v1`: void + replacement, same-anchor/effect only, cross-segment rejection, report/link/preview/audit/stale/idempotent outcomes | Append-only evidence; no silent cross-segment move, history erasure, or double effect | Issue #1 PR review, snapshot H–J, and `FIN-COR-01`–`10` walkthroughs | OPEN — approval/evidence ready |
-| `SPEC-FIN-02` | `UF-FIN-01`–`06` | Approve/prove `account_financial_serialization.v1`: account-row lock, monotonic version, account-first order, one bounded retry, same-key uncertain-commit recovery and safe errors | Exactly one latest segment and defined winner/stale-loser result; no silent re-anchor, duplicate or unbounded retry | ADR-009 review and executed `FIN-RACE-01`–`08` with lock/query/fault evidence | OPEN — approval/evidence ready |
+| `SPEC-FIN-01` | `UF-FIN-02`/`03`/`06` and linked schedule/debt/purchase flows | Approve proposed `snapshot_correction.v1`, exclusive-domain-claim matrix, and persisted `confirmed` versus Paid/Received presentation terminology | Append-only evidence; no silent cross-segment move, history erasure, double effect/owner, or storage alias | Issue #1 PR review, snapshot H–J, `FIN-COR-01`–`10`, `FIN-LINK-01`–`06`, and `FIN-OCC-01`–`04` walkthroughs | OPEN — approval/evidence ready |
+| `SPEC-FIN-02` | `UF-FIN-01`–`06` and owning-domain writers | Approve/prove `account_financial_serialization.v1`: account-row lock, monotonic version, account-first complete claim check, one bounded retry, same-key uncertain-commit recovery and safe errors | Exactly one latest segment/compatible claim and defined winner/stale-loser result; no silent re-anchor, duplicate or unbounded retry | ADR-009 review and executed `FIN-RACE-01`–`08`/`FIN-LINK-01`–`06` with lock/query/fault evidence | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | `UF-DEBT-03` | Explicit-fact replay or fresh lender-reported balance when later events exist | No inferred debt component or outstanding; unsafe path unavailable | DCT-08/09 and later-event/date-reorder/missing-state walkthroughs | OPEN — decision ready |
 | `SPEC-SCH-01` | `UF-SCH-01`–`04` | 29-February outcome, bounds/horizon/batch, and exact occurrence/series-edit split behavior | Supported cadence and monthly missing-day fallback stay fixed; history is preserved | Fixed-clock boundary, edit-versus-worker race and UX walkthroughs | OPEN — decision ready |
 | `SPEC-REM-01` | `UF-REM-01` | Catch-up emission, precedence, recovery window, suppression record, timezone/late-creation and state-race outcomes | At most one catch-up; no burst; no financial-state mutation | Exact RCT-04–07 and outage/timezone/state-race outcomes | OPEN — decision ready |

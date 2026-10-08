@@ -109,12 +109,12 @@ An item is in scope only when it is listed here and supported by approved produc
 | Account deletion | A verified request is cancellable for 7 days, then active data is purged under the approved map and a restore cannot resurrect it. |
 | Quick expense | A user can record a valid basic expense on one mobile surface with clear success/failure and no duplicate on retry. |
 | Balance snapshot | Current balance reconciles to the latest snapshot segment; historical backfill is labelled and cannot silently change it. |
-| Transaction correction | Approved `snapshot_correction.v1` preserves append-only source/replacement evidence, keeps prior-segment correction out of current balance, rejects cross-segment/effect movement, preserves owning links, and has deterministic stale/idempotent outcomes. |
-| Financial concurrency/recovery | Approved/evidenced `account_financial_serialization.v1` yields one account-scoped winner and stale loser, bounded transient retry, and same-key uncertain-commit recovery without silent reanchor or duplicate effect. |
+| Transaction correction | Approved `snapshot_correction.v1` preserves append-only source/replacement evidence, keeps prior-segment correction out of current balance, rejects cross-segment/effect movement, permits only one compatible owning-domain claim, and has deterministic stale/idempotent outcomes. |
+| Financial concurrency/recovery | Approved/evidenced `account_financial_serialization.v1` yields one account-scoped winner and stale loser, account-locked exclusive-claim checks, bounded transient retry, and same-key uncertain-commit recovery without silent reanchor or duplicate effect/owner. |
 | Monthly overview | Aggregates reconcile exactly to all posted terminal transactions for the selected timezone/month, including labelled historical-only records and amended correction history. |
 | Safe-to-spend | `STS-01`–`STS-15` prove authoritative current balance minus eligible unpaid outgoings through current user-local month-end minus active goal current amounts, with projected income excluded and negative result preserved. |
 | Recurrence | Occurrences are generated idempotently and remain projected until explicitly confirmed. |
-| Payment status | Due date passage yields due/overdue, never paid. |
+| Occurrence state/presentation | Storage accepts only `scheduled`, `confirmed`, `skipped`, or `cancelled`; due date passage derives due/overdue without mutation, while Paid/Received are direction-specific presentation labels for `confirmed`. |
 | Reminders | `RCT-01`–`RCT-10` prove one 09:00 in-app occurrence/stage notification, closed-app independence, no repeated overdue, no scheduled-income stage, and no catch-up burst under the approved `SPEC-REM-01` policy. |
 | Debt | `DCT-01`–`DCT-09` prove explicit-only payment/correction effects and consistent history/outstanding without inferred principal, interest, fee, or lender balance under the approved `SPEC-DEBT-01` policy. |
 | Savings | Goal current amount matches the latest explicit user update/as-of date, retains old/new audit metadata, and is not counted as cash income/outflow. |
