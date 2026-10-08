@@ -9,6 +9,10 @@ import {
 } from 'fastify-type-provider-zod';
 import type { Pool } from 'pg';
 import {
+  correctionCommitBodySchema,
+  correctionCommitResponseSchema,
+  correctionPreviewBodySchema,
+  correctionPreviewResponseSchema,
   createSnapshotBodySchema,
   createSnapshotResponseSchema,
   createTransactionBodySchema,
@@ -16,17 +20,30 @@ import {
   currentBalanceSchema,
   errorResponseSchema,
   idempotencyHeadersSchema,
+  monthlyActualsQuerySchema,
+  monthlyActualsResponseSchema,
+  transactionCorrectionHistoryResponseSchema,
   transactionListQuerySchema,
   transactionListResponseSchema,
   transactionPathSchema,
   transactionSchema,
+  voidCommitBodySchema,
+  voidPreviewBodySchema,
 } from '@kfin/contracts';
 import type {
+  CommitCorrectionInput,
+  CommitVoidInput,
+  CorrectionCommitResult,
+  CorrectionPreviewView,
   CreateSnapshotInput,
   CreateSnapshotResult,
   CreateTransactionInput,
   CreateTransactionResult,
   CurrentBalanceView,
+  MonthlyActualsView,
+  PreviewCorrectionInput,
+  PreviewVoidInput,
+  TransactionCorrectionHistory,
   TransactionPage,
   TransactionView,
 } from '@kfin/database';
@@ -50,10 +67,39 @@ export interface FinancialApiService {
     correlationId: string,
   ): Promise<CreateTransactionResult>;
   getTransaction(ownerUserId: string, transactionId: string): Promise<TransactionView>;
+  getTransactionCorrectionHistory(
+    ownerUserId: string,
+    transactionId: string,
+  ): Promise<TransactionCorrectionHistory>;
   listTransactions(
     ownerUserId: string,
     options: { readonly limit: number; readonly cursor?: string },
   ): Promise<TransactionPage>;
+  previewTransactionCorrection(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: PreviewCorrectionInput,
+  ): Promise<CorrectionPreviewView>;
+  previewTransactionVoid(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: PreviewVoidInput,
+  ): Promise<CorrectionPreviewView>;
+  correctTransaction(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: CommitCorrectionInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<CorrectionCommitResult>;
+  voidTransaction(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: CommitVoidInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<CorrectionCommitResult>;
+  getMonthlyActuals(ownerUserId: string, month: string): Promise<MonthlyActualsView>;
 }
 
 export interface BuildAppOptions {
@@ -233,6 +279,104 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     request.params.id,
   ));
 
+  app.get('/api/v1/transactions/:id/correction-history', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-corrections'],
+      params: transactionPathSchema,
+      response: {
+        200: transactionCorrectionHistoryResponseSchema,
+        401: errorResponseSchema,
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request) => options.financialService.getTransactionCorrectionHistory(
+    requireUserId(request),
+    request.params.id,
+  ));
+
+  app.post('/api/v1/transactions/:id/correction-preview', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-corrections'],
+      params: transactionPathSchema,
+      body: correctionPreviewBodySchema,
+      response: correctionResponses(200, correctionPreviewResponseSchema),
+    },
+  }, async (request) => options.financialService.previewTransactionCorrection(
+    requireUserId(request),
+    request.params.id,
+    correctionPreviewInput(request.body),
+  ));
+
+  app.post('/api/v1/transactions/:id/void-preview', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-corrections'],
+      params: transactionPathSchema,
+      body: voidPreviewBodySchema,
+      response: correctionResponses(200, correctionPreviewResponseSchema),
+    },
+  }, async (request) => options.financialService.previewTransactionVoid(
+    requireUserId(request),
+    request.params.id,
+    { reason: request.body.reason },
+  ));
+
+  app.post('/api/v1/transactions/:id/corrections', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-corrections'],
+      params: transactionPathSchema,
+      headers: idempotencyHeadersSchema,
+      body: correctionCommitBodySchema,
+      response: correctionResponses(201, correctionCommitResponseSchema),
+    },
+  }, async (request, reply) => {
+    const result = await options.financialService.correctTransaction(
+      requireUserId(request),
+      request.params.id,
+      correctionCommitInput(request.body),
+      request.headers['idempotency-key'],
+      request.id,
+    );
+    return reply.code(201).send(result);
+  });
+
+  app.post('/api/v1/transactions/:id/void', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-corrections'],
+      params: transactionPathSchema,
+      headers: idempotencyHeadersSchema,
+      body: voidCommitBodySchema,
+      response: correctionResponses(200, correctionCommitResponseSchema),
+    },
+  }, async (request) => options.financialService.voidTransaction(
+    requireUserId(request),
+    request.params.id,
+    { reason: request.body.reason, context: request.body.context },
+    request.headers['idempotency-key'],
+    request.id,
+  ));
+
+  app.get('/api/v1/reports/monthly-actuals', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-reporting'],
+      querystring: monthlyActualsQuerySchema,
+      response: {
+        200: monthlyActualsResponseSchema,
+        400: errorResponseSchema,
+        401: errorResponseSchema,
+        404: errorResponseSchema,
+      },
+    },
+  }, async (request) => options.financialService.getMonthlyActuals(
+    requireUserId(request),
+    request.query.month,
+  ));
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof FinancialError) {
       if (error.retryAfterSeconds !== undefined) {
@@ -260,6 +404,59 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   await app.ready();
   return app;
+}
+
+function correctionPreviewInput(body: {
+  reason: string;
+  replacement: {
+    amountMinor: string;
+    occurredOn: string;
+    categoryCode: string;
+    expenseClass?: 'essential_fixed' | 'essential_variable' | 'daily' | undefined;
+    isUnexpected: boolean;
+    note?: string | null | undefined;
+  };
+}): PreviewCorrectionInput {
+  return {
+    reason: body.reason,
+    replacement: {
+      amountMinor: body.replacement.amountMinor,
+      occurredOn: body.replacement.occurredOn,
+      categoryCode: body.replacement.categoryCode,
+      isUnexpected: body.replacement.isUnexpected,
+      ...(body.replacement.expenseClass === undefined
+        ? {}
+        : { expenseClass: body.replacement.expenseClass }),
+      ...(body.replacement.note === undefined ? {} : { note: body.replacement.note }),
+    },
+  };
+}
+
+function correctionCommitInput(body: {
+  reason: string;
+  replacement: {
+    amountMinor: string;
+    occurredOn: string;
+    categoryCode: string;
+    expenseClass?: 'essential_fixed' | 'essential_variable' | 'daily' | undefined;
+    isUnexpected: boolean;
+    note?: string | null | undefined;
+  };
+  context: CommitCorrectionInput['context'];
+}): CommitCorrectionInput {
+  return { ...correctionPreviewInput(body), context: body.context };
+}
+
+function correctionResponses(successStatus: 200 | 201, successSchema: unknown) {
+  return {
+    [successStatus]: successSchema,
+    400: errorResponseSchema,
+    401: errorResponseSchema,
+    404: errorResponseSchema,
+    409: errorResponseSchema,
+    422: errorResponseSchema,
+    503: errorResponseSchema,
+  };
 }
 
 function requireUserId(request: FastifyRequest): string {

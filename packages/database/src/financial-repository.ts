@@ -16,6 +16,16 @@ import {
 } from '@kfin/domain';
 import { digestCanonicalRequest } from './canonical.js';
 import { AccountFinancialSerializer } from './serialization.js';
+import {
+  PostgresTransactionCorrectionService,
+  type CommitCorrectionInput,
+  type CommitVoidInput,
+  type CorrectionCommitResult,
+  type CorrectionPreviewView,
+  type MonthlyActualsView,
+  type PreviewCorrectionInput,
+  type PreviewVoidInput,
+} from './transaction-corrections.js';
 
 export interface CurrentBalanceView {
   readonly accountId: string;
@@ -71,6 +81,11 @@ export interface TransactionView {
   readonly isUnexpected: boolean;
   readonly note: string | null;
   readonly status: 'posted' | 'voided';
+  readonly voidedAt: string | null;
+  readonly voidReason: string | null;
+  readonly supersedesTransactionId: string | null;
+  readonly supersededByTransactionId: string | null;
+  readonly corrected: boolean;
   readonly balanceSnapshotId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -85,6 +100,10 @@ export interface CreateTransactionResult {
 export interface TransactionPage {
   readonly items: TransactionView[];
   readonly nextCursor: string | null;
+}
+
+export interface TransactionCorrectionHistory {
+  readonly items: TransactionView[];
 }
 
 interface BalanceRow extends QueryResultRow {
@@ -117,6 +136,10 @@ interface TransactionRow extends QueryResultRow {
   is_unexpected: boolean;
   note: string | null;
   status: 'posted' | 'voided';
+  voided_at: Date | null;
+  void_reason: string | null;
+  supersedes_transaction_id: string | null;
+  superseded_by_transaction_id: string | null;
   balance_snapshot_id: string;
   created_at: Date;
   updated_at: Date;
@@ -125,6 +148,7 @@ interface TransactionRow extends QueryResultRow {
 
 export class PostgresFinancialRepository {
   private readonly serializer: AccountFinancialSerializer;
+  private readonly corrections: PostgresTransactionCorrectionService;
 
   constructor(
     private readonly pool: Pool,
@@ -132,6 +156,11 @@ export class PostgresFinancialRepository {
     private readonly now: () => Date = () => new Date(),
   ) {
     this.serializer = new AccountFinancialSerializer(pool, () => this.now().getTime());
+    this.corrections = new PostgresTransactionCorrectionService(
+      pool,
+      idempotencyRetentionMs,
+      now,
+    );
   }
 
   async getCurrentBalance(ownerUserId: string): Promise<CurrentBalanceView> {
@@ -359,6 +388,39 @@ export class PostgresFinancialRepository {
     return mapTransaction(row);
   }
 
+  async getTransactionCorrectionHistory(
+    ownerUserId: string,
+    transactionId: string,
+  ): Promise<TransactionCorrectionHistory> {
+    const result = await this.pool.query<TransactionRow>(`
+      WITH RECURSIVE ancestors AS (
+        SELECT id, supersedes_transaction_id
+        FROM transactions
+        WHERE user_id = $1 AND id = $2
+        UNION ALL
+        SELECT parent.id, parent.supersedes_transaction_id
+        FROM transactions AS parent
+        JOIN ancestors AS child ON child.supersedes_transaction_id = parent.id
+        WHERE parent.user_id = $1
+      ), root AS (
+        SELECT id FROM ancestors WHERE supersedes_transaction_id IS NULL LIMIT 1
+      ), chain AS (
+        SELECT id FROM root
+        UNION ALL
+        SELECT child.id
+        FROM transactions AS child
+        JOIN chain AS prior ON child.supersedes_transaction_id = prior.id
+        WHERE child.user_id = $1
+      )
+      ${transactionSelect}
+      JOIN chain ON chain.id = txn.id
+      WHERE txn.user_id = $1
+      ORDER BY txn.created_at ASC, txn.id ASC
+    `, [ownerUserId, transactionId]);
+    if (result.rows.length === 0) throw unavailableError();
+    return { items: result.rows.map(mapTransaction) };
+  }
+
   async listTransactions(
     ownerUserId: string,
     options: { readonly limit: number; readonly cursor?: string },
@@ -391,6 +453,58 @@ export class PostgresFinancialRepository {
     };
   }
 
+  async previewTransactionCorrection(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: PreviewCorrectionInput,
+  ): Promise<CorrectionPreviewView> {
+    return this.corrections.previewCorrection(ownerUserId, sourceTransactionId, input);
+  }
+
+  async previewTransactionVoid(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: PreviewVoidInput,
+  ): Promise<CorrectionPreviewView> {
+    return this.corrections.previewVoid(ownerUserId, sourceTransactionId, input);
+  }
+
+  async correctTransaction(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: CommitCorrectionInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<CorrectionCommitResult> {
+    return this.corrections.correct(
+      ownerUserId,
+      sourceTransactionId,
+      input,
+      idempotencyKey,
+      correlationId,
+    );
+  }
+
+  async voidTransaction(
+    ownerUserId: string,
+    sourceTransactionId: string,
+    input: CommitVoidInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<CorrectionCommitResult> {
+    return this.corrections.void(
+      ownerUserId,
+      sourceTransactionId,
+      input,
+      idempotencyKey,
+      correlationId,
+    );
+  }
+
+  async getMonthlyActuals(ownerUserId: string, month: string): Promise<MonthlyActualsView> {
+    return this.corrections.getMonthlyActuals(ownerUserId, month);
+  }
+
   private async resolveOwnedAccountId(ownerUserId: string): Promise<string> {
     const result = await this.pool.query<{ id: string }>(
       'SELECT id FROM financial_accounts WHERE user_id = $1',
@@ -407,10 +521,17 @@ const transactionSelect = `
          txn.occurred_on::text AS occurred_on, txn.balance_effect,
          txn.already_included_in_snapshot, category.code AS category_code,
          txn.expense_class, txn.is_unexpected, txn.note,
-         txn.status, txn.balance_snapshot_id,
+         txn.status, txn.voided_at, txn.void_reason,
+         txn.supersedes_transaction_id,
+         successor.id AS superseded_by_transaction_id,
+         txn.balance_snapshot_id,
          txn.created_at, txn.updated_at, txn.version
   FROM transactions AS txn
   JOIN categories AS category ON category.id = txn.category_id
+  LEFT JOIN transactions AS successor
+    ON successor.user_id = txn.user_id
+   AND successor.account_id = txn.account_id
+   AND successor.supersedes_transaction_id = txn.id
 `;
 
 function mapTransaction(row: TransactionRow | undefined): TransactionView {
@@ -428,6 +549,11 @@ function mapTransaction(row: TransactionRow | undefined): TransactionView {
     isUnexpected: row.is_unexpected,
     note: row.note,
     status: row.status,
+    voidedAt: row.voided_at === null ? null : asDate(row.voided_at).toISOString(),
+    voidReason: row.void_reason,
+    supersedesTransactionId: row.supersedes_transaction_id,
+    supersededByTransactionId: row.superseded_by_transaction_id,
+    corrected: row.supersedes_transaction_id !== null || row.superseded_by_transaction_id !== null,
     balanceSnapshotId: row.balance_snapshot_id,
     createdAt: asDate(row.created_at).toISOString(),
     updatedAt: asDate(row.updated_at).toISOString(),

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createSnapshotBodySchema, createTransactionBodySchema } from '../src/index.js';
+import {
+  correctionCommitBodySchema,
+  correctionPreviewBodySchema,
+  createSnapshotBodySchema,
+  createTransactionBodySchema,
+  voidCommitBodySchema,
+} from '../src/index.js';
 
 const financialState = {
   expectedFinancialStateVersion: '1',
@@ -33,6 +39,58 @@ describe('financial request contracts', () => {
       amountMinor: 1000,
       effectiveAt: '2026-10-08T08:00:00.000Z',
       ...financialState,
+    }).success).toBe(false);
+  });
+
+  it('requires a bounded reason and a complete replacement for correction preview', () => {
+    expect(correctionPreviewBodySchema.safeParse({
+      reason: 'Fix entered amount',
+      replacement: {
+        amountMinor: '900',
+        occurredOn: '2026-10-08',
+        categoryCode: 'food',
+        expenseClass: 'daily',
+        isUnexpected: false,
+      },
+    }).success).toBe(true);
+    expect(correctionPreviewBodySchema.safeParse({
+      replacement: {
+        amountMinor: '900',
+        occurredOn: '2026-10-08',
+        categoryCode: 'food',
+        expenseClass: 'daily',
+        isUnexpected: false,
+      },
+    }).success).toBe(false);
+  });
+
+  it('accepts only reviewed authority context and rejects owner/account mass assignment', () => {
+    const context = {
+      ...financialState,
+      reviewedSourceVersion: '1',
+      reviewedSourceSnapshotId: financialState.reviewedLatestSnapshotId,
+      reviewedSourceBalanceEffect: 'current',
+      reviewedSourceAlreadyIncludedInSnapshot: false,
+      reviewedSourceKind: 'expense',
+      reviewedSourceCurrency: 'VND',
+      reviewedPreviewDigest: 'a'.repeat(64),
+    };
+    const replacement = {
+      amountMinor: '900',
+      occurredOn: '2026-10-08',
+      categoryCode: 'food',
+      expenseClass: 'daily',
+      isUnexpected: false,
+    };
+    expect(correctionCommitBodySchema.safeParse({
+      reason: 'Fix entered amount',
+      replacement,
+      context,
+    }).success).toBe(true);
+    expect(voidCommitBodySchema.safeParse({
+      reason: 'Duplicate entry',
+      context,
+      accountId: '00000000-0000-4000-8000-000000000099',
     }).success).toBe(false);
   });
 });

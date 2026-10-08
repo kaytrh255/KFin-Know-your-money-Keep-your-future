@@ -1,7 +1,11 @@
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { validationError } from '@kfin/domain';
-import { AccountFinancialSerializer, type SerializedOperation } from '../src/serialization.js';
+import { FinancialError, validationError } from '@kfin/domain';
+import {
+  AccountFinancialSerializer,
+  StableIdempotentFinancialError,
+  type SerializedOperation,
+} from '../src/serialization.js';
 
 const OWNER_ID = '00000000-0000-4000-8000-000000000001';
 const ACCOUNT_ID = '00000000-0000-4000-8000-000000000002';
@@ -216,6 +220,29 @@ describe('account financial serialization', () => {
     expect(pool.connectedCount()).toBe(1);
     expect(events).toContain('invalid:query:ROLLBACK');
     expect(events.some((event) => event.includes('INSERT INTO idempotency_results'))).toBe(false);
+  });
+
+  it('commits a work-discovered stable correction-stale receipt without version or audit mutation', async () => {
+    const events: string[] = [];
+    const client = fakeClient('correction-stale', events);
+    const pool = fakePool([client]);
+    const serializer = new AccountFinancialSerializer(pool as unknown as Pick<Pool, 'connect'>, () => 0);
+
+    await expect(serializer.execute(operation({
+      staleCode: 'FIN_CORRECTION_STALE_STATE',
+      work: async () => {
+        throw new StableIdempotentFinancialError(new FinancialError({
+          code: 'FIN_CORRECTION_STALE_STATE',
+          statusCode: 409,
+          safeMessage: 'The reviewed correction state is stale.',
+        }));
+      },
+    }))).rejects.toMatchObject({ code: 'FIN_CORRECTION_STALE_STATE' });
+    expect(events.some((event) => event.includes('INSERT INTO idempotency_results'))).toBe(true);
+    expect(events.some((event) => event.includes('UPDATE financial_accounts'))).toBe(false);
+    expect(events.some((event) => event.includes('INSERT INTO audit_events'))).toBe(false);
+    expect(events).toContain('correction-stale:query:COMMIT');
+    expect(events.at(-1)).toBe('correction-stale:release:clean');
   });
 
   it('does not retry statement timeout and returns only after rollback', async () => {

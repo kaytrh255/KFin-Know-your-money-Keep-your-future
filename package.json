@@ -14,7 +14,7 @@
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false",
     "test": "vitest run",
     "test:unit": "vitest run --exclude '**/*.integration.test.ts'",
-    "test:integration": "vitest run packages/database/test/financial-foundation.integration.test.ts",
+    "test:integration": "vitest run packages/database/test/*.integration.test.ts",
     "check": "corepack pnpm run evidence:check && corepack pnpm run evidence:test && corepack pnpm run typecheck && corepack pnpm run test",
     "api:dev": "corepack pnpm --filter @kfin/api dev",
     "api:start": "corepack pnpm --filter @kfin/api start",

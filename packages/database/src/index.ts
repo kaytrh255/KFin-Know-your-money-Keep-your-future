@@ -5,3 +5,4 @@ export * from './migrations.js';
 export * from './pool.js';
 export * from './schema.js';
 export * from './serialization.js';
+export * from './transaction-corrections.js';

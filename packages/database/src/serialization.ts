@@ -59,6 +59,11 @@ export interface SerializedWorkResult<Value extends Record<string, unknown>> {
   };
 }
 
+export type SerializedStaleCode =
+  | 'FINANCIAL_STATE_STALE'
+  | 'FIN_SNAPSHOT_STALE_STATE'
+  | 'FIN_CORRECTION_STALE_STATE';
+
 export interface SerializedOperation<Value extends Record<string, unknown>> {
   readonly ownerUserId: string;
   readonly accountId: string;
@@ -67,7 +72,7 @@ export interface SerializedOperation<Value extends Record<string, unknown>> {
   readonly requestDigest: string;
   readonly expectedFinancialStateVersion: bigint;
   readonly reviewedLatestSnapshotId: string;
-  readonly staleCode: 'FINANCIAL_STATE_STALE' | 'FIN_SNAPSHOT_STALE_STATE';
+  readonly staleCode: SerializedStaleCode;
   readonly successStatus: number;
   readonly correlationId: string;
   readonly idempotencyRetentionMs: number;
@@ -79,6 +84,16 @@ export interface SerializedOperationResult<Value extends Record<string, unknown>
   readonly financialStateVersion: bigint;
   readonly replayed: boolean;
   readonly attempts: number;
+}
+
+export class StableIdempotentFinancialError extends Error {
+  constructor(
+    readonly financialError: FinancialError,
+    readonly result: Readonly<Record<string, unknown>> = {},
+  ) {
+    super(financialError.safeMessage, { cause: financialError });
+    this.name = 'StableIdempotentFinancialError';
+  }
 }
 
 interface AccountRow extends QueryResultRow {
@@ -159,6 +174,7 @@ export class AccountFinancialSerializer {
       if (error instanceof FinancialError && (
         error.code === 'FINANCIAL_STATE_STALE'
         || error.code === 'FIN_SNAPSHOT_STALE_STATE'
+        || error.code === 'FIN_CORRECTION_STALE_STATE'
         || error.code === 'IDEMPOTENCY_KEY_REUSED'
       )) throw error;
       throw new FinancialError({
@@ -292,12 +308,36 @@ export class AccountFinancialSerializer {
       }
 
       const committedVersion = account.financialStateVersion + 1n;
-      const work = await operation.work({
-        transaction,
-        account,
-        latestSnapshot,
-        committedFinancialStateVersion: committedVersion,
-      });
+      let work: SerializedWorkResult<Value>;
+      try {
+        work = await operation.work({
+          transaction,
+          account,
+          latestSnapshot,
+          committedFinancialStateVersion: committedVersion,
+        });
+      } catch (error) {
+        if (!(error instanceof StableIdempotentFinancialError)) throw error;
+        await insertIdempotencyResult(transaction, {
+          id: randomUUID(),
+          userId: operation.ownerUserId,
+          accountId: operation.accountId,
+          operation: operation.operation,
+          keyDigest,
+          requestDigest: operation.requestDigest,
+          priorVersion: account.financialStateVersion,
+          committedVersion: null,
+          responseStatus: error.financialError.statusCode,
+          resultCode: error.financialError.code,
+          result: { ...error.result },
+          correlationId: operation.correlationId,
+          retentionMs: operation.idempotencyRetentionMs,
+        });
+        commitSent = true;
+        await commitBefore(client, deadline, this.now);
+        committed = true;
+        throw error.financialError;
+      }
       assertBeforeDeadline(deadline, this.now);
 
       const versionUpdate = await transaction.query(`
@@ -541,7 +581,7 @@ function sqlstateOf(error: unknown): string | null {
   return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : null;
 }
 
-function staleError(code: 'FINANCIAL_STATE_STALE' | 'FIN_SNAPSHOT_STALE_STATE'): FinancialError {
+function staleError(code: SerializedStaleCode): FinancialError {
   return new FinancialError({
     code,
     statusCode: 409,
@@ -550,7 +590,11 @@ function staleError(code: 'FINANCIAL_STATE_STALE' | 'FIN_SNAPSHOT_STALE_STATE'):
 }
 
 function storedFinancialError(row: StoredResultRow): FinancialError {
-  if (row.result_code === 'FINANCIAL_STATE_STALE' || row.result_code === 'FIN_SNAPSHOT_STALE_STATE') {
+  if (
+    row.result_code === 'FINANCIAL_STATE_STALE'
+    || row.result_code === 'FIN_SNAPSHOT_STALE_STATE'
+    || row.result_code === 'FIN_CORRECTION_STALE_STATE'
+  ) {
     return staleError(row.result_code);
   }
   return new FinancialError({
