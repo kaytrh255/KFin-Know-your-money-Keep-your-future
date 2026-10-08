@@ -248,7 +248,8 @@ export class AccountFinancialSerializer {
       }
 
       const snapshotResult = await transaction.query<SnapshotRow>(`
-        SELECT id, amount_minor, effective_at, effective_local_date, timezone
+        SELECT id, amount_minor, effective_at,
+               effective_local_date::text AS effective_local_date, timezone
         FROM balance_snapshots
         WHERE user_id = $1 AND account_id = $2
         ORDER BY effective_at DESC

@@ -137,7 +137,8 @@ export class PostgresFinancialRepository {
   async getCurrentBalance(ownerUserId: string): Promise<CurrentBalanceView> {
     const result = await this.pool.query<BalanceRow>(`
       SELECT account_id, currency, financial_state_version, snapshot_id,
-             snapshot_amount_minor, snapshot_effective_at, snapshot_effective_local_date,
+             snapshot_amount_minor, snapshot_effective_at,
+             snapshot_effective_local_date::text AS snapshot_effective_local_date,
              posted_current_income_minor, posted_current_expense_minor, current_balance_minor
       FROM financial_current_balances
       WHERE user_id = $1
@@ -403,7 +404,7 @@ export class PostgresFinancialRepository {
 
 const transactionSelect = `
   SELECT txn.id, txn.kind, txn.amount_minor, txn.currency,
-         txn.occurred_on, txn.balance_effect,
+         txn.occurred_on::text AS occurred_on, txn.balance_effect,
          txn.already_included_in_snapshot, category.code AS category_code,
          txn.expense_class, txn.is_unexpected, txn.note,
          txn.status, txn.balance_snapshot_id,
