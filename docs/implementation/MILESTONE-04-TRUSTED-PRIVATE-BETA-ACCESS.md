@@ -88,6 +88,10 @@ All values below are **unapproved candidates** centralised in `authPolicy` (`pac
 - Reminder generation/delivery, safe-to-spend, and every financial feature remain outside this milestone.
 - RLS/runtime-role decisions (`SPEC-SEC-01`) are unchanged: application-side owner scope remains mandatory.
 
+## Verification record
+
+The executed commands, per-case PostgreSQL results, and the CI run are recorded in [Milestone 04 — verification record](../evidence/2026-10-08-MILESTONE-04-VERIFICATION.md). The credential-free suites and the guarded real-PostgreSQL suite both pass; no approval, benchmark, browser, or provider evidence is claimed by that record.
+
 ## Evidence boundary and retained OPEN items
 
 Credential-free suites verify contracts, pure domain rules, cookie/CSRF/origin behavior, route registration, owner scope, generic failures, and migration text. The guarded integration suite creates an isolated schema, applies the real migrations, and exercises the repository against PostgreSQL; absence of a database produces a reported skip rather than a fabricated PASS.
