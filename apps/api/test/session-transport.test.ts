@@ -10,7 +10,7 @@ import {
   sessionCookieName,
 } from '../src/session-transport.js';
 
-const SECURE = { secure: true, prefixHost: true, allowedOrigins: [] as readonly string[] };
+const SECURE = { secure: true, prefixHost: true };
 
 describe('session cookie transport', () => {
   it('uses the host prefix only for secure deployments', () => {
@@ -55,45 +55,56 @@ describe('session cookie transport', () => {
 
 describe('browser origin and fetch-metadata enforcement', () => {
   it('never challenges safe methods', () => {
-    expect(isBrowserSafeRequest({ method: 'GET', headers: {} }, [])).toBe(true);
-    expect(isBrowserSafeRequest({ method: 'HEAD', headers: {} }, [])).toBe(true);
+    expect(isBrowserSafeRequest({ method: 'GET', headers: {} })).toBe(true);
+    expect(isBrowserSafeRequest({ method: 'HEAD', headers: {} })).toBe(true);
   });
 
-  it('accepts a same-origin request and an allowlisted origin', () => {
+  it('accepts a same-origin request', () => {
     expect(isBrowserSafeRequest({
       method: 'POST',
       headers: { origin: 'https://api.kfin.test', host: 'api.kfin.test' },
-    }, [])).toBe(true);
-    expect(isBrowserSafeRequest({
-      method: 'POST',
-      headers: { origin: 'https://beta.kfin.example', host: 'api.kfin.test' },
-    }, ['https://beta.kfin.example'])).toBe(true);
+    })).toBe(true);
   });
 
   it('rejects a foreign origin even when a host matches', () => {
     expect(isBrowserSafeRequest({
       method: 'POST',
       headers: { origin: 'https://evil.example', host: 'api.kfin.test' },
-    }, ['https://beta.kfin.example'])).toBe(false);
+    })).toBe(false);
+  });
+
+  it('rejects an origin that configuration used to allowlist, because no credentialed CORS exists', () => {
+    // Regression: the removed `AUTH_ALLOWED_ORIGINS` support widened the CSRF
+    // check for origins a browser cannot complete a credentialed request
+    // against. There is no longer any input that makes a cross-origin
+    // state-changing request safe.
+    expect(isBrowserSafeRequest({
+      method: 'POST',
+      headers: { origin: 'https://beta.kfin.example', host: 'api.kfin.test' },
+    })).toBe(false);
+    expect(isBrowserSafeRequest({
+      method: 'DELETE',
+      headers: { origin: 'https://beta.kfin.example', host: 'api.kfin.test' },
+    })).toBe(false);
   });
 
   it('accepts fetch metadata only for same-site or user-initiated navigation', () => {
     expect(isBrowserSafeRequest({
       method: 'POST',
       headers: { 'sec-fetch-site': 'same-origin' },
-    }, [])).toBe(true);
+    })).toBe(true);
     expect(isBrowserSafeRequest({
       method: 'POST',
       headers: { 'sec-fetch-site': 'none' },
-    }, [])).toBe(true);
+    })).toBe(true);
     expect(isBrowserSafeRequest({
       method: 'POST',
       headers: { 'sec-fetch-site': 'cross-site' },
-    }, [])).toBe(false);
+    })).toBe(false);
   });
 
   it('rejects a state-changing request with neither origin nor fetch metadata', () => {
-    expect(isBrowserSafeRequest({ method: 'POST', headers: {} }, [])).toBe(false);
-    expect(isBrowserSafeRequest({ method: 'DELETE', headers: {} }, [])).toBe(false);
+    expect(isBrowserSafeRequest({ method: 'POST', headers: {} })).toBe(false);
+    expect(isBrowserSafeRequest({ method: 'DELETE', headers: {} })).toBe(false);
   });
 });

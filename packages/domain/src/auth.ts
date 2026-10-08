@@ -255,6 +255,23 @@ export function abuseWindowStart(now: number, windowMs: number): number {
   return Math.floor(now / windowMs) * windowMs;
 }
 
+/**
+ * Renewing a session may never extend it past its absolute expiry.
+ *
+ * Sliding renewal writes `now + idleLifetime`, which would otherwise resurrect a
+ * session beyond the absolute bound it was issued with (SEC-SES-04/05). The
+ * clamp is shared by last-seen renewal and token rotation so both paths agree.
+ */
+export function clampIdleExpiry(
+  now: number,
+  idleLifetimeMs: number,
+  absoluteExpiresAt: number | Date,
+): number {
+  const absolute = absoluteExpiresAt instanceof Date ? absoluteExpiresAt.getTime() : absoluteExpiresAt;
+  const renewed = now + idleLifetimeMs;
+  return renewed < absolute ? renewed : absolute;
+}
+
 export function isWithinCooldown(lastIssuedAt: number | null, now: number, cooldownMs: number): boolean {
   if (lastIssuedAt === null) return false;
   return now - lastIssuedAt < cooldownMs;

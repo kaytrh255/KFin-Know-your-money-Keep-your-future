@@ -107,7 +107,6 @@ async function build(options: {
   service?: AuthApiService;
   email?: RecordingEmailAdapter;
   principal?: { userId: string; sessionId?: string; csrfDigest?: string } | null;
-  allowedOrigins?: string[];
   secure?: boolean;
 } = {}): Promise<{ app: FastifyInstance; service: AuthApiService; email: RecordingEmailAdapter }> {
   const service = options.service ?? authService();
@@ -122,7 +121,6 @@ async function build(options: {
     authTransport: {
       secure: options.secure ?? true,
       prefixHost: true,
-      allowedOrigins: options.allowedOrigins ?? [],
     },
     authenticate: async () => principal,
   } satisfies BuildAppOptions);
@@ -265,7 +263,7 @@ describe('trusted beta access routes', () => {
     expect(response.headers['cache-control']).toBe('no-store');
   });
 
-  it('rejects a cross-origin state-changing request and accepts an allowlisted origin', async () => {
+  it('rejects a cross-origin state-changing request and never accepts an allowlisted origin', async () => {
     const { app } = await build();
     const crossOrigin = await app.inject({
       method: 'POST',
@@ -292,14 +290,23 @@ describe('trusted beta access routes', () => {
     });
     expect(fetchMetadata.statusCode).toBe(200);
 
-    const allowed = await build({ allowedOrigins: ['https://beta.kfin.example'] });
-    const allowlisted = await allowed.app.inject({
+    // Regression: a cross-origin browser client is never accepted, with or
+    // without configuration, because no credentialed CORS layer exists.
+    const configuredOrigin = await app.inject({
       method: 'POST',
       url: '/api/v1/auth/login',
       headers: { origin: 'https://beta.kfin.example', host: 'api.kfin.test' },
       payload: { email: 'beta.user@example.invalid', password: 'value' },
     });
-    expect(allowlisted.statusCode).toBe(200);
+    expect(configuredOrigin.statusCode).toBe(403);
+    expect(configuredOrigin.json().error.code).toBe('AUTH_CSRF_FAILED');
+
+    const crossOriginStateChange = await app.inject({
+      method: 'DELETE',
+      url: `/api/v1/auth/sessions/${SESSION_ID}`,
+      headers: { origin: 'https://beta.kfin.example', host: 'api.kfin.test', 'x-kfin-csrf': CSRF_TOKEN },
+    });
+    expect(crossOriginStateChange.statusCode).toBe(403);
   });
 
   it('requires a valid CSRF token bound to the session on authenticated mutations', async () => {

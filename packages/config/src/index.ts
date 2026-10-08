@@ -92,9 +92,17 @@ const environmentSchema = z.object({
   AUTH_SECRET: z.string().regex(/^[a-fA-F0-9]{64}$/, {
     message: 'must be exactly 32 bytes encoded as 64 hexadecimal characters',
   }),
-  // Same-origin is enforced from the request Host. Add exact origins only when a
-  // reviewed deployment requires them; a credentialed wildcard is never allowed.
-  AUTH_ALLOWED_ORIGINS: z.string().default(''),
+  // UNSUPPORTED: cross-origin credentialed browser access is not implemented.
+  // No CORS layer exists and no `Access-Control-Allow-Credentials` response is
+  // ever emitted, so an allowlisted origin would widen the CSRF origin check
+  // without a browser being able to complete the request. The variable is kept
+  // only to fail fast on a deployment that still sets it.
+  AUTH_ALLOWED_ORIGINS: z
+    .string()
+    .default('')
+    .refine((value) => value.trim().length === 0, {
+      message: 'is unsupported: no credentialed CORS layer exists, so the browser client must be served same-origin; remove every configured origin',
+    }),
   // Production deployments MUST keep this enabled. Local HTTP development may
   // disable it explicitly; the cookie then loses the `__Host-` prefix.
   AUTH_COOKIE_SECURE: z
@@ -104,6 +112,17 @@ const environmentSchema = z.object({
     .pipe(z.boolean()),
   // Provider selection remains Phase 6 (OQ-17). Only vendor-neutral adapters exist.
   EMAIL_DELIVERY_ADAPTER: z.enum(['memory', 'none']).default('none'),
+}).superRefine((value, ctx) => {
+  // A clear-cookie session flag in production would put the bearer token on the
+  // network in plaintext; refuse to boot instead of degrading silently
+  // (SEC-SES-01/02).
+  if (value.NODE_ENV === 'production' && value.AUTH_COOKIE_SECURE !== true) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['AUTH_COOKIE_SECURE'],
+      message: 'must be "true" when NODE_ENV=production: session cookies may not be sent over plaintext HTTP',
+    });
+  }
 });
 
 export interface ApiConfig {
@@ -118,7 +137,6 @@ export interface ApiConfig {
   readonly idempotencyRetentionMs: number;
   readonly financialPreviewSigningKey: string;
   readonly authSecret: string;
-  readonly authAllowedOrigins: readonly string[];
   readonly authCookieSecure: boolean;
   readonly emailDeliveryAdapter: 'memory' | 'none';
 }
@@ -144,12 +162,6 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): Api
     idempotencyRetentionMs: parsed.data.IDEMPOTENCY_RETENTION_HOURS * 60 * 60 * 1_000,
     financialPreviewSigningKey: parsed.data.FINANCIAL_PREVIEW_SIGNING_KEY,
     authSecret: parsed.data.AUTH_SECRET,
-    authAllowedOrigins: Object.freeze(
-      parsed.data.AUTH_ALLOWED_ORIGINS
-        .split(',')
-        .map((origin) => origin.trim())
-        .filter((origin) => origin.length > 0),
-    ),
     authCookieSecure: parsed.data.AUTH_COOKIE_SECURE,
     emailDeliveryAdapter: parsed.data.EMAIL_DELIVERY_ADAPTER,
   });

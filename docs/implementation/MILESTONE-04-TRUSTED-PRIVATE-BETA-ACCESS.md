@@ -55,9 +55,9 @@ Every access route uses strict request/response schemas, returns a stable error 
 |---|---|---|
 | PRD-AUTH-01; SEC-AUTH-14/15; DATABASE §4.2 | `PostgresAuthRepository.register` locks and consumes the invitation in the user-creation transaction; email binding is restrictive only | PostgreSQL single-use, parallel-consumption, wrong-email, and duplicate-email tests |
 | PRD-AUTH-02; SEC-AUTH-05/13 | `issueChallenge` in one transaction; OTP returned once for immediate ephemeral delivery | Contract, API-delivery, and PostgreSQL resend/supersession/attempt tests |
-| PRD-AUTH-03; SEC-AUTH-04; SEC-ABUSE-01/02/08/09 | Decoy verification, generic envelopes, fixed-window digest counters committed outside the operation transaction | PostgreSQL identical-failure and rate-limit tests; API generic-envelope and `Retry-After` tests |
-| PRD-AUTH-04/05; SEC-SES-01..06 | Opaque digest-only rotating tokens, idle/absolute expiry, replay containment | PostgreSQL rotation-grace, replay, idle-expiry, and logout tests; transport cookie tests |
-| SEC-SES-07; SEC-APP-10/12 | `isBrowserSafeRequest` plus session-bound CSRF digest | API cross-origin, missing-origin, wrong-token, and allowlisted-origin tests; transport unit tests |
+| PRD-AUTH-03; SEC-AUTH-04; SEC-ABUSE-01/02/08/09 | Decoy verification, generic envelopes, fixed-window digest counters recorded on their own connection *before* the operation transaction opens | PostgreSQL identical-failure, rate-limit, and single-connection-pool tests; fake-pool nested-checkout unit tests; API generic-envelope and `Retry-After` tests |
+| PRD-AUTH-04/05; SEC-SES-01..06 | Opaque digest-only rotating tokens, idle/absolute expiry clamped to the absolute expiry, replay containment | PostgreSQL rotation-grace, replay, idle-expiry, renewal/rotation clamp, and logout tests; transport cookie tests |
+| SEC-SES-07; SEC-APP-10/12 | `isBrowserSafeRequest` (same-origin only, no origin allowlist) plus session-bound CSRF digest | API cross-origin, previously-allowlisted-origin, missing-origin, and wrong-token tests; transport unit tests |
 | SEC-SES-09 | Request hook sets `Cache-Control: no-store` for `/api/v1/*` | API session-cookie test |
 | PRD-AUTH-06/07; SEC-AUTH-08/09 | `resetPassword` revokes all sessions; `changePassword` revokes others and rotates the current session | PostgreSQL reset and password-change tests |
 | PRD-AUTH-08; SEC-SES-10 | Allowlisted metadata, append-only events, candidate visibility classification | Migration contract assertions; PostgreSQL user/operator visibility test |
@@ -66,6 +66,19 @@ Every access route uses strict request/response schemas, returns a stable error 
 | SEC-AUTH-16 | Verification mints a brand-new session; no pre-auth identifier exists | PostgreSQL verify-then-authenticate test |
 | SEC-APP-01/07/09 | Strict contracts, bounded bodies, keyset pagination for both collections | Contract strictness tests and API pagination test |
 | SEC-APP-15 ownership rule | Owner derived from the session principal on every route | API owner-scope test and PostgreSQL cross-owner revocation test |
+
+## Code review fixes (2026-10-08)
+
+Four findings from the automated review of the Milestone 04 PR were fixed without changing the agreed scope. Each carries a focused regression test; each test was confirmed to fail when the fix is reverted.
+
+| # | Finding | Fix | Regression test |
+|---|---|---|---|
+| 1 (P1) | A renewed idle expiry could slide past the absolute expiry, on both last-seen renewal and token rotation | `clampIdleExpiry` in `@kfin/domain` clamps `now + idleLifetimeMs` to the absolute expiry; `authenticate` renewal and `rotateSessionRows` both use it | `packages/domain/test/auth.test.ts` (session lifetime clamping); `auth-access.integration.test.ts` "clamps a renewed idle expiry to the absolute expiry on use and on rotation" |
+| 2 (P1) | Abuse counters were written on a second connection acquired *while* an operation transaction already held one, deadlocking the auth pool once every connection was in that state | Counters are recorded before `pool.connect()`; the operation transaction then uses a single connection | `packages/database/test/auth-abuse-counters.test.ts` (fake pool that refuses a nested checkout); `auth-access.integration.test.ts` "records abuse counters without a nested pool checkout on a single-connection pool" |
+| 3 (P1) | `AUTH_COOKIE_SECURE=false` was accepted in production, putting the bearer token on the network in plaintext | `loadApiConfig` fails when `NODE_ENV=production` and the flag is not `true` | `packages/config/test/index.test.ts` production rejection, development allowance, production default |
+| 4 (P2) | `AUTH_ALLOWED_ORIGINS` relaxed the CSRF origin check without a credentialed CORS layer, so no browser could legally complete such a request | The configuration is now explicitly unsupported: any non-empty value is rejected at startup, `isBrowserSafeRequest` is same-origin only, and `authAllowedOrigins` was removed from the config and transport | `packages/config/test/index.test.ts` rejection of configured origins; `session-transport.test.ts` and `auth-routes.test.ts` cross-origin regression cases |
+
+Same-origin behaviour is preserved end to end: a request whose `Origin` equals `https://<Host>` or `http://<Host>`, or whose Fetch Metadata proves a same-site navigation, is still accepted. Implementing credentialed CORS remains out of scope: it needs a reviewed CORS layer, an explicit origin policy, and preflight handling, none of which Milestone 04 approved.
 
 ## Candidate values awaiting approval
 

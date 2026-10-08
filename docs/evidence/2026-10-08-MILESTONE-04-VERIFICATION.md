@@ -29,7 +29,7 @@ Observed results on the implementation head:
 - `tsc -b` and the separate tests project typecheck completed with no diagnostic;
 - credential-free suites: `12` contract, `13` domain, `10` transport, `15` API route, `6` migration-contract (total suite) and `7` configuration cases passed;
 - real-PostgreSQL integration suites: `15` new Trusted Private Beta access cases plus the `15` pre-existing foundation/correction/schedule cases passed — `30` total;
-- full `vitest run` with the database configured: **173 tests, 173 passed**.
+- full `vitest run` with the database configured: **175 tests, 175 passed**.
 
 A live end-to-end smoke test ran the wired server (`apps/api/src/server.ts`) against a migrated disposable database with secure cookies disabled for local HTTP. Observed status codes: `/health/live` and `/health/ready` `200`; `/api/v1/auth/me` and `/api/v1/financial-account` without a cookie `401`; with the session cookie `/api/v1/auth/me`, `/api/v1/auth/sessions`, and `/api/v1/auth/security-events` `200` (user-visible history only) and `/api/v1/financial-account` `404` from the financial service for an account that does not exist yet; `POST /api/v1/auth/logout` `403` without a CSRF token, `403` with a wrong token, `403` from a foreign origin, and `200` with the bound token and same origin, after which the same cookie returned `401`; `POST /api/v1/auth/register` with an unissued code `400`; `POST /api/v1/auth/login` for an unknown account `401`; `POST /api/v1/auth/password/reset-request` `200` with a generic accepted body. The smoke database and scratch files were dropped afterwards and are not part of the change set.
 
@@ -40,11 +40,12 @@ The evidence-harness commands initially failed `3` of `16` cases in this sandbox
 | Area | Cases | What it proves |
 |---|---|---|
 | Access contracts (`packages/contracts/test/auth.test.ts`) | `12` | Strict bodies/responses, invitation-code shape, six-digit OTP, high-entropy reset secret, no `sessionToken`/`password` field, generic registration shape, user-visible event shape, CSRF header openness |
-| Access domain (`packages/domain/test/auth.test.ts`) | `13` | Email normalization, password policy bounds and denylist, entropy minimums, code normalization, event visibility, fixed-window bucketing, bounded device summary, constant-time comparison |
-| Session transport (`apps/api/test/session-transport.test.ts`) | `10` | `__Host-` prefix only when secure, `HttpOnly`/`Secure`/`Path=/`/`SameSite` flags, CSRF cookie readable but `Secure; Strict`, cookie clearing, same-origin and Fetch-Metadata decisions |
-| Access routes (`apps/api/test/auth-routes.test.ts`) | `15` | Route registration, one-time OTP delivery and delivery-failure recording, host cookie + CSRF cookie on issue, cross-origin/missing-origin/wrong-token rejection, allowlisted origin, fail-closed principal, owner scope from the session, bounded pagination, cookie clearing on logout/reset, rotation on password change, identical generic envelopes for known/unknown failures, `Retry-After`, unknown-field and oversized-body rejection |
+| Access domain (`packages/domain/test/auth.test.ts`) | `13` (+`4` review-fix cases) | Email normalization, password policy bounds and denylist, entropy minimums, code normalization, event visibility, fixed-window bucketing, bounded device summary, constant-time comparison, and idle-expiry clamping to the absolute expiry (Date and epoch inputs, already-passed absolute expiry) |
+| Session transport (`apps/api/test/session-transport.test.ts`) | `10` (+`1` review-fix case) | `__Host-` prefix only when secure, `HttpOnly`/`Secure`/`Path=/`/`SameSite` flags, CSRF cookie readable but `Secure; Strict`, cookie clearing, same-origin and Fetch-Metadata decisions, and rejection of an origin that configuration can no longer allowlist |
+| Access routes (`apps/api/test/auth-routes.test.ts`) | `15` | Route registration, one-time OTP delivery and delivery-failure recording, host cookie + CSRF cookie on issue, cross-origin/missing-origin/wrong-token rejection, rejection of a previously allowlisted origin on both login and session revocation, fail-closed principal, owner scope from the session, bounded pagination, cookie clearing on logout/reset, rotation on password change, identical generic envelopes for known/unknown failures, `Retry-After`, unknown-field and oversized-body rejection |
 | Migration text (`packages/database/test/migration-contract.test.ts`) | `6` new | Digest-only columns, Argon2id-only hash, invitation terminality, one active challenge, monotonic attempts, revocation/rotation/grace, append-only history without secret metadata, bounded counters |
-| Configuration (`packages/config/test/index.test.ts`) | `7` | No default auth secret, exact allowlisted origins, pinned candidate access bounds, 128-bit minimum entropy |
+| Configuration (`packages/config/test/index.test.ts`) | `7` (+`4` review-fix cases) | No default auth secret, pinned candidate access bounds, 128-bit minimum entropy, refusal of `AUTH_COOKIE_SECURE=false` in production with development still allowed, and rejection of every non-empty `AUTH_ALLOWED_ORIGINS` value |
+| Abuse-counter connection discipline (`packages/database/test/auth-abuse-counters.test.ts`) | `3` | A fake pool that refuses a nested checkout proves counters are written before the operation transaction opens, that at most one connection is held at a time, and that an exhausted window blocks without opening a transaction |
 
 ## Real-PostgreSQL coverage
 
@@ -67,6 +68,21 @@ Executed against a disposable, explicitly designated non-production PostgreSQL i
 | Password policy and reuse | Short password rejected before any invitation consumption; reuse and wrong current password rejected |
 | Duplicate registration | Generic `accepted` outcome, invitation left `active`, exactly one user row for the normalized email |
 | Abuse-counter pruning | Active window retained; windows beyond the retention bound removed |
+| Renewal/rotation idle clamp (review fix) | Renewing 45 minutes into a 60-minute absolute window leaves `idle_expires_at` exactly equal to `absolute_expires_at` (a full 50-minute idle window would have reached 95 minutes); rotation reports and persists the same clamped value |
+| Abuse counters on a single-connection pool (review fix) | `requestPasswordReset` for an unknown address completes on a `max: 1` pool, returns the generic accepted envelope, and leaves a persisted `reset_target` counter |
+
+## Code review fixes (2026-10-08)
+
+Four findings raised by the automated review of the Milestone 04 pull request were fixed with focused regression tests. No SPEC, SDD, ADR, or governance document was touched, no Milestone 04 scope was added, and no PR #2 defect was remediated.
+
+| # | Finding | Observed verification |
+|---|---|---|
+| 1 (P1) | Renewed idle expiry could exceed the absolute expiry | `clampIdleExpiry` in `@kfin/domain`, used by last-seen renewal and token rotation. Reverting the clamp in `authenticate` makes the integration case fail (`expected … to be <absolute>`); reverting it in `rotateSessionRows` fails the same case on the rotation assertion. With the fix: `17/17` integration cases pass |
+| 2 (P1) | Nested pool checkout for abuse counters could deadlock the auth pool | Counters are now recorded before `pool.connect()`. Reverting one call site back inside `BEGIN` fails the fake-pool unit case (`nested-checkout-refused`) and fails the integration case with the real deadlock symptom `timeout exceeded when trying to connect` on a `max: 1` pool. With the fix: `3/3` unit cases and `17/17` integration cases pass |
+| 3 (P1) | Insecure `AUTH_COOKIE_SECURE` accepted in production | `loadApiConfig` adds a `superRefine` issue on `AUTH_COOKIE_SECURE` when `NODE_ENV=production`. Verified: production + `false` throws, production default is `true`, development + `false` still loads |
+| 4 (P2) | `AUTH_ALLOWED_ORIGINS` relaxed CSRF without credentialed CORS | The configuration is explicitly unsupported: any non-empty value (including `*`) is rejected at load, `authAllowedOrigins` and the transport option were removed, and `isBrowserSafeRequest` is same-origin only. Verified: config rejection tests, transport rejection of a previously allowlisted origin, and API `403 AUTH_CSRF_FAILED` for a cross-origin login and a cross-origin session revocation, while same-origin and Fetch-Metadata paths still return `200` |
+
+Local verification of the fix head: frozen install, evidence harness `16/16`, `tsc -b` plus the tests project clean, and `189/189` tests passing (`175` before this round, `14` new) with the real-PostgreSQL suites enabled.
 
 ## GitHub Actions execution history
 

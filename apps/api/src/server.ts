@@ -21,10 +21,11 @@ const scheduleService = new PostgresScheduleRepository(
   config.idempotencyRetentionMs,
 );
 
+// Same-origin only: no credentialed CORS layer exists, so the browser client
+// must be served from the API host (see `isBrowserSafeRequest`).
 const transport = {
   secure: config.authCookieSecure,
   prefixHost: authPolicy.session.cookiePrefixHost,
-  allowedOrigins: config.authAllowedOrigins,
 };
 
 const authService = new PostgresAuthRepository(runtime.pool, {

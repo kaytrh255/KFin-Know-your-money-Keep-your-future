@@ -757,6 +757,84 @@ integration('trusted private beta access on real PostgreSQL', () => {
     expect(users.rows[0]?.count).toBe('1');
   });
 
+  it('clamps a renewed idle expiry to the absolute expiry on use and on rotation', async () => {
+    const network = 30;
+    const absoluteLifetimeMs = 60 * 60 * 1_000;
+    const idleLifetimeMs = 50 * 60 * 1_000;
+    const repo = repository({ session: { absoluteLifetimeMs, idleLifetimeMs, lastSeenThrottleMs: 0 } });
+    const invitation = await invite();
+    const email = `beta-${randomUUID()}@example.invalid`;
+    const registered = await register(repo, invitation.code, email, network);
+    const verified = await repo.verifyEmail({
+      email,
+      oneTimeCode: registered.delivery.oneTimeCode,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+      userAgent: AGENT,
+    });
+    const sessionId = verified.session.session.id;
+    const absolute = new Date(verified.session.session.absoluteExpiresAt).getTime();
+    expect(new Date(verified.session.session.idleExpiresAt).getTime()).toBeLessThan(absolute);
+
+    // Renew 45 minutes in, while the session is still live but only 15 minutes
+    // from its absolute expiry: a full idle window would reach 95 minutes, so
+    // the sliding window must be clamped to the absolute bound.
+    clock += 45 * 60_000;
+    const principal = await repo.authenticate(verified.session.sessionToken);
+    expect(principal?.userId).toBe(registered.userId);
+    const renewed = await database.query<{ idle_expires_at: Date; absolute_expires_at: Date }>(
+      `SELECT idle_expires_at, absolute_expires_at FROM sessions WHERE id = $1`,
+      [sessionId],
+    );
+    expect(renewed.rows[0]?.idle_expires_at.getTime()).toBe(absolute);
+    expect(renewed.rows[0]?.absolute_expires_at.getTime()).toBe(absolute);
+
+    // Rotation renews too, so it takes the same clamp.
+    const changed = await repo.changePassword({
+      userId: registered.userId,
+      sessionId,
+      currentPassword: 'correct horse battery staple',
+      newPassword: 'a-fresh-passphrase-value',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+      userAgent: AGENT,
+    });
+    expect(new Date(changed.session.session.idleExpiresAt).getTime()).toBe(absolute);
+    const rotated = await database.query<{ idle_expires_at: Date }>(
+      `SELECT idle_expires_at FROM sessions WHERE id = $1`,
+      [sessionId],
+    );
+    expect(rotated.rows[0]?.idle_expires_at.getTime()).toBe(absolute);
+    clock -= 45 * 60_000;
+  });
+
+  it('records abuse counters without a nested pool checkout on a single-connection pool', async () => {
+    const network = 31;
+    const single = new Pool({
+      ...(process.env.TEST_DATABASE_URL === undefined ? {} : { connectionString: process.env.TEST_DATABASE_URL }),
+      max: 1,
+      connectionTimeoutMillis: 2_000,
+      options: `-c search_path=${schema},public`,
+    });
+    try {
+      const repo = new PostgresAuthRepository(single, { secret: SECRET, policy: policy(), now });
+      const result = await repo.requestPasswordReset({
+        email: `unknown-${randomUUID()}@example.invalid`,
+        correlationId: randomUUID(),
+        ipAddress: source(network),
+        userAgent: AGENT,
+      });
+      expect(result).toMatchObject({ accepted: true, issued: false });
+
+      const counters = await single.query<{ total: number }>(
+        `SELECT count(*)::int AS total FROM auth_attempt_counters WHERE scope_kind = 'reset_target'`,
+      );
+      expect(counters.rows[0]?.total).toBeGreaterThan(0);
+    } finally {
+      await single.end();
+    }
+  });
+
   it('prunes expired abuse windows without removing the active one', async () => {
     const network = 29;
     const repo = repository();

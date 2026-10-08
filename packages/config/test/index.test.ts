@@ -18,7 +18,6 @@ describe('configuration', () => {
     expect(config.database.poolMaximum).toBe(5);
     expect(config.authSecret).toBe(AUTH_SECRET);
     expect(config.authCookieSecure).toBe(true);
-    expect(config.authAllowedOrigins).toEqual([]);
     expect(config.emailDeliveryAdapter).toBe('none');
   });
 
@@ -37,18 +36,68 @@ describe('configuration', () => {
     })).toThrow(/AUTH_SECRET/);
   });
 
-  it('accepts only exact allowlisted origins and never a wildcard', () => {
+  it('refuses an explicit production configuration with insecure cookies', () => {
+    expect(() => loadApiConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      DATABASE_SSL_MODE: 'verify-full',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      AUTH_COOKIE_SECURE: 'false',
+    })).toThrow(/AUTH_COOKIE_SECURE/);
+  });
+
+  it('still allows insecure cookies for local HTTP development', () => {
     const config = loadApiConfig({
+      NODE_ENV: 'development',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      DATABASE_SSL_MODE: 'disable',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      AUTH_COOKIE_SECURE: 'false',
+    });
+    expect(config.authCookieSecure).toBe(false);
+  });
+
+  it('keeps production secure cookies enabled by default', () => {
+    const config = loadApiConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+    });
+    expect(config.authCookieSecure).toBe(true);
+  });
+
+  it('rejects every configured origin because credentialed CORS is unsupported', () => {
+    expect(() => loadApiConfig({
       DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
       IDEMPOTENCY_RETENTION_HOURS: '24',
       FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
       AUTH_SECRET,
       AUTH_ALLOWED_ORIGINS: ' https://app.kfin.example , https://beta.kfin.example ',
-    });
-    expect(config.authAllowedOrigins).toEqual([
-      'https://app.kfin.example',
-      'https://beta.kfin.example',
-    ]);
+    })).toThrow(/AUTH_ALLOWED_ORIGINS/);
+
+    expect(() => loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      AUTH_ALLOWED_ORIGINS: '*',
+    })).toThrow(/AUTH_ALLOWED_ORIGINS/);
+  });
+
+  it('accepts an empty origin list, which is the only supported value', () => {
+    expect(() => loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      AUTH_ALLOWED_ORIGINS: '   ',
+    })).not.toThrow();
   });
 
   it('pins the frozen candidate concurrency bounds', () => {

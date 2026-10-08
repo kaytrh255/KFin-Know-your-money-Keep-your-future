@@ -186,7 +186,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       });
     }
     if (request.method.toUpperCase() === 'GET') return principal;
-    if (!isBrowserSafeRequest(request, transport.allowedOrigins)) throw csrfFailedError();
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     if (typeof principal.csrfDigest !== 'string') throw csrfFailedError();
     if (!authService.verifyCsrfToken(csrfHeaderOf(request), principal.csrfDigest)) {
       throw csrfFailedError();
@@ -256,7 +256,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       response: authResponses(202, registerResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request, transport.allowedOrigins)) throw csrfFailedError();
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.register({
       email: body.email,
@@ -286,7 +286,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       response: authResponses(200, resendVerificationResponseSchema),
     },
   }, async (request) => {
-    if (!isBrowserSafeRequest(request, transport.allowedOrigins)) throw csrfFailedError();
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.resendVerification({
       email: body.email,
@@ -310,7 +310,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       response: authResponses(200, verifyEmailResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request, transport.allowedOrigins)) throw csrfFailedError();
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.verifyEmail({
       email: body.email,
@@ -333,7 +333,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       response: authResponses(200, loginResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request, transport.allowedOrigins)) throw csrfFailedError();
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.login({
       email: body.email,
@@ -447,7 +447,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       response: authResponses(200, passwordResetRequestResponseSchema),
     },
   }, async (request) => {
-    if (!isBrowserSafeRequest(request, transport.allowedOrigins)) throw csrfFailedError();
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.requestPasswordReset({
       email: body.email,
@@ -471,7 +471,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       response: authResponses(200, passwordResetResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request, transport.allowedOrigins)) throw csrfFailedError();
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.resetPassword({
       email: body.email,

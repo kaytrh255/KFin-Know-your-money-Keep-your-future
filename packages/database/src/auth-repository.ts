@@ -25,6 +25,7 @@ import {
   summarizeDeviceLabel,
   validatePassword,
   abuseWindowStart,
+  clampIdleExpiry,
   type AbuseScopeKind,
   type AuthEventOutcome,
   type AuthEventType,
@@ -387,12 +388,16 @@ export class PostgresAuthRepository {
     this.assertProfile(input);
 
     const now = this.now();
+    // Abuse evidence is recorded before the operation connection is taken:
+    // a nested checkout would make an exhausted pool wait on the very
+    // transactions that are waiting for it (SEC-ABUSE-08/09).
+    await this.registerAbuseAttempt('registration_ip', input.ipAddress ?? null, now, {
+      limit: this.options.policy.abuse.registrationMaximumPerWindow,
+    });
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.registerAbuseAttempt('registration_ip', input.ipAddress ?? null, now, {
-        limit: this.options.policy.abuse.registrationMaximumPerWindow,
-      });
 
       const invitation = await client.query<{ id: string; status: string; expires_at: Date; invited_email_normalized: string | null }>(
         `SELECT id, status, expires_at, invited_email_normalized
@@ -505,16 +510,20 @@ export class PostgresAuthRepository {
     const email = normalizeEmail(input.email);
     const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
     const now = this.now();
+    // Abuse evidence is recorded before the operation connection is taken:
+    // a nested checkout would make an exhausted pool wait on the very
+    // transactions that are waiting for it (SEC-ABUSE-08/09).
+    await this.registerAbuseAttempt('verification_target', target, now, {
+      limit: this.options.policy.abuse.verificationMaximumAttempts,
+      target,
+    });
+    await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
+      limit: this.options.policy.abuse.verificationMaximumAttempts,
+    });
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.registerAbuseAttempt('verification_target', target, now, {
-        limit: this.options.policy.abuse.verificationMaximumAttempts,
-        target,
-      });
-      await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
-        limit: this.options.policy.abuse.verificationMaximumAttempts,
-      });
 
       const resendAvailableAt = new Date(now + this.options.policy.challenge.resendCooldownMs).toISOString();
       if (!email) {
@@ -608,16 +617,20 @@ export class PostgresAuthRepository {
   async verifyEmail(input: VerifyEmailInput): Promise<VerifyEmailResult> {
     const email = this.requireEmail(input.email);
     const now = this.now();
+    // Abuse evidence is recorded before the operation connection is taken:
+    // a nested checkout would make an exhausted pool wait on the very
+    // transactions that are waiting for it (SEC-ABUSE-08/09).
+    await this.registerAbuseAttempt('verification_target', email.emailNormalized, now, {
+      limit: this.options.policy.abuse.verificationMaximumAttempts,
+      target: email.emailNormalized,
+    });
+    await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
+      limit: this.options.policy.abuse.verificationMaximumAttempts,
+    });
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.registerAbuseAttempt('verification_target', email.emailNormalized, now, {
-        limit: this.options.policy.abuse.verificationMaximumAttempts,
-        target: email.emailNormalized,
-      });
-      await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
-        limit: this.options.policy.abuse.verificationMaximumAttempts,
-      });
 
       const challengeResult = await client.query<ChallengeRow>(
         `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
@@ -751,16 +764,20 @@ export class PostgresAuthRepository {
   async login(input: LoginInput): Promise<LoginResult> {
     const email = this.requireEmail(input.email);
     const now = this.now();
+    // Abuse evidence is recorded before the operation connection is taken:
+    // a nested checkout would make an exhausted pool wait on the very
+    // transactions that are waiting for it (SEC-ABUSE-08/09).
+    await this.registerAbuseAttempt('login_target', email.emailNormalized, now, {
+      limit: this.options.policy.abuse.loginMaximumFailures,
+      target: email.emailNormalized,
+    });
+    await this.registerAbuseAttempt('login_ip', input.ipAddress ?? null, now, {
+      limit: this.options.policy.abuse.loginMaximumFailures,
+    });
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.registerAbuseAttempt('login_target', email.emailNormalized, now, {
-        limit: this.options.policy.abuse.loginMaximumFailures,
-        target: email.emailNormalized,
-      });
-      await this.registerAbuseAttempt('login_ip', input.ipAddress ?? null, now, {
-        limit: this.options.policy.abuse.loginMaximumFailures,
-      });
 
       const userResult = await client.query<UserAuthRow>(
         `SELECT u.id, u.status, u.email_verified_at, c.password_hash
@@ -897,7 +914,15 @@ export class PostgresAuthRepository {
                 idle_expires_at = $3,
                 version = version + 1
           WHERE id = $1 AND revoked_at IS NULL`,
-        [row.id, new Date(now), new Date(now + this.options.policy.session.idleLifetimeMs)],
+        [
+          row.id,
+          new Date(now),
+          new Date(clampIdleExpiry(
+            now,
+            this.options.policy.session.idleLifetimeMs,
+            row.absolute_expires_at,
+          )),
+        ],
       );
     }
 
@@ -1114,16 +1139,20 @@ export class PostgresAuthRepository {
     const email = normalizeEmail(input.email);
     const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
     const now = this.now();
+    // Abuse evidence is recorded before the operation connection is taken:
+    // a nested checkout would make an exhausted pool wait on the very
+    // transactions that are waiting for it (SEC-ABUSE-08/09).
+    await this.registerAbuseAttempt('reset_target', target, now, {
+      limit: this.options.policy.abuse.resetMaximumRequests,
+      target,
+    });
+    await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
+      limit: this.options.policy.abuse.resetMaximumRequests,
+    });
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.registerAbuseAttempt('reset_target', target, now, {
-        limit: this.options.policy.abuse.resetMaximumRequests,
-        target,
-      });
-      await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
-        limit: this.options.policy.abuse.resetMaximumRequests,
-      });
 
       if (!email) {
         await client.query('COMMIT');
@@ -1187,16 +1216,20 @@ export class PostgresAuthRepository {
     const email = normalizeEmail(input.email);
     const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
     const now = this.now();
+    // Abuse evidence is recorded before the operation connection is taken:
+    // a nested checkout would make an exhausted pool wait on the very
+    // transactions that are waiting for it (SEC-ABUSE-08/09).
+    await this.registerAbuseAttempt('reset_target', target, now, {
+      limit: this.options.policy.abuse.resetMaximumRequests,
+      target,
+    });
+    await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
+      limit: this.options.policy.abuse.resetMaximumRequests,
+    });
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await this.registerAbuseAttempt('reset_target', target, now, {
-        limit: this.options.policy.abuse.resetMaximumRequests,
-        target,
-      });
-      await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
-        limit: this.options.policy.abuse.resetMaximumRequests,
-      });
 
       const challengeResult = await client.query<ChallengeRow>(
         `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
@@ -1622,6 +1655,13 @@ export class PostgresAuthRepository {
     const sessionToken = generateUrlToken(this.options.policy.session.tokenEntropyBytes);
     const csrfToken = generateUrlToken(this.options.policy.session.csrfEntropyBytes);
     const rotatedAt = new Date(input.now);
+    // Rotation is also a renewal: the idle window slides forward but never past
+    // the absolute expiry the session was issued with.
+    const idleExpiresAt = clampIdleExpiry(
+      input.now,
+      this.options.policy.session.idleLifetimeMs,
+      row.absolute_expires_at,
+    );
     await client.query(
       `UPDATE session_tokens
           SET retired_at = $2, grace_expires_at = $3
@@ -1648,7 +1688,7 @@ export class PostgresAuthRepository {
         input.sessionId,
         this.digest('csrf-token', csrfToken),
         rotatedAt,
-        new Date(input.now + this.options.policy.session.idleLifetimeMs),
+        new Date(idleExpiresAt),
       ],
     );
     await this.recordEvent(client, {
@@ -1667,7 +1707,7 @@ export class PostgresAuthRepository {
         clientType: input.context.clientType ?? 'web',
         createdAt: rotatedAt.toISOString(),
         lastSeenAt: rotatedAt.toISOString(),
-        idleExpiresAt: new Date(input.now + this.options.policy.session.idleLifetimeMs).toISOString(),
+        idleExpiresAt: new Date(idleExpiresAt).toISOString(),
         absoluteExpiresAt: row.absolute_expires_at.toISOString(),
         deviceLabel: summarizeDeviceLabel(input.context.userAgent),
         current: true,
@@ -1881,9 +1921,13 @@ export class PostgresAuthRepository {
   /**
    * Counts one attempt and enforces the window limit.
    *
-   * The counter is committed on its own connection so a rolled-back operation
-   * (for example a failed login whose event is recorded but whose write is
-   * discarded) can never erase abuse evidence (SEC-ABUSE-02/08/09).
+   * The counter is committed on its own connection, before any operation
+   * transaction is opened, so a rolled-back operation (for example a failed
+   * login whose event is recorded but whose write is discarded) can never erase
+   * abuse evidence (SEC-ABUSE-02/08/09). Callers must invoke this *before*
+   * `pool.connect()`: acquiring a second connection while an operation
+   * transaction is open holds one connection and waits for another, which
+   * deadlocks the auth pool once every connection is in that state.
    */
   private async registerAbuseAttempt(
     scopeKind: AbuseScopeKind,

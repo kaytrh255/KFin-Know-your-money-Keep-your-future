@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   abuseWindowStart,
+  clampIdleExpiry,
   constantTimeEqual,
   eventVisibility,
   generateInvitationCode,
@@ -97,6 +98,33 @@ describe('abuse controls', () => {
     expect(abuseWindowStart(0, windowMs)).toBe(0);
     expect(abuseWindowStart(windowMs - 1, windowMs)).toBe(0);
     expect(abuseWindowStart(windowMs, windowMs)).toBe(windowMs);
+  });
+});
+
+describe('session lifetime clamping', () => {
+  const HOUR = 60 * 60 * 1_000;
+  const now = Date.UTC(2026, 9, 8, 2, 0, 0);
+
+  it('renews the idle window normally while it stays inside the absolute expiry', () => {
+    expect(clampIdleExpiry(now, 30 * 24 * HOUR, now + 90 * 24 * HOUR)).toBe(now + 30 * 24 * HOUR);
+  });
+
+  it('never renews the idle window past the absolute expiry', () => {
+    const absolute = now + 5 * HOUR;
+    expect(clampIdleExpiry(now, 30 * 24 * HOUR, absolute)).toBe(absolute);
+    // A renewal at the very end of the absolute window still cannot extend it.
+    expect(clampIdleExpiry(absolute - 1, 30 * 24 * HOUR, absolute)).toBe(absolute);
+  });
+
+  it('accepts the absolute expiry as a Date or as an epoch value', () => {
+    const absolute = new Date(now + 2 * HOUR);
+    expect(clampIdleExpiry(now, 24 * HOUR, absolute)).toBe(absolute.getTime());
+    expect(clampIdleExpiry(now, 24 * HOUR, absolute.getTime())).toBe(absolute.getTime());
+  });
+
+  it('does not move the absolute expiry backwards when it has already passed', () => {
+    const absolute = now - HOUR;
+    expect(clampIdleExpiry(now, 24 * HOUR, absolute)).toBe(absolute);
   });
 });
 

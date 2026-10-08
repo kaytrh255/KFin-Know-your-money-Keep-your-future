@@ -17,7 +17,6 @@ export const CSRF_HEADER_NAME = 'x-kfin-csrf';
 export interface SessionTransportOptions {
   readonly secure: boolean;
   readonly prefixHost: boolean;
-  readonly allowedOrigins: readonly string[];
 }
 
 export function sessionCookieName(options: Pick<SessionTransportOptions, 'secure' | 'prefixHost'>): string {
@@ -74,23 +73,26 @@ export function clearedCsrfCookie(options: Pick<SessionTransportOptions, 'secure
 }
 
 /**
- * State-changing browser requests must show an allowed origin or Fetch Metadata
+ * State-changing browser requests must be same-origin or carry Fetch Metadata
  * proving a same-site navigation. `SameSite` alone is not accepted as a CSRF
  * defense (SEC-SES-07).
+ *
+ * There is deliberately no origin allowlist. Cross-origin credentialed browser
+ * access requires a CORS layer that returns `Access-Control-Allow-Credentials`,
+ * which KFin does not implement; allowing extra origins here would relax the
+ * CSRF check for requests a browser cannot legally complete. The configuration
+ * variable is rejected at load time so the gap cannot be reopened by a
+ * deployment.
  */
-export function isBrowserSafeRequest(
-  request: Pick<FastifyRequest, 'method' | 'headers'>,
-  allowedOrigins: readonly string[],
-): boolean {
+export function isBrowserSafeRequest(request: Pick<FastifyRequest, 'method' | 'headers'>): boolean {
   const method = request.method.toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return true;
 
   const origin = firstHeader(request.headers.origin);
   const host = firstHeader(request.headers.host);
   if (origin) {
-    if (allowedOrigins.includes(origin)) return true;
     if (!host) return false;
-    // Same-origin: the deployment host under either scheme.
+    // Same-origin only: the deployment host under either scheme.
     return origin === `https://${host}` || origin === `http://${host}`;
   }
 

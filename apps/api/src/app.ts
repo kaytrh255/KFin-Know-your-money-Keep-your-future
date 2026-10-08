@@ -240,7 +240,6 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       transport: options.authTransport ?? {
         secure: true,
         prefixHost: true,
-        allowedOrigins: [],
       },
       absoluteLifetimeSeconds: options.authAbsoluteLifetimeSeconds ?? 90 * 24 * 60 * 60,
     });
