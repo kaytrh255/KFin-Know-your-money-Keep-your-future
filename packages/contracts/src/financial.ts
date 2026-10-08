@@ -103,6 +103,12 @@ export const voidPreviewBodySchema = z.strictObject({
   reason: correctionReasonSchema,
 });
 
+export const correctionOwningDomainReviewSchema = z.strictObject({
+  type: z.enum(['none', 'schedule']),
+  scheduleOccurrenceId: uuidSchema.nullable(),
+  scheduleOccurrenceVersion: positiveVersionSchema.nullable(),
+});
+
 export const correctionReviewContextSchema = z.strictObject({
   expectedFinancialStateVersion: positiveVersionSchema,
   reviewedLatestSnapshotId: uuidSchema,
@@ -112,6 +118,7 @@ export const correctionReviewContextSchema = z.strictObject({
   reviewedSourceAlreadyIncludedInSnapshot: z.boolean(),
   reviewedSourceKind: transactionKindSchema,
   reviewedSourceCurrency: z.string().regex(/^[A-Z]{3}$/),
+  reviewedOwningDomain: correctionOwningDomainReviewSchema,
   reviewedPreviewDigest: z.string().regex(/^[0-9a-f]{64}$/),
 });
 
@@ -171,6 +178,9 @@ export const correctionPreviewResponseSchema = z.strictObject({
     type: z.enum(['none', 'schedule', 'debt', 'planned_purchase']),
     genericCorrectionSupported: z.boolean(),
     genericVoidSupported: z.boolean(),
+    unsupportedReasonCode: z.literal('FIN_CORRECTION_LINKED_DOMAIN_REQUIRED').nullable(),
+    scheduleOccurrenceId: uuidSchema.nullable(),
+    scheduleOccurrenceVersion: positiveVersionSchema.nullable(),
   }),
   context: correctionReviewContextSchema,
 });

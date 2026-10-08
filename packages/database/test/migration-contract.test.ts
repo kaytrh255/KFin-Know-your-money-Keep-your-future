@@ -2,6 +2,10 @@ import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 
 const migrationUrl = new URL('../migrations/0001_financial_foundation.sql', import.meta.url);
+const scheduleMigrationUrl = new URL(
+  '../migrations/0002_one_off_schedule_occurrences.sql',
+  import.meta.url,
+);
 
 describe('reviewed financial foundation migration', () => {
   it('defines owner/currency/snapshot composite integrity and one account per user', async () => {
@@ -38,5 +42,33 @@ describe('reviewed financial foundation migration', () => {
     expect(sql).toContain('idempotency_results_user_scope_uq');
     expect(sql).toContain('pg_column_size(result) <= 4096');
     expect(sql).not.toMatch(/raw_(?:idempotency_)?key/i);
+  });
+});
+
+describe('one-off schedule occurrence migration', () => {
+  it('persists only the accepted occurrence states and an explicit confirmation link', async () => {
+    const sql = await readFile(scheduleMigrationUrl, 'utf8');
+    expect(sql).toContain("state IN ('scheduled', 'confirmed', 'skipped', 'cancelled')");
+    expect(sql).not.toMatch(/state[^\n]*(?:paid|received|due_today|overdue)/i);
+    expect(sql).toContain('scheduled_occurrences_confirmed_transaction_uq');
+    expect(sql).toContain('confirmed occurrence requires one compatible posted transaction');
+    expect(sql).toContain('transactions_schedule_link_guard_trg');
+    expect(sql).toContain('a schedule-linked transaction pointer must be transferred before void');
+  });
+
+  it('binds item, occurrence, account, currency, direction, and transaction ownership', async () => {
+    const sql = await readFile(scheduleMigrationUrl, 'utf8');
+    expect(sql).toContain('FOREIGN KEY (user_id, account_id, scheduled_item_id, currency, transaction_kind)');
+    expect(sql).toContain('REFERENCES scheduled_items(user_id, account_id, id, currency, transaction_kind)');
+    expect(sql).toContain('FOREIGN KEY (user_id, account_id, confirmed_transaction_id)');
+    expect(sql).toContain('REFERENCES transactions(user_id, account_id, id)');
+  });
+
+  it('fixes this slice to one-off explicit confirmation and append-only occurrence authority', async () => {
+    const sql = await readFile(scheduleMigrationUrl, 'utf8');
+    expect(sql).toContain("frequency TEXT NOT NULL DEFAULT 'one_off' CHECK (frequency = 'one_off')");
+    expect(sql).toContain("confirmation_policy TEXT NOT NULL DEFAULT 'explicit'");
+    expect(sql).toContain('scheduled occurrence authority fields are immutable');
+    expect(sql).toContain('terminal scheduled occurrence state is immutable');
   });
 });

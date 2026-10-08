@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { FinancialError } from '@kfin/domain';
-import { buildApp, type FinancialApiService } from '../src/app.js';
+import {
+  buildApp,
+  type FinancialApiService,
+  type ScheduleApiService,
+} from '../src/app.js';
 
 const USER_ID = '00000000-0000-4000-8000-000000000001';
 const OTHER_USER_ID = '00000000-0000-4000-8000-000000000002';
 const SNAPSHOT_ID = '00000000-0000-4000-8000-000000000003';
 const ACCOUNT_ID = '00000000-0000-4000-8000-000000000004';
 const TRANSACTION_ID = '00000000-0000-4000-8000-000000000005';
+const SCHEDULED_ITEM_ID = '00000000-0000-4000-8000-000000000007';
+const OCCURRENCE_ID = '00000000-0000-4000-8000-000000000008';
 
 const transaction = {
   id: TRANSACTION_ID,
@@ -75,6 +81,9 @@ function correctionPreview() {
       type: 'none' as const,
       genericCorrectionSupported: true as const,
       genericVoidSupported: true as const,
+      unsupportedReasonCode: null,
+      scheduleOccurrenceId: null,
+      scheduleOccurrenceVersion: null,
     },
     context: {
       expectedFinancialStateVersion: '1',
@@ -85,6 +94,11 @@ function correctionPreview() {
       reviewedSourceAlreadyIncludedInSnapshot: false,
       reviewedSourceKind: 'expense' as const,
       reviewedSourceCurrency: 'VND',
+      reviewedOwningDomain: {
+        type: 'none' as const,
+        scheduleOccurrenceId: null,
+        scheduleOccurrenceVersion: null,
+      },
       reviewedPreviewDigest: 'a'.repeat(64),
     },
   };
@@ -156,6 +170,51 @@ function service(): FinancialApiService {
         transactionCount: 1,
         amended: false,
       }],
+    })),
+  };
+}
+
+function scheduleService(): ScheduleApiService {
+  const occurrence = {
+    id: OCCURRENCE_ID,
+    scheduledItemId: SCHEDULED_ITEM_ID,
+    title: 'Rent',
+    kind: 'expense' as const,
+    direction: 'outgoing' as const,
+    expectedAmountMinor: '12000000',
+    currency: 'VND',
+    dueOn: '2026-10-15',
+    categoryCode: 'housing',
+    expenseClass: 'essential_fixed' as const,
+    state: 'scheduled' as const,
+    presentation: 'upcoming' as const,
+    confirmedTransactionId: null,
+    confirmedAt: null,
+    skippedAt: null,
+    skipReason: null,
+    cancelledAt: null,
+    version: '1',
+  };
+  return {
+    createOneOff: vi.fn(async () => ({
+      scheduledItemId: SCHEDULED_ITEM_ID,
+      occurrenceId: OCCURRENCE_ID,
+      financialStateVersion: '2',
+    })),
+    getOccurrence: vi.fn(async () => occurrence),
+    listOccurrences: vi.fn(async () => ({ items: [occurrence] })),
+    confirmOccurrence: vi.fn(async () => ({
+      occurrenceId: OCCURRENCE_ID,
+      transactionId: TRANSACTION_ID,
+      state: 'confirmed' as const,
+      financialStateVersion: '3',
+      occurrenceVersion: '2',
+    })),
+    transitionOccurrence: vi.fn(async (_owner, _id, state) => ({
+      occurrenceId: OCCURRENCE_ID,
+      state,
+      financialStateVersion: '3',
+      occurrenceVersion: '2',
     })),
   };
 }
@@ -381,5 +440,140 @@ describe('KFin API ownership boundary', () => {
     expect(paths).toContain('/transactions/{id}/void');
     expect(paths).toContain('/transactions/{id}/correction-history');
     expect(paths).toContain('/reports/monthly-actuals');
+  });
+});
+
+describe('one-off schedule occurrence API', () => {
+  it('owner-scopes one-off creation and explicit confirmation', async () => {
+    const schedule = scheduleService();
+    const app = await buildApp({
+      financialService: service(),
+      scheduleService: schedule,
+      authenticate: async () => ({ userId: USER_ID }),
+    });
+    apps.push(app);
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/v1/schedule/one-off',
+      headers: { 'idempotency-key': 'schedule-create-key' },
+      payload: {
+        title: 'Rent',
+        kind: 'expense',
+        expectedAmountMinor: '12000000',
+        dueOn: '2026-10-15',
+        categoryCode: 'housing',
+        expenseClass: 'essential_fixed',
+        expectedFinancialStateVersion: '1',
+        reviewedLatestSnapshotId: SNAPSHOT_ID,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(schedule.createOneOff).toHaveBeenCalledWith(
+      USER_ID,
+      expect.objectContaining({ title: 'Rent', dueOn: '2026-10-15' }),
+      'schedule-create-key',
+      expect.any(String),
+    );
+
+    const confirmed = await app.inject({
+      method: 'POST',
+      url: `/api/v1/schedule/occurrences/${OCCURRENCE_ID}/confirm`,
+      headers: { 'idempotency-key': 'schedule-confirm-key' },
+      payload: {
+        amountMinor: '11900000',
+        occurredOn: '2026-10-15',
+        categoryCode: 'housing',
+        expenseClass: 'essential_fixed',
+        isUnexpected: false,
+        expectedFinancialStateVersion: '2',
+        reviewedLatestSnapshotId: SNAPSHOT_ID,
+        reviewedOccurrenceVersion: '1',
+      },
+    });
+    expect(confirmed.statusCode).toBe(201);
+    expect(confirmed.json()).toMatchObject({ state: 'confirmed', occurrenceVersion: '2' });
+    expect(schedule.confirmOccurrence).toHaveBeenCalledWith(
+      USER_ID,
+      OCCURRENCE_ID,
+      expect.objectContaining({ amountMinor: '11900000', reviewedOccurrenceVersion: '1' }),
+      'schedule-confirm-key',
+      expect.any(String),
+    );
+  });
+
+  it('rejects recurrence, owner injection, and presentation aliases at the strict boundary', async () => {
+    const schedule = scheduleService();
+    const app = await buildApp({
+      financialService: service(),
+      scheduleService: schedule,
+      authenticate: async () => ({ userId: USER_ID }),
+    });
+    apps.push(app);
+
+    const invalidCreate = await app.inject({
+      method: 'POST',
+      url: '/api/v1/schedule/one-off',
+      headers: { 'idempotency-key': 'schedule-invalid-key' },
+      payload: {
+        userId: OTHER_USER_ID,
+        title: 'Rent',
+        kind: 'expense',
+        expectedAmountMinor: '12000000',
+        dueOn: '2026-10-15',
+        categoryCode: 'housing',
+        expenseClass: 'essential_fixed',
+        frequency: 'monthly',
+        state: 'paid',
+        expectedFinancialStateVersion: '1',
+        reviewedLatestSnapshotId: SNAPSHOT_ID,
+      },
+    });
+    expect(invalidCreate.statusCode).toBe(400);
+    expect(schedule.createOneOff).not.toHaveBeenCalled();
+
+    const invalidFilter = await app.inject({
+      method: 'GET',
+      url: '/api/v1/schedule/occurrences?state=paid',
+    });
+    expect(invalidFilter.statusCode).toBe(400);
+    expect(schedule.listOccurrences).not.toHaveBeenCalled();
+
+    const paidFilterMapping = await app.inject({
+      method: 'GET',
+      url: '/api/v1/schedule/occurrences?state=confirmed&kind=expense',
+    });
+    expect(paidFilterMapping.statusCode).toBe(200);
+    expect(schedule.listOccurrences).toHaveBeenCalledWith(USER_ID, {
+      state: 'confirmed',
+      kind: 'expense',
+      limit: 50,
+    });
+  });
+
+  it('fails closed without authentication and exposes only accepted schedule routes', async () => {
+    const schedule = scheduleService();
+    const app = await buildApp({
+      financialService: service(),
+      scheduleService: schedule,
+      authenticate: async () => null,
+    });
+    apps.push(app);
+
+    const denied = await app.inject({
+      method: 'GET',
+      url: `/api/v1/schedule/occurrences/${OCCURRENCE_ID}`,
+    });
+    expect(denied.statusCode).toBe(401);
+    expect(schedule.getOccurrence).not.toHaveBeenCalled();
+
+    const openapi = await app.inject({ method: 'GET', url: '/openapi.json' });
+    const paths = Object.keys(openapi.json().paths);
+    expect(paths).toContain('/schedule/one-off');
+    expect(paths).toContain('/schedule/occurrences');
+    expect(paths).toContain('/schedule/occurrences/{id}');
+    expect(paths).toContain('/schedule/occurrences/{id}/confirm');
+    expect(paths).toContain('/schedule/occurrences/{id}/skip');
+    expect(paths).toContain('/schedule/occurrences/{id}/cancel');
   });
 });

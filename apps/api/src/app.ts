@@ -13,6 +13,10 @@ import {
   correctionCommitResponseSchema,
   correctionPreviewBodySchema,
   correctionPreviewResponseSchema,
+  confirmOccurrenceBodySchema,
+  confirmOccurrenceResponseSchema,
+  createOneOffScheduleBodySchema,
+  createOneOffScheduleResponseSchema,
   createSnapshotBodySchema,
   createSnapshotResponseSchema,
   createTransactionBodySchema,
@@ -22,30 +26,43 @@ import {
   idempotencyHeadersSchema,
   monthlyActualsQuerySchema,
   monthlyActualsResponseSchema,
+  occurrenceListQuerySchema,
+  occurrenceListResponseSchema,
+  occurrencePathSchema,
+  occurrenceSchema,
   transactionCorrectionHistoryResponseSchema,
   transactionListQuerySchema,
   transactionListResponseSchema,
   transactionPathSchema,
   transactionSchema,
+  transitionOccurrenceBodySchema,
+  transitionOccurrenceResponseSchema,
   voidCommitBodySchema,
   voidPreviewBodySchema,
 } from '@kfin/contracts';
 import type {
   CommitCorrectionInput,
   CommitVoidInput,
+  ConfirmOccurrenceInput,
+  ConfirmOccurrenceResult,
   CorrectionCommitResult,
   CorrectionPreviewView,
+  CreateOneOffScheduleInput,
+  CreateOneOffScheduleResult,
   CreateSnapshotInput,
   CreateSnapshotResult,
   CreateTransactionInput,
   CreateTransactionResult,
   CurrentBalanceView,
   MonthlyActualsView,
+  OccurrenceView,
   PreviewCorrectionInput,
   PreviewVoidInput,
   TransactionCorrectionHistory,
   TransactionPage,
   TransactionView,
+  TransitionOccurrenceInput,
+  TransitionOccurrenceResult,
 } from '@kfin/database';
 import { FinancialError } from '@kfin/domain';
 import type { AuthenticateRequest } from './types.js';
@@ -102,8 +119,42 @@ export interface FinancialApiService {
   getMonthlyActuals(ownerUserId: string, month: string): Promise<MonthlyActualsView>;
 }
 
+export interface ScheduleApiService {
+  createOneOff(
+    ownerUserId: string,
+    input: CreateOneOffScheduleInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<CreateOneOffScheduleResult>;
+  getOccurrence(ownerUserId: string, occurrenceId: string): Promise<OccurrenceView>;
+  listOccurrences(
+    ownerUserId: string,
+    options: {
+      readonly state?: 'scheduled' | 'confirmed' | 'skipped' | 'cancelled';
+      readonly kind?: 'income' | 'expense';
+      readonly limit: number;
+    },
+  ): Promise<{ readonly items: OccurrenceView[] }>;
+  confirmOccurrence(
+    ownerUserId: string,
+    occurrenceId: string,
+    input: ConfirmOccurrenceInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<ConfirmOccurrenceResult>;
+  transitionOccurrence(
+    ownerUserId: string,
+    occurrenceId: string,
+    targetState: 'skipped' | 'cancelled',
+    input: TransitionOccurrenceInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<TransitionOccurrenceResult>;
+}
+
 export interface BuildAppOptions {
   readonly financialService: FinancialApiService;
+  readonly scheduleService?: ScheduleApiService;
   readonly authenticate: AuthenticateRequest;
   readonly readinessPool?: Pick<Pool, 'query'>;
   readonly logger?: boolean;
@@ -360,6 +411,129 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     request.id,
   ));
 
+  const scheduleService = options.scheduleService;
+  if (scheduleService) {
+    app.post('/api/v1/schedule/one-off', {
+      preHandler: requireAuthentication,
+      schema: {
+        tags: ['schedule'],
+        headers: idempotencyHeadersSchema,
+        body: createOneOffScheduleBodySchema,
+        response: scheduleResponses(201, createOneOffScheduleResponseSchema),
+      },
+    }, async (request, reply) => {
+      const body = request.body;
+      const input: CreateOneOffScheduleInput = {
+        title: body.title,
+        kind: body.kind,
+        expectedAmountMinor: body.expectedAmountMinor,
+        dueOn: body.dueOn,
+        categoryCode: body.categoryCode,
+        expectedFinancialStateVersion: body.expectedFinancialStateVersion,
+        reviewedLatestSnapshotId: body.reviewedLatestSnapshotId,
+        ...(body.expenseClass === undefined ? {} : { expenseClass: body.expenseClass }),
+      };
+      const result = await scheduleService.createOneOff(
+        requireUserId(request),
+        input,
+        request.headers['idempotency-key'],
+        request.id,
+      );
+      return reply.code(201).send(result);
+    });
+
+    app.get('/api/v1/schedule/occurrences', {
+      preHandler: requireAuthentication,
+      schema: {
+        tags: ['schedule'],
+        querystring: occurrenceListQuerySchema,
+        response: {
+          200: occurrenceListResponseSchema,
+          400: errorResponseSchema,
+          401: errorResponseSchema,
+        },
+      },
+    }, async (request) => scheduleService.listOccurrences(
+      requireUserId(request),
+      {
+        limit: request.query.limit,
+        ...(request.query.state === undefined ? {} : { state: request.query.state }),
+        ...(request.query.kind === undefined ? {} : { kind: request.query.kind }),
+      },
+    ));
+
+    app.get('/api/v1/schedule/occurrences/:id', {
+      preHandler: requireAuthentication,
+      schema: {
+        tags: ['schedule'],
+        params: occurrencePathSchema,
+        response: {
+          200: occurrenceSchema,
+          401: errorResponseSchema,
+          404: errorResponseSchema,
+        },
+      },
+    }, async (request) => scheduleService.getOccurrence(
+      requireUserId(request),
+      request.params.id,
+    ));
+
+    app.post('/api/v1/schedule/occurrences/:id/confirm', {
+      preHandler: requireAuthentication,
+      schema: {
+        tags: ['schedule'],
+        params: occurrencePathSchema,
+        headers: idempotencyHeadersSchema,
+        body: confirmOccurrenceBodySchema,
+        response: scheduleResponses(201, confirmOccurrenceResponseSchema),
+      },
+    }, async (request, reply) => {
+      const body = request.body;
+      const input: ConfirmOccurrenceInput = {
+        amountMinor: body.amountMinor,
+        occurredOn: body.occurredOn,
+        categoryCode: body.categoryCode,
+        isUnexpected: body.isUnexpected,
+        expectedFinancialStateVersion: body.expectedFinancialStateVersion,
+        reviewedLatestSnapshotId: body.reviewedLatestSnapshotId,
+        reviewedOccurrenceVersion: body.reviewedOccurrenceVersion,
+        ...(body.expenseClass === undefined ? {} : { expenseClass: body.expenseClass }),
+        ...(body.alreadyIncludedInSnapshot === undefined
+          ? {}
+          : { alreadyIncludedInSnapshot: body.alreadyIncludedInSnapshot }),
+        ...(body.note === undefined ? {} : { note: body.note }),
+      };
+      const result = await scheduleService.confirmOccurrence(
+        requireUserId(request),
+        request.params.id,
+        input,
+        request.headers['idempotency-key'],
+        request.id,
+      );
+      return reply.code(201).send(result);
+    });
+
+    for (const target of ['skip', 'cancel'] as const) {
+      app.post(`/api/v1/schedule/occurrences/:id/${target}`, {
+        preHandler: requireAuthentication,
+        schema: {
+          tags: ['schedule'],
+          params: occurrencePathSchema,
+          headers: idempotencyHeadersSchema,
+          body: transitionOccurrenceBodySchema,
+          response: scheduleResponses(200, transitionOccurrenceResponseSchema),
+        },
+      }, async (request) => scheduleService.transitionOccurrence(
+        requireUserId(request),
+        request.params.id,
+        target === 'skip' ? 'skipped' : 'cancelled',
+        request.body,
+        request.headers['idempotency-key'],
+        request.id,
+      ));
+    }
+  }
+
   app.get('/api/v1/reports/monthly-actuals', {
     preHandler: requireAuthentication,
     schema: {
@@ -445,6 +619,10 @@ function correctionCommitInput(body: {
   context: CommitCorrectionInput['context'];
 }): CommitCorrectionInput {
   return { ...correctionPreviewInput(body), context: body.context };
+}
+
+function scheduleResponses(successStatus: 200 | 201, successSchema: unknown) {
+  return correctionResponses(successStatus, successSchema);
 }
 
 function correctionResponses(successStatus: 200 | 201, successSchema: unknown) {

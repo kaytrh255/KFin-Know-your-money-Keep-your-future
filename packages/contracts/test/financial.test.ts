@@ -73,6 +73,11 @@ describe('financial request contracts', () => {
       reviewedSourceAlreadyIncludedInSnapshot: false,
       reviewedSourceKind: 'expense',
       reviewedSourceCurrency: 'VND',
+      reviewedOwningDomain: {
+        type: 'none',
+        scheduleOccurrenceId: null,
+        scheduleOccurrenceVersion: null,
+      },
       reviewedPreviewDigest: 'a'.repeat(64),
     };
     const replacement = {
@@ -87,6 +92,12 @@ describe('financial request contracts', () => {
       replacement,
       context,
     }).success).toBe(true);
+    const { reviewedOwningDomain: _omitted, ...incompleteContext } = context;
+    expect(correctionCommitBodySchema.safeParse({
+      reason: 'Fix entered amount',
+      replacement,
+      context: incompleteContext,
+    }).success).toBe(false);
     expect(voidCommitBodySchema.safeParse({
       reason: 'Duplicate entry',
       context,

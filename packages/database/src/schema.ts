@@ -169,6 +169,96 @@ export const transactions = pgTable('transactions', {
   check('transactions_positive_amount_ck', sql`${table.amountMinor} > 0`),
 ]);
 
+export const scheduledItems = pgTable('scheduled_items', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull(),
+  accountId: uuid('account_id').notNull(),
+  kind: text('kind').notNull(),
+  transactionKind: text('transaction_kind').notNull(),
+  title: text('title').notNull(),
+  expectedAmountMinor: bigint('expected_amount_minor', { mode: 'bigint' }).notNull(),
+  currency: char('currency', { length: 3 }).notNull(),
+  categoryId: uuid('category_id').notNull(),
+  expenseClass: text('expense_class'),
+  frequency: text('frequency').notNull().default('one_off'),
+  recurrenceInterval: integer('recurrence_interval').notNull().default(1),
+  startOn: date('start_on', { mode: 'string' }).notNull(),
+  endOn: date('end_on', { mode: 'string' }),
+  timezone: text('timezone').notNull(),
+  confirmationPolicy: text('confirmation_policy').notNull().default('explicit'),
+  active: boolean('active').notNull().default(true),
+  ...auditColumns,
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  version: bigint('version', { mode: 'bigint' }).notNull().default(1n),
+}, (table) => [
+  unique('scheduled_items_owner_account_id_uq').on(table.userId, table.accountId, table.id),
+  unique('scheduled_items_owner_account_id_currency_kind_uq').on(
+    table.userId,
+    table.accountId,
+    table.id,
+    table.currency,
+    table.transactionKind,
+  ),
+  foreignKey({
+    name: 'scheduled_items_account_currency_fk',
+    columns: [table.userId, table.accountId, table.currency],
+    foreignColumns: [financialAccounts.userId, financialAccounts.id, financialAccounts.currency],
+  }).onDelete('restrict'),
+  foreignKey({
+    name: 'scheduled_items_category_kind_fk',
+    columns: [table.categoryId, table.transactionKind],
+    foreignColumns: [categories.id, categories.transactionKind],
+  }).onDelete('restrict'),
+  index('scheduled_items_owner_active_idx').on(table.userId, table.active, table.startOn, table.id),
+]);
+
+export const scheduledOccurrences = pgTable('scheduled_occurrences', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull(),
+  accountId: uuid('account_id').notNull(),
+  scheduledItemId: uuid('scheduled_item_id').notNull(),
+  transactionKind: text('transaction_kind').notNull(),
+  dueOn: date('due_on', { mode: 'string' }).notNull(),
+  expectedAmountMinor: bigint('expected_amount_minor', { mode: 'bigint' }).notNull(),
+  currency: char('currency', { length: 3 }).notNull(),
+  state: text('state').notNull().default('scheduled'),
+  confirmedTransactionId: uuid('confirmed_transaction_id'),
+  confirmedAt: timestamp('confirmed_at', { withTimezone: true, mode: 'date' }),
+  skippedAt: timestamp('skipped_at', { withTimezone: true, mode: 'date' }),
+  skipReason: text('skip_reason'),
+  cancelledAt: timestamp('cancelled_at', { withTimezone: true, mode: 'date' }),
+  ...auditColumns,
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  version: bigint('version', { mode: 'bigint' }).notNull().default(1n),
+}, (table) => [
+  unique('scheduled_occurrences_item_due_uq').on(table.scheduledItemId, table.dueOn),
+  unique('scheduled_occurrences_confirmed_transaction_uq').on(table.confirmedTransactionId),
+  unique('scheduled_occurrences_owner_account_id_uq').on(table.userId, table.accountId, table.id),
+  foreignKey({
+    name: 'scheduled_occurrences_item_fk',
+    columns: [
+      table.userId,
+      table.accountId,
+      table.scheduledItemId,
+      table.currency,
+      table.transactionKind,
+    ],
+    foreignColumns: [
+      scheduledItems.userId,
+      scheduledItems.accountId,
+      scheduledItems.id,
+      scheduledItems.currency,
+      scheduledItems.transactionKind,
+    ],
+  }).onDelete('restrict'),
+  foreignKey({
+    name: 'scheduled_occurrences_transaction_fk',
+    columns: [table.userId, table.accountId, table.confirmedTransactionId],
+    foreignColumns: [transactions.userId, transactions.accountId, transactions.id],
+  }).onDelete('restrict'),
+  index('scheduled_occurrences_owner_due_idx').on(table.userId, table.state, table.dueOn, table.id),
+]);
+
 export const idempotencyResults = pgTable('idempotency_results', {
   id: uuid('id').primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
@@ -218,6 +308,8 @@ export const schema = {
   financialAccounts,
   balanceSnapshots,
   transactions,
+  scheduledItems,
+  scheduledOccurrences,
   idempotencyResults,
   auditEvents,
 };

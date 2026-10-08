@@ -4,13 +4,13 @@ KFin is a production-oriented personal finance platform designed for an initial 
 
 ## Current phase
 
-**The financial foundation and append-only transaction-correction milestones are implemented for QA review.**
+**The financial foundation, append-only transaction-correction, and one-off schedule-occurrence milestones are implemented for QA review.**
 
-The accepted and frozen implementation baseline is commit `a48d2c5683550859c1b4e19e9d06750616adc0a2`. Implemented scope remains inside the financial core: users, one aggregate account, immutable balance snapshots, posted transactions, authoritative current balance, ownership enforcement, financial-state serialization/versioning, idempotency, authoritative correction/void previews, append-only void + replacement, correction history, and amended monthly actuals.
+The accepted and frozen implementation baseline is commit `a48d2c5683550859c1b4e19e9d06750616adc0a2`. Implemented scope includes users, one aggregate account, immutable balance snapshots, posted transactions, authoritative current balance, ownership enforcement, financial-state serialization/versioning, idempotency, authoritative correction/void previews, append-only void + replacement, correction history, amended monthly actuals, and explicitly confirmed one-off income/essential-expense occurrences.
 
 This implementation does **not** resolve unavailable owner approvals, accept proposed ADRs, validate candidate timeout values, establish Supabase/production behavior, or close pre-existing governance/security/legal/release blockers. Release Candidate and Private Beta gates remain closed until their actual criteria are met.
 
-Start with the [KFin Specification Foundation](docs/README.md), [Milestone 01 trace](docs/implementation/MILESTONE-01-FINANCIAL-FOUNDATION.md), [Milestone 02 trace](docs/implementation/MILESTONE-02-TRANSACTION-CORRECTIONS.md), and the [kickoff evidence status](docs/evidence/2026-10-08-IMPLEMENTATION-KICKOFF-STATUS.md).
+Start with the [KFin Specification Foundation](docs/README.md), [Milestone 01 trace](docs/implementation/MILESTONE-01-FINANCIAL-FOUNDATION.md), [Milestone 02 trace](docs/implementation/MILESTONE-02-TRANSACTION-CORRECTIONS.md), [Milestone 03 trace](docs/implementation/MILESTONE-03-ONE-OFF-SCHEDULE-OCCURRENCES.md), and the [kickoff evidence status](docs/evidence/2026-10-08-IMPLEMENTATION-KICKOFF-STATUS.md).
 
 ## Implemented foundation
 
@@ -26,7 +26,9 @@ Start with the [KFin Specification Foundation](docs/README.md), [Milestone 01 tr
 - authoritative correction/void consequence previews with reviewed source/version/anchor context;
 - append-only correction chains, standalone voids, owner-scoped history, stable stale receipts, and no silent re-anchoring;
 - owner-scoped monthly actuals that exclude voided facts and identify amended groups;
-- unit/API/static-contract tests plus guarded real-PostgreSQL foundation and correction integration suites.
+- one-off scheduled income/essential-expense occurrences with exact persisted states, derived due/Paid/Received presentation, explicit confirmation, and skip/cancel;
+- schedule-linked correction pointer transfer and linked standalone-void rejection;
+- unit/API/static-contract tests plus guarded real-PostgreSQL foundation, correction, and schedule integration suites.
 
 Authentication/session implementation is not part of this milestone. The standalone server therefore fails protected routes closed until a trusted session adapter is wired; it does not accept an insecure user-ID header shortcut.
 

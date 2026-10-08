@@ -41,6 +41,11 @@ export interface CorrectionReviewContext {
   readonly reviewedSourceAlreadyIncludedInSnapshot: boolean;
   readonly reviewedSourceKind: TransactionKind;
   readonly reviewedSourceCurrency: string;
+  readonly reviewedOwningDomain: {
+    readonly type: 'none' | 'schedule';
+    readonly scheduleOccurrenceId: string | null;
+    readonly scheduleOccurrenceVersion: string | null;
+  };
   readonly reviewedPreviewDigest: string;
 }
 
@@ -99,9 +104,12 @@ export interface CorrectionPreviewView {
     readonly added: ReportImpact | null;
   };
   readonly owningDomain: {
-    readonly type: 'none';
-    readonly genericCorrectionSupported: true;
-    readonly genericVoidSupported: true;
+    readonly type: 'none' | 'schedule';
+    readonly genericCorrectionSupported: boolean;
+    readonly genericVoidSupported: boolean;
+    readonly unsupportedReasonCode: 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED' | null;
+    readonly scheduleOccurrenceId: string | null;
+    readonly scheduleOccurrenceVersion: string | null;
   };
   readonly context: CorrectionReviewContext;
 }
@@ -156,6 +164,8 @@ interface SourceRow extends QueryResultRow {
   snapshot_timezone: string;
   next_snapshot_effective_local_date: string | null;
   successor_id: string | null;
+  schedule_occurrence_id: string | null;
+  schedule_occurrence_version: string | null;
 }
 
 interface PreviewSourceRow extends SourceRow {
@@ -294,6 +304,7 @@ export class PostgresTransactionCorrectionService {
           replacement.note,
           source.id,
         ]);
+        await transferScheduleClaim(transaction, source, replacementTransactionId);
         await voidSource(transaction, source, reason);
 
         return {
@@ -355,6 +366,9 @@ export class PostgresTransactionCorrectionService {
         );
         validateReviewedSource(source, input.context);
         assertPreviewDigest('void', source.id, reason, null, input.context);
+        if (source.schedule_occurrence_id !== null) {
+          throw new StableIdempotentFinancialError(linkedDomainRequiredError());
+        }
         await voidSource(transaction, source, reason);
 
         return {
@@ -451,6 +465,8 @@ export class PostgresTransactionCorrectionService {
              source_snapshot.timezone AS snapshot_timezone,
              next_snapshot.effective_local_date AS next_snapshot_effective_local_date,
              successor.id AS successor_id,
+             schedule_occurrence.id AS schedule_occurrence_id,
+             schedule_occurrence.version AS schedule_occurrence_version,
              current_balance.snapshot_id AS latest_snapshot_id,
              current_balance.financial_state_version,
              current_balance.current_balance_minor,
@@ -478,6 +494,10 @@ export class PostgresTransactionCorrectionService {
         ON successor.user_id = txn.user_id
        AND successor.account_id = txn.account_id
        AND successor.supersedes_transaction_id = txn.id
+      LEFT JOIN scheduled_occurrences AS schedule_occurrence
+        ON schedule_occurrence.user_id = txn.user_id
+       AND schedule_occurrence.account_id = txn.account_id
+       AND schedule_occurrence.confirmed_transaction_id = txn.id
       WHERE txn.user_id = $1 AND txn.id = $2
     `, [ownerUserId, sourceTransactionId]);
     const source = result.rows[0];
@@ -588,7 +608,9 @@ async function lockCorrectionSource(
            source_snapshot.effective_local_date::text AS snapshot_effective_local_date,
            source_snapshot.timezone AS snapshot_timezone,
            next_snapshot.effective_local_date AS next_snapshot_effective_local_date,
-           successor.id AS successor_id
+           successor.id AS successor_id,
+           NULL::uuid AS schedule_occurrence_id,
+           NULL::bigint AS schedule_occurrence_version
     FROM transactions AS txn
     JOIN categories AS category ON category.id = txn.category_id
     JOIN balance_snapshots AS source_snapshot
@@ -613,6 +635,18 @@ async function lockCorrectionSource(
   `, [ownerUserId, accountId, sourceTransactionId]);
   const source = result.rows[0];
   if (!source) throw unavailableError();
+
+  // Account, snapshot, and transaction are already locked. Owning-domain rows follow
+  // in the global lock order; future debt/purchase families must be appended after this.
+  const scheduleClaim = await transaction.query<{ id: string; version: string }>(`
+    SELECT id, version
+    FROM scheduled_occurrences
+    WHERE user_id = $1 AND account_id = $2 AND confirmed_transaction_id = $3
+    FOR UPDATE
+  `, [ownerUserId, accountId, sourceTransactionId]);
+  if (scheduleClaim.rows.length > 1) throw domainLinkConflictError();
+  source.schedule_occurrence_id = scheduleClaim.rows[0]?.id ?? null;
+  source.schedule_occurrence_version = scheduleClaim.rows[0]?.version ?? null;
   return source;
 }
 
@@ -650,6 +684,43 @@ function validateReviewedSource(source: SourceRow, context: CorrectionReviewCont
       statusCode: 409,
       safeMessage: 'A correction cannot change transaction authority or direction.',
     });
+  }
+
+  const actualOwnerType = source.schedule_occurrence_id === null ? 'none' : 'schedule';
+  const reviewedOwner = context.reviewedOwningDomain;
+  if (
+    reviewedOwner.type !== actualOwnerType
+    || reviewedOwner.scheduleOccurrenceId !== source.schedule_occurrence_id
+    || reviewedOwner.scheduleOccurrenceVersion !== source.schedule_occurrence_version
+  ) {
+    throw new StableIdempotentFinancialError(correctionStaleError());
+  }
+}
+
+async function transferScheduleClaim(
+  transaction: BoundedTransaction,
+  source: SourceRow,
+  replacementTransactionId: string,
+): Promise<void> {
+  if (source.schedule_occurrence_id === null) return;
+  if (source.schedule_occurrence_version === null) throw domainLinkConflictError();
+  const updated = await transaction.query(`
+    UPDATE scheduled_occurrences
+    SET confirmed_transaction_id = $4, updated_at = clock_timestamp(), version = version + 1
+    WHERE user_id = $1 AND account_id = $2 AND id = $3
+      AND state = 'confirmed'
+      AND confirmed_transaction_id = $5
+      AND version = $6
+  `, [
+    source.user_id,
+    source.account_id,
+    source.schedule_occurrence_id,
+    replacementTransactionId,
+    source.id,
+    source.schedule_occurrence_version,
+  ]);
+  if (updated.rowCount !== 1) {
+    throw new StableIdempotentFinancialError(correctionStaleError());
   }
 }
 
@@ -705,6 +776,13 @@ function buildPreview(
     reviewedSourceAlreadyIncludedInSnapshot: source.already_included_in_snapshot,
     reviewedSourceKind: source.kind,
     reviewedSourceCurrency: source.currency.trim(),
+    reviewedOwningDomain: {
+      type: source.schedule_occurrence_id === null ? 'none' : 'schedule',
+      scheduleOccurrenceId: source.schedule_occurrence_id,
+      scheduleOccurrenceVersion: source.schedule_occurrence_version === null
+        ? null
+        : parseDatabaseBigint(source.schedule_occurrence_version).toString(),
+    },
   };
   return {
     operation,
@@ -738,9 +816,16 @@ function buildPreview(
         : reportImpact(replacement.occurredOn, replacement.categoryCode, source.kind),
     },
     owningDomain: {
-      type: 'none',
+      type: source.schedule_occurrence_id === null ? 'none' : 'schedule',
       genericCorrectionSupported: true,
-      genericVoidSupported: true,
+      genericVoidSupported: source.schedule_occurrence_id === null,
+      unsupportedReasonCode: operation === 'void' && source.schedule_occurrence_id !== null
+        ? 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED'
+        : null,
+      scheduleOccurrenceId: source.schedule_occurrence_id,
+      scheduleOccurrenceVersion: source.schedule_occurrence_version === null
+        ? null
+        : parseDatabaseBigint(source.schedule_occurrence_version).toString(),
     },
     context: {
       ...reviewedContext,
@@ -822,7 +907,10 @@ function correctionAuditMetadata(
     snapshotId: source.balance_snapshot_id,
     originalBalanceEffect: source.balance_effect,
     segment: source.balance_snapshot_id === latestSnapshot.id ? 'latest' : 'closed',
-    owningDomain: 'none',
+    owningDomain: source.schedule_occurrence_id === null ? 'none' : 'schedule',
+    scheduleOccurrenceId: source.schedule_occurrence_id,
+    priorScheduleOccurrenceVersion: source.schedule_occurrence_version,
+    activeTransactionPointerTransferred: source.schedule_occurrence_id !== null,
     changedFields,
     sourceReportMonth: source.occurred_on.slice(0, 7),
     replacementReportMonth: replacement.occurredOn.slice(0, 7),
@@ -838,6 +926,22 @@ function correctionStaleError(): FinancialError {
     code: 'FIN_CORRECTION_STALE_STATE',
     statusCode: 409,
     safeMessage: 'The reviewed correction state is stale. Refetch and preview before retrying.',
+  });
+}
+
+function linkedDomainRequiredError(): FinancialError {
+  return new FinancialError({
+    code: 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED',
+    statusCode: 409,
+    safeMessage: 'This transaction must be changed through its owning schedule workflow.',
+  });
+}
+
+function domainLinkConflictError(): FinancialError {
+  return new FinancialError({
+    code: 'FIN_TRANSACTION_DOMAIN_LINK_CONFLICT',
+    statusCode: 409,
+    safeMessage: 'The transaction has an incompatible owning-domain claim.',
   });
 }
 

@@ -1,10 +1,18 @@
 import { loadApiConfig } from '@kfin/config';
-import { createDatabaseRuntime, PostgresFinancialRepository } from '@kfin/database';
+import {
+  createDatabaseRuntime,
+  PostgresFinancialRepository,
+  PostgresScheduleRepository,
+} from '@kfin/database';
 import { buildApp } from './app.js';
 
 const config = loadApiConfig();
 const runtime = createDatabaseRuntime(config.database);
 const financialService = new PostgresFinancialRepository(
+  runtime.pool,
+  config.idempotencyRetentionMs,
+);
+const scheduleService = new PostgresScheduleRepository(
   runtime.pool,
   config.idempotencyRetentionMs,
 );
@@ -14,6 +22,7 @@ const financialService = new PostgresFinancialRepository(
 // fail closed while liveness/readiness remain usable.
 const app = await buildApp({
   financialService,
+  scheduleService,
   authenticate: async () => null,
   readinessPool: runtime.pool,
   logger: true,
