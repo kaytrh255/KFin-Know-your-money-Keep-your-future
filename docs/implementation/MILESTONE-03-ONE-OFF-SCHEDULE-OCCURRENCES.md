@@ -60,6 +60,8 @@ Every route derives ownership from the trusted principal, rejects owner/account/
 
 The credential-free suites verify contracts, pure presentation derivation, API owner scope, migration text, and serialization protocol. The guarded integration suite creates an isolated schema, applies the real migrations, and exercises the repository against synthetic PostgreSQL when explicitly configured. Local absence of PostgreSQL causes a reported skip rather than a fabricated PASS.
 
+GitHub Actions run [`37765521826`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37765521826) completed the harness, typecheck, `74` credential-free tests, the prior foundation/correction integration suites, and all `5` schedule integration tests against ephemeral synthetic PostgreSQL 17.6. The preceding run `37765370060` failed three confirmation fixtures because its fixed clock made their transaction dates future-dated; domain validation rejected them correctly, the fixture was aligned, and no PASS was claimed for that failed run.
+
 This milestone does not close owner/co-approver acceptance of FIN-01/FIN-02, `SPEC-SCH-01`, `SPEC-REM-01`, FIN-RACE/Supabase evidence, RLS/runtime-role decisions, deployment, operations, security/legal/governance review, or release gates. A passing synthetic PostgreSQL implementation suite is not production or Supabase evidence.
 
 No genuine contradiction in the frozen semantics was encountered. The recurrence/reminder questions were avoided by the deliberately one-off, explicit-confirmation scope; no SDD file was rewritten.
