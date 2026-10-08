@@ -4,7 +4,8 @@ export const uuidSchema = z.string().uuid();
 export const positiveVersionSchema = z.string().regex(/^[1-9][0-9]*$/);
 export const positiveMinorSchema = z.string().regex(/^[1-9][0-9]{0,18}$/);
 export const signedMinorSchema = z.string().regex(/^(?:0|-?[1-9][0-9]{0,18})$/);
-export const localDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+export const localDateSchema = z.string().regex(/^(?!0000)\d{4}-\d{2}-\d{2}$/);
+export const yearMonthSchema = z.string().regex(/^(?!0000)\d{4}-(0[1-9]|1[0-2])$/);
 export const instantSchema = z.string().datetime({ offset: true });
 
 // Request headers necessarily include transport headers (host, content-type,

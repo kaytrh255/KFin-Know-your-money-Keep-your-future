@@ -45,11 +45,12 @@ interface FakeOptions {
   readonly onAccountFailure?: () => void;
   readonly rollbackFails?: boolean;
   readonly commitUnknown?: boolean;
+  readonly hangingAccountQuery?: boolean;
   readonly stored?: {
     readonly requestDigest: string;
     readonly status: number;
     readonly resultCode: string;
-    readonly result: Value;
+    readonly result: Record<string, unknown>;
     readonly committedVersion: string | null;
   };
 }
@@ -62,6 +63,7 @@ function fakeClient(name: string, events: string[], options: FakeOptions = {}): 
     if (/^ROLLBACK$/i.test(normalized) && options.rollbackFails) throw new Error('rollback acknowledgement lost');
     if (/^COMMIT$/i.test(normalized) && options.commitUnknown) throw new Error('socket closed');
     if (normalized.includes('FROM financial_accounts') && normalized.includes('FOR UPDATE')) {
+      if (options.hangingAccountQuery) return new Promise(() => undefined);
       if (options.accountFailureCode && !accountFailed) {
         accountFailed = true;
         options.onAccountFailure?.();
@@ -72,7 +74,12 @@ function fakeClient(name: string, events: string[], options: FakeOptions = {}): 
         user_id: OWNER_ID,
         currency: 'VND',
         financial_state_version: '1',
+        timezone: 'Asia/Ho_Chi_Minh',
+        user_version: '1',
       }]);
+    }
+    if (normalized.includes('FROM users') && normalized.includes('FOR SHARE')) {
+      return result([{ timezone: 'Asia/Ho_Chi_Minh', version: '1' }]);
     }
     if (normalized.includes('FROM idempotency_results')) {
       if (!options.stored) return result([]);
@@ -245,6 +252,28 @@ describe('account financial serialization', () => {
     expect(events.at(-1)).toBe('correction-stale:release:clean');
   });
 
+  it('bounds an application-level query hang and evicts the unconfirmed handle', async () => {
+    vi.useFakeTimers();
+    try {
+      const events: string[] = [];
+      const client = fakeClient('hung-query', events, { hangingAccountQuery: true });
+      const pool = fakePool([client]);
+      const serializer = new AccountFinancialSerializer(
+        pool as unknown as Pick<Pool, 'connect'>,
+        Date.now,
+      );
+      const assertion = expect(serializer.execute(operation())).rejects.toMatchObject({
+        code: 'FINANCIAL_OPERATION_TIMEOUT',
+      });
+      await vi.advanceTimersByTimeAsync(8_001);
+      await assertion;
+      expect(events).not.toContain('hung-query:query:ROLLBACK');
+      expect(events.at(-1)).toBe('hung-query:release:destroy');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not retry statement timeout and returns only after rollback', async () => {
     const events: string[] = [];
     const client = fakeClient('timeout', events, { accountFailureCode: '57014' });
@@ -322,6 +351,28 @@ describe('account financial serialization', () => {
     expect(events.some((event) => event.includes('UPDATE financial_accounts'))).toBe(false);
     expect(events.some((event) => event.includes('INSERT INTO audit_events'))).toBe(false);
     expect(events).toContain('stale:query:COMMIT');
+  });
+
+  it('reconstructs a stored linked-domain error with its original stable code', async () => {
+    const events: string[] = [];
+    const client = fakeClient('linked-replay', events, {
+      stored: {
+        requestDigest: 'a'.repeat(64),
+        status: 409,
+        resultCode: 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED',
+        result: {},
+        committedVersion: null,
+      },
+    });
+    const pool = fakePool([client]);
+    const serializer = new AccountFinancialSerializer(pool as unknown as Pick<Pool, 'connect'>, () => 0);
+
+    await expect(serializer.execute(operation())).rejects.toMatchObject({
+      code: 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED',
+      statusCode: 409,
+      safeMessage: 'This transaction must be changed through its owning schedule workflow.',
+    });
+    expect(events).toContain('linked-replay:query:COMMIT');
   });
 
   it('rejects key reuse with a different digest before stale comparison', async () => {

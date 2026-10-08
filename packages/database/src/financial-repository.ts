@@ -5,6 +5,7 @@ import {
   assertMoneyRange,
   classifyTransaction,
   localDateAt,
+  monthBounds,
   parseDatabaseBigint,
   parsePositiveMinor,
   parseSignedMinor,
@@ -14,6 +15,7 @@ import {
   type ExpenseClass,
   type TransactionKind,
 } from '@kfin/domain';
+import { assertFinancialAggregateBounds } from './aggregate-bounds.js';
 import { digestCanonicalRequest } from './canonical.js';
 import { AccountFinancialSerializer } from './serialization.js';
 import {
@@ -104,6 +106,7 @@ export interface TransactionPage {
 
 export interface TransactionCorrectionHistory {
   readonly items: TransactionView[];
+  readonly nextCursor: string | null;
 }
 
 interface BalanceRow extends QueryResultRow {
@@ -153,12 +156,14 @@ export class PostgresFinancialRepository {
   constructor(
     private readonly pool: Pool,
     private readonly idempotencyRetentionMs: number,
+    previewSigningKey: string,
     private readonly now: () => Date = () => new Date(),
   ) {
     this.serializer = new AccountFinancialSerializer(pool, () => this.now().getTime());
     this.corrections = new PostgresTransactionCorrectionService(
       pool,
       idempotencyRetentionMs,
+      previewSigningKey,
       now,
     );
   }
@@ -250,8 +255,8 @@ export class PostgresFinancialRepository {
           amount.toString(),
           account.currency,
           effectiveAt,
-          localDateAt(effectiveAt, latestSnapshot.timezone),
-          latestSnapshot.timezone,
+          localDateAt(effectiveAt, account.timezone),
+          account.timezone,
           input.note ?? null,
           correlationId,
         ]);
@@ -319,7 +324,7 @@ export class PostgresFinancialRepository {
         const classification = classifyTransaction({
           occurredOn,
           snapshotEffectiveLocalDate: latestSnapshot.effectiveLocalDate,
-          currentLocalDate: localDateAt(this.now(), latestSnapshot.timezone),
+          currentLocalDate: localDateAt(this.now(), account.timezone),
           ...(input.alreadyIncludedInSnapshot === undefined
             ? {}
             : { alreadyIncludedInSnapshot: input.alreadyIncludedInSnapshot }),
@@ -355,6 +360,12 @@ export class PostgresFinancialRepository {
           input.isUnexpected,
           input.note ?? null,
         ]);
+        await assertFinancialAggregateBounds(
+          transaction,
+          ownerUserId,
+          accountId,
+          [occurredOn.slice(0, 7)],
+        );
         return {
           value: {
             transactionId,
@@ -391,7 +402,24 @@ export class PostgresFinancialRepository {
   async getTransactionCorrectionHistory(
     ownerUserId: string,
     transactionId: string,
+    options: { readonly limit: number; readonly cursor?: string } = { limit: 50 },
   ): Promise<TransactionCorrectionHistory> {
+    if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100) {
+      throw validationError('Correction history page limit must be between 1 and 100.');
+    }
+    const target = await this.pool.query(
+      'SELECT 1 FROM transactions WHERE user_id = $1 AND id = $2',
+      [ownerUserId, transactionId],
+    );
+    if (target.rowCount !== 1) throw unavailableError();
+    const cursor = options.cursor ? decodeHistoryCursor(options.cursor) : null;
+    const values: unknown[] = [ownerUserId, transactionId];
+    let cursorClause = '';
+    if (cursor) {
+      values.push(cursor.createdAt, cursor.id);
+      cursorClause = `AND (txn.created_at, txn.id) > ($${values.length - 1}::timestamptz, $${values.length}::uuid)`;
+    }
+    values.push(options.limit + 1);
     const result = await this.pool.query<TransactionRow>(`
       WITH RECURSIVE ancestors AS (
         SELECT id, supersedes_transaction_id
@@ -415,31 +443,62 @@ export class PostgresFinancialRepository {
       ${transactionSelect}
       JOIN chain ON chain.id = txn.id
       WHERE txn.user_id = $1
+      ${cursorClause}
       ORDER BY txn.created_at ASC, txn.id ASC
-    `, [ownerUserId, transactionId]);
-    if (result.rows.length === 0) throw unavailableError();
-    return { items: result.rows.map(mapTransaction) };
+      LIMIT $${values.length}
+    `, values);
+    const hasMore = result.rows.length > options.limit;
+    const rows = result.rows.slice(0, options.limit);
+    const last = rows.at(-1);
+    return {
+      items: rows.map(mapTransaction),
+      nextCursor: hasMore && last ? encodeHistoryCursor(asDate(last.created_at).toISOString(), last.id) : null,
+    };
   }
 
   async listTransactions(
     ownerUserId: string,
-    options: { readonly limit: number; readonly cursor?: string },
+    options: {
+      readonly limit: number;
+      readonly cursor?: string;
+      readonly month?: string;
+      readonly categoryCode?: string;
+      readonly kind?: TransactionKind;
+      readonly balanceEffect?: 'current' | 'historical';
+    },
   ): Promise<TransactionPage> {
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100) {
       throw validationError('Transaction page limit must be between 1 and 100.');
     }
     const cursor = options.cursor ? decodeCursor(options.cursor) : null;
     const values: unknown[] = [ownerUserId];
-    let cursorClause = '';
+    const filters: string[] = [];
     if (cursor) {
       values.push(cursor.occurredOn, cursor.id);
-      cursorClause = 'AND (txn.occurred_on, txn.id) < ($2::date, $3::uuid)';
+      filters.push(`(txn.occurred_on, txn.id) < ($${values.length - 1}::date, $${values.length}::uuid)`);
+    }
+    if (options.month) {
+      const bounds = monthBounds(options.month);
+      values.push(bounds.start, bounds.end);
+      filters.push(`txn.occurred_on >= $${values.length - 1}::date AND txn.occurred_on < $${values.length}::date`);
+    }
+    if (options.categoryCode) {
+      values.push(options.categoryCode);
+      filters.push(`category.code = $${values.length}`);
+    }
+    if (options.kind) {
+      values.push(options.kind);
+      filters.push(`txn.kind = $${values.length}`);
+    }
+    if (options.balanceEffect) {
+      values.push(options.balanceEffect);
+      filters.push(`txn.balance_effect = $${values.length}`);
     }
     values.push(options.limit + 1);
     const limitParameter = `$${values.length}`;
     const result = await this.pool.query<TransactionRow>(`${transactionSelect}
       WHERE txn.user_id = $1
-      ${cursorClause}
+      ${filters.length === 0 ? '' : `AND ${filters.join(' AND ')}`}
       ORDER BY txn.occurred_on DESC, txn.id DESC
       LIMIT ${limitParameter}
     `, values);
@@ -582,5 +641,29 @@ function decodeCursor(value: string): { occurredOn: string; id: string } {
     return { occurredOn: assertLocalDate(candidate.occurredOn), id: candidate.id };
   } catch (error) {
     throw validationError('Transaction cursor is invalid.');
+  }
+}
+
+function encodeHistoryCursor(createdAt: string, id: string): string {
+  return Buffer.from(JSON.stringify({ createdAt, id }), 'utf8').toString('base64url');
+}
+
+function decodeHistoryCursor(value: string): { readonly createdAt: string; readonly id: string } {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object') throw new Error('invalid cursor');
+    const candidate = parsed as Record<string, unknown>;
+    if (
+      typeof candidate.createdAt !== 'string'
+      || typeof candidate.id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate.id)
+    ) throw new Error('invalid cursor');
+    const instant = new Date(candidate.createdAt);
+    if (Number.isNaN(instant.getTime()) || instant.toISOString() !== candidate.createdAt) {
+      throw new Error('invalid cursor');
+    }
+    return { createdAt: candidate.createdAt, id: candidate.id };
+  } catch {
+    throw validationError('Correction history cursor is invalid.');
   }
 }

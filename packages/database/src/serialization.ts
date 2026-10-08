@@ -24,6 +24,8 @@ export interface LockedAccount {
   readonly userId: string;
   readonly currency: string;
   readonly financialStateVersion: bigint;
+  readonly timezone: string;
+  readonly userVersion: bigint;
 }
 
 export interface LockedSnapshot {
@@ -103,6 +105,11 @@ interface AccountRow extends QueryResultRow {
   financial_state_version: string;
 }
 
+interface UserAuthorityRow extends QueryResultRow {
+  timezone: string;
+  version: string;
+}
+
 interface SnapshotRow extends QueryResultRow {
   id: string;
   amount_minor: string;
@@ -175,6 +182,8 @@ export class AccountFinancialSerializer {
         error.code === 'FINANCIAL_STATE_STALE'
         || error.code === 'FIN_SNAPSHOT_STALE_STATE'
         || error.code === 'FIN_CORRECTION_STALE_STATE'
+        || error.code === 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED'
+        || error.code === 'FIN_TRANSACTION_DOMAIN_LINK_CONFLICT'
         || error.code === 'IDEMPOTENCY_KEY_REUSED'
       )) throw error;
       throw new FinancialError({
@@ -231,11 +240,21 @@ export class AccountFinancialSerializer {
       `, [operation.accountId, operation.ownerUserId]);
       const accountRow = accountResult.rows[0];
       if (!accountRow) throw unavailableError();
+      const authorityResult = await transaction.query<UserAuthorityRow>(`
+        SELECT timezone, version
+        FROM users
+        WHERE id = $1
+        FOR SHARE
+      `, [operation.ownerUserId]);
+      const authority = authorityResult.rows[0];
+      if (!authority) throw unavailableError();
       const account: LockedAccount = {
         id: accountRow.id,
         userId: accountRow.user_id,
         currency: accountRow.currency.trim(),
         financialStateVersion: parseDatabaseBigint(accountRow.financial_state_version),
+        timezone: authority.timezone,
+        userVersion: parseDatabaseBigint(authority.version),
       };
 
       const keyDigest = digestSecret(operation.idempotencyKey);
@@ -389,6 +408,11 @@ export class AccountFinancialSerializer {
       };
     } catch (error) {
       if (committed) throw error;
+      if (error instanceof ActiveQueryDeadlineExceeded) {
+        client.release(true);
+        released = true;
+        throw operationTimeout(error);
+      }
       if (commitSent && !hasTrustworthySqlstate(error)) {
         client.release(true);
         released = true;
@@ -445,12 +469,15 @@ class DeadlineBoundTransaction implements BoundedTransaction {
     assertBeforeDeadline(this.deadline, this.now);
     const remaining = this.remainingMs();
     if (!/^\s*(?:BEGIN|COMMIT|ROLLBACK|SELECT set_config)/i.test(text)) {
-      await this.client.query(
+      await queryBeforeDeadline(
+        this.client,
         "SELECT set_config('statement_timeout', $1, true)",
         [`${Math.max(1, Math.min(this.maximumStatementTimeoutMs, remaining))}ms`],
+        this.deadline,
+        this.now,
       );
     }
-    return this.client.query<Row>(text, [...values]);
+    return queryBeforeDeadline<Row>(this.client, text, values, this.deadline, this.now);
   }
 }
 
@@ -494,6 +521,28 @@ async function insertIdempotencyResult(
     input.correlationId,
     input.retentionMs,
   ]);
+}
+
+async function queryBeforeDeadline<Row extends QueryResultRow = QueryResultRow>(
+  client: Pick<PoolClient, 'query'>,
+  text: string,
+  values: readonly unknown[],
+  deadline: number,
+  now: () => number,
+): Promise<QueryResult<Row>> {
+  const remaining = deadline - now();
+  if (remaining <= 0) throw new ApplicationDeadlineExceeded();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      client.query<Row>(text, [...values]),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new ActiveQueryDeadlineExceeded()), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function connectBefore(
@@ -590,18 +639,30 @@ function staleError(code: SerializedStaleCode): FinancialError {
 }
 
 function storedFinancialError(row: StoredResultRow): FinancialError {
-  if (
-    row.result_code === 'FINANCIAL_STATE_STALE'
-    || row.result_code === 'FIN_SNAPSHOT_STALE_STATE'
-    || row.result_code === 'FIN_CORRECTION_STALE_STATE'
-  ) {
-    return staleError(row.result_code);
+  switch (row.result_code) {
+    case 'FINANCIAL_STATE_STALE':
+    case 'FIN_SNAPSHOT_STALE_STATE':
+    case 'FIN_CORRECTION_STALE_STATE':
+      return staleError(row.result_code);
+    case 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED':
+      return new FinancialError({
+        code: row.result_code,
+        statusCode: 409,
+        safeMessage: 'This transaction must be changed through its owning schedule workflow.',
+      });
+    case 'FIN_TRANSACTION_DOMAIN_LINK_CONFLICT':
+      return new FinancialError({
+        code: row.result_code,
+        statusCode: 409,
+        safeMessage: 'The transaction is already claimed by an incompatible owning domain.',
+      });
+    default:
+      return new FinancialError({
+        code: 'FIN_DATABASE_UNAVAILABLE',
+        statusCode: 503,
+        safeMessage: 'The stored financial result is unavailable.',
+      });
   }
-  return new FinancialError({
-    code: 'FIN_DATABASE_UNAVAILABLE',
-    statusCode: 503,
-    safeMessage: 'The stored financial result is unavailable.',
-  });
 }
 
 function idempotencyReused(): FinancialError {
@@ -667,5 +728,12 @@ class ApplicationDeadlineExceeded extends Error {
   constructor() {
     super('Application database deadline exceeded.');
     this.name = 'ApplicationDeadlineExceeded';
+  }
+}
+
+class ActiveQueryDeadlineExceeded extends ApplicationDeadlineExceeded {
+  constructor() {
+    super();
+    this.name = 'ActiveQueryDeadlineExceeded';
   }
 }

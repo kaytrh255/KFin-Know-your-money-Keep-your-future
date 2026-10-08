@@ -25,6 +25,9 @@ const environmentSchema = z.object({
   DATABASE_SSL_MODE: z.enum(['disable', 'verify-full']).default('verify-full'),
   DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(20).default(5),
   IDEMPOTENCY_RETENTION_HOURS: z.coerce.number().int().positive().max(MAX_SAFE_RETENTION_HOURS),
+  FINANCIAL_PREVIEW_SIGNING_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/, {
+    message: 'must be exactly 32 bytes encoded as 64 hexadecimal characters',
+  }),
 });
 
 export interface ApiConfig {
@@ -37,6 +40,7 @@ export interface ApiConfig {
     readonly poolMaximum: number;
   };
   readonly idempotencyRetentionMs: number;
+  readonly financialPreviewSigningKey: string;
 }
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -58,6 +62,7 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): Api
       poolMaximum: parsed.data.DATABASE_POOL_MAX,
     }),
     idempotencyRetentionMs: parsed.data.IDEMPOTENCY_RETENTION_HOURS * 60 * 60 * 1_000,
+    financialPreviewSigningKey: parsed.data.FINANCIAL_PREVIEW_SIGNING_KEY,
   });
 }
 

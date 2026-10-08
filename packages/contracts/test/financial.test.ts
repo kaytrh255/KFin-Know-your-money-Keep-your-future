@@ -4,6 +4,8 @@ import {
   correctionPreviewBodySchema,
   createSnapshotBodySchema,
   createTransactionBodySchema,
+  transactionCorrectionHistoryQuerySchema,
+  transactionListQuerySchema,
   voidCommitBodySchema,
 } from '../src/index.js';
 
@@ -73,6 +75,8 @@ describe('financial request contracts', () => {
       reviewedSourceAlreadyIncludedInSnapshot: false,
       reviewedSourceKind: 'expense',
       reviewedSourceCurrency: 'VND',
+      reviewedUserTimezone: 'Asia/Ho_Chi_Minh',
+      reviewedUserVersion: '1',
       reviewedOwningDomain: {
         type: 'none',
         scheduleOccurrenceId: null,
@@ -104,4 +108,20 @@ describe('financial request contracts', () => {
       accountId: '00000000-0000-4000-8000-000000000099',
     }).success).toBe(false);
   });
+
+  it('bounds transaction and correction-history collections with opaque cursors', () => {
+    expect(transactionListQuerySchema.parse({
+      limit: '25',
+      cursor: 'opaque-page',
+      month: '0001-01',
+      categoryCode: 'food',
+      kind: 'expense',
+      balanceEffect: 'historical',
+    })).toMatchObject({ limit: 25, cursor: 'opaque-page', month: '0001-01' });
+    expect(transactionCorrectionHistoryQuerySchema.parse({ limit: '1', cursor: 'next' }))
+      .toEqual({ limit: 1, cursor: 'next' });
+    expect(transactionListQuerySchema.safeParse({ month: '0000-01' }).success).toBe(false);
+    expect(transactionCorrectionHistoryQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
+  });
+
 });

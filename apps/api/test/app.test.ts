@@ -94,6 +94,8 @@ function correctionPreview() {
       reviewedSourceAlreadyIncludedInSnapshot: false,
       reviewedSourceKind: 'expense' as const,
       reviewedSourceCurrency: 'VND',
+      reviewedUserTimezone: 'Asia/Ho_Chi_Minh',
+      reviewedUserVersion: '1',
       reviewedOwningDomain: {
         type: 'none' as const,
         scheduleOccurrenceId: null,
@@ -129,7 +131,7 @@ function service(): FinancialApiService {
       financialStateVersion: '2',
     })),
     getTransaction: vi.fn(async () => transaction),
-    getTransactionCorrectionHistory: vi.fn(async () => ({ items: [transaction] })),
+    getTransactionCorrectionHistory: vi.fn(async () => ({ items: [transaction], nextCursor: null })),
     listTransactions: vi.fn(async () => ({ items: [transaction], nextCursor: null })),
     previewTransactionCorrection: vi.fn(async () => correctionPreview()),
     previewTransactionVoid: vi.fn(async () => ({
@@ -151,11 +153,34 @@ function service(): FinancialApiService {
       sourceTransactionId: TRANSACTION_ID,
       replacementTransactionId: '00000000-0000-4000-8000-000000000006',
       financialStateVersion: '2',
+      consequence: {
+        currentBalance: correctionPreview().currentBalance,
+        reports: correctionPreview().reports,
+        owningDomain: {
+          type: 'none' as const,
+          scheduleOccurrenceId: null,
+          scheduleOccurrenceVersion: null,
+        },
+      },
     })),
     voidTransaction: vi.fn(async () => ({
       sourceTransactionId: TRANSACTION_ID,
       replacementTransactionId: null,
       financialStateVersion: '2',
+      consequence: {
+        currentBalance: {
+          beforeMinor: '999000', deltaMinor: '1000', afterMinor: '1000000', changes: true,
+        },
+        reports: {
+          removed: { month: '2026-10', categoryCode: 'food', kind: 'expense' as const },
+          added: null,
+        },
+        owningDomain: {
+          type: 'none' as const,
+          scheduleOccurrenceId: null,
+          scheduleOccurrenceVersion: null,
+        },
+      },
     })),
     getMonthlyActuals: vi.fn(async () => ({
       month: '2026-10',
@@ -166,9 +191,16 @@ function service(): FinancialApiService {
       groups: [{
         categoryCode: 'food',
         kind: 'expense' as const,
+        balanceEffect: 'current' as const,
         amountMinor: '1000',
         transactionCount: 1,
         amended: false,
+        drilldown: {
+          month: '2026-10',
+          categoryCode: 'food',
+          kind: 'expense' as const,
+          balanceEffect: 'current' as const,
+        },
       }],
     })),
   };
@@ -202,7 +234,7 @@ function scheduleService(): ScheduleApiService {
       financialStateVersion: '2',
     })),
     getOccurrence: vi.fn(async () => occurrence),
-    listOccurrences: vi.fn(async () => ({ items: [occurrence] })),
+    listOccurrences: vi.fn(async () => ({ items: [occurrence], nextCursor: null })),
     confirmOccurrence: vi.fn(async () => ({
       occurrenceId: OCCURRENCE_ID,
       transactionId: TRANSACTION_ID,
@@ -372,12 +404,13 @@ describe('KFin API ownership boundary', () => {
 
     const history = await app.inject({
       method: 'GET',
-      url: `/api/v1/transactions/${TRANSACTION_ID}/correction-history`,
+      url: `/api/v1/transactions/${TRANSACTION_ID}/correction-history?limit=1&cursor=opaque-next`,
     });
     expect(history.statusCode).toBe(200);
     expect(financialService.getTransactionCorrectionHistory).toHaveBeenCalledWith(
       USER_ID,
       TRANSACTION_ID,
+      { limit: 1, cursor: 'opaque-next' },
     );
 
     const report = await app.inject({
@@ -541,13 +574,14 @@ describe('one-off schedule occurrence API', () => {
 
     const paidFilterMapping = await app.inject({
       method: 'GET',
-      url: '/api/v1/schedule/occurrences?state=confirmed&kind=expense',
+      url: '/api/v1/schedule/occurrences?state=confirmed&kind=expense&limit=1&cursor=opaque-next',
     });
     expect(paidFilterMapping.statusCode).toBe(200);
     expect(schedule.listOccurrences).toHaveBeenCalledWith(USER_ID, {
       state: 'confirmed',
       kind: 'expense',
-      limit: 50,
+      limit: 1,
+      cursor: 'opaque-next',
     });
   });
 

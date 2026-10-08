@@ -8,8 +8,10 @@ describe('configuration', () => {
       DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
       DATABASE_SSL_MODE: 'disable',
       IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
     });
     expect(config.idempotencyRetentionMs).toBe(86_400_000);
+    expect(config.financialPreviewSigningKey).toBe('ab'.repeat(32));
     expect(config.database.poolMaximum).toBe(5);
   });
 

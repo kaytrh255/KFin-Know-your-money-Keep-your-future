@@ -30,6 +30,7 @@ import {
   occurrenceListResponseSchema,
   occurrencePathSchema,
   occurrenceSchema,
+  transactionCorrectionHistoryQuerySchema,
   transactionCorrectionHistoryResponseSchema,
   transactionListQuerySchema,
   transactionListResponseSchema,
@@ -87,10 +88,18 @@ export interface FinancialApiService {
   getTransactionCorrectionHistory(
     ownerUserId: string,
     transactionId: string,
+    options: { readonly limit: number; readonly cursor?: string },
   ): Promise<TransactionCorrectionHistory>;
   listTransactions(
     ownerUserId: string,
-    options: { readonly limit: number; readonly cursor?: string },
+    options: {
+      readonly limit: number;
+      readonly cursor?: string;
+      readonly month?: string;
+      readonly categoryCode?: string;
+      readonly kind?: 'income' | 'expense';
+      readonly balanceEffect?: 'current' | 'historical';
+    },
   ): Promise<TransactionPage>;
   previewTransactionCorrection(
     ownerUserId: string,
@@ -133,8 +142,9 @@ export interface ScheduleApiService {
       readonly state?: 'scheduled' | 'confirmed' | 'skipped' | 'cancelled';
       readonly kind?: 'income' | 'expense';
       readonly limit: number;
+      readonly cursor?: string;
     },
-  ): Promise<{ readonly items: OccurrenceView[] }>;
+  ): Promise<{ readonly items: OccurrenceView[]; readonly nextCursor: string | null }>;
   confirmOccurrence(
     ownerUserId: string,
     occurrenceId: string,
@@ -309,9 +319,14 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     },
   }, async (request) => options.financialService.listTransactions(
     requireUserId(request),
-    request.query.cursor === undefined
-      ? { limit: request.query.limit }
-      : { limit: request.query.limit, cursor: request.query.cursor },
+    {
+      limit: request.query.limit,
+      ...(request.query.cursor === undefined ? {} : { cursor: request.query.cursor }),
+      ...(request.query.month === undefined ? {} : { month: request.query.month }),
+      ...(request.query.categoryCode === undefined ? {} : { categoryCode: request.query.categoryCode }),
+      ...(request.query.kind === undefined ? {} : { kind: request.query.kind }),
+      ...(request.query.balanceEffect === undefined ? {} : { balanceEffect: request.query.balanceEffect }),
+    },
   ));
 
   app.get('/api/v1/transactions/:id', {
@@ -335,6 +350,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     schema: {
       tags: ['financial-corrections'],
       params: transactionPathSchema,
+      querystring: transactionCorrectionHistoryQuerySchema,
       response: {
         200: transactionCorrectionHistoryResponseSchema,
         401: errorResponseSchema,
@@ -344,6 +360,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   }, async (request) => options.financialService.getTransactionCorrectionHistory(
     requireUserId(request),
     request.params.id,
+    request.query.cursor === undefined
+      ? { limit: request.query.limit }
+      : { limit: request.query.limit, cursor: request.query.cursor },
   ));
 
   app.post('/api/v1/transactions/:id/correction-preview', {
@@ -459,6 +478,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         limit: request.query.limit,
         ...(request.query.state === undefined ? {} : { state: request.query.state }),
         ...(request.query.kind === undefined ? {} : { kind: request.query.kind }),
+        ...(request.query.cursor === undefined ? {} : { cursor: request.query.cursor }),
       },
     ));
 

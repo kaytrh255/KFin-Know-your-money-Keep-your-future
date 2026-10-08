@@ -9,6 +9,8 @@ import {
   PostgresUserRepository,
 } from '../src/index.js';
 
+const PREVIEW_SIGNING_KEY = 'ab'.repeat(32);
+
 const integrationEnabled = Boolean(
   process.env.TEST_DATABASE_URL
   && process.env.KFIN_INTEGRATION_TARGET === 'non-production',
@@ -71,7 +73,7 @@ integration('financial foundation on real PostgreSQL', () => {
     });
     expect(foundation.financialStateVersion).toBe('1');
 
-    const repository = new PostgresFinancialRepository(database, 86_400_000, () => now);
+    const repository = new PostgresFinancialRepository(database, 86_400_000, PREVIEW_SIGNING_KEY, () => now);
     const key = randomUUID();
     const transactionInput = {
       kind: 'expense' as const,
@@ -121,4 +123,76 @@ integration('financial foundation on real PostgreSQL', () => {
     }, randomUUID(), randomUUID())).rejects.toMatchObject({ code: 'FINANCIAL_STATE_STALE' });
     expect((await repository.getCurrentBalance(owner.id)).financialStateVersion).toBe('3');
   }, 30_000);
+
+  it('rejects current and monthly aggregate overflow atomically before version commit', async () => {
+    const userRepository = new PostgresUserRepository(database);
+    const createTarget = async (effectiveAt: Date) => {
+      const user = await userRepository.create({
+        email: `aggregate-${randomUUID()}@example.invalid`,
+        locale: 'en-VN',
+        timezone: 'Asia/Ho_Chi_Minh',
+        baseCurrency: 'VND',
+        emailVerifiedAt: new Date(effectiveAt.getTime() - 1_000),
+      });
+      const foundation = await new FinancialAccountBootstrapService(database).bootstrap({
+        ownerUserId: user.id,
+        openingAmountMinor: '0',
+        effectiveAt,
+        idempotencyKey: randomUUID(),
+        correlationId: randomUUID(),
+        idempotencyRetentionMs: 86_400_000,
+      });
+      return {
+        user,
+        foundation,
+        repository: new PostgresFinancialRepository(
+          database,
+          86_400_000,
+          PREVIEW_SIGNING_KEY,
+          () => new Date(),
+        ),
+      };
+    };
+    const maximum = '9223372036854775807';
+    const now = new Date();
+    const current = await createTarget(new Date(now.getTime() - 2 * 24 * 60 * 60 * 1_000));
+    const today = localDateAt(now, current.user.timezone);
+    const income = await current.repository.createTransaction(current.user.id, {
+      kind: 'income', amountMinor: maximum, occurredOn: today,
+      categoryCode: 'income_other', isUnexpected: false,
+      expectedFinancialStateVersion: '1', reviewedLatestSnapshotId: current.foundation.snapshotId,
+    }, randomUUID(), randomUUID());
+    await current.repository.createTransaction(current.user.id, {
+      kind: 'expense', amountMinor: maximum, occurredOn: today,
+      categoryCode: 'food', expenseClass: 'daily', isUnexpected: false,
+      expectedFinancialStateVersion: income.financialStateVersion,
+      reviewedLatestSnapshotId: current.foundation.snapshotId,
+    }, randomUUID(), randomUUID());
+    await expect(current.repository.createTransaction(current.user.id, {
+      kind: 'income', amountMinor: '1', occurredOn: today,
+      categoryCode: 'income_other', isUnexpected: false,
+      expectedFinancialStateVersion: '3', reviewedLatestSnapshotId: current.foundation.snapshotId,
+    }, randomUUID(), randomUUID())).rejects.toMatchObject({ code: 'FINANCIAL_AMOUNT_OUT_OF_RANGE' });
+    expect((await current.repository.getCurrentBalance(current.user.id))).toMatchObject({
+      financialStateVersion: '3',
+      postedCurrentIncomeMinor: maximum,
+      postedCurrentExpenseMinor: maximum,
+      currentBalanceMinor: '0',
+    });
+
+    const historical = await createTarget(new Date(now.getTime() - 1_000));
+    const yesterday = localDateAt(new Date(now.getTime() - 24 * 60 * 60 * 1_000), historical.user.timezone);
+    await historical.repository.createTransaction(historical.user.id, {
+      kind: 'income', amountMinor: maximum, occurredOn: yesterday,
+      categoryCode: 'income_other', isUnexpected: false, alreadyIncludedInSnapshot: true,
+      expectedFinancialStateVersion: '1', reviewedLatestSnapshotId: historical.foundation.snapshotId,
+    }, randomUUID(), randomUUID());
+    await expect(historical.repository.createTransaction(historical.user.id, {
+      kind: 'income', amountMinor: '1', occurredOn: yesterday,
+      categoryCode: 'income_other', isUnexpected: false, alreadyIncludedInSnapshot: true,
+      expectedFinancialStateVersion: '2', reviewedLatestSnapshotId: historical.foundation.snapshotId,
+    }, randomUUID(), randomUUID())).rejects.toMatchObject({ code: 'FINANCIAL_AMOUNT_OUT_OF_RANGE' });
+    expect((await historical.repository.getCurrentBalance(historical.user.id)).financialStateVersion).toBe('2');
+  }, 30_000);
+
 });

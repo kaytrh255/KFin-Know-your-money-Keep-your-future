@@ -177,18 +177,23 @@ export class FinancialAccountBootstrapService {
     const deadline = this.now() + (recovery ? 2_000 : 8_000);
     let client: PoolClient;
     try {
-      client = await this.pool.connect();
+      client = await connectBefore(this.pool, deadline, this.now);
     } catch (error) {
+      if (error instanceof BootstrapDeadlineExceeded) throw operationTimeout(error);
       throw databaseUnavailable(error);
     }
     let released = false;
     let committed = false;
     let commitSent = false;
+    const query = <Row extends QueryResultRow = QueryResultRow>(
+      text: string,
+      values: readonly unknown[] = [],
+    ) => queryBefore<Row>(client, text, values, deadline, this.now);
     try {
-      await client.query('BEGIN ISOLATION LEVEL READ COMMITTED');
-      await client.query(`SET LOCAL lock_timeout = '${recovery ? 1_900 : 2_000}ms'`);
-      await client.query(`SET LOCAL statement_timeout = '${recovery ? 1_900 : 5_000}ms'`);
-      const userResult = await client.query<BootstrapUserRow>(`
+      await query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await query("SELECT set_config('lock_timeout', $1, true)", [`${recovery ? 1_900 : 2_000}ms`]);
+      await query("SELECT set_config('statement_timeout', $1, true)", [`${recovery ? 1_900 : 5_000}ms`]);
+      const userResult = await query<BootstrapUserRow>(`
         SELECT id, timezone, base_currency
         FROM users
         WHERE id = $1 AND status = 'active' AND email_verified_at IS NOT NULL
@@ -201,7 +206,7 @@ export class FinancialAccountBootstrapService {
         safeMessage: 'The requested financial resource is unavailable.',
       });
 
-      const existingResult = await client.query<BootstrapResultRow>(`
+      const existingResult = await query<BootstrapResultRow>(`
         SELECT request_digest, result
         FROM idempotency_results
         WHERE user_id = $1 AND account_id IS NULL
@@ -216,7 +221,7 @@ export class FinancialAccountBootstrapService {
         return { ...existing.result, financialStateVersion: '1', replayed: true };
       }
 
-      const priorAccount = await client.query('SELECT id FROM financial_accounts WHERE user_id = $1', [input.ownerUserId]);
+      const priorAccount = await query('SELECT id FROM financial_accounts WHERE user_id = $1', [input.ownerUserId]);
       if (priorAccount.rowCount) throw new FinancialError({
         code: 'FIN_ACCOUNT_ALREADY_EXISTS',
         statusCode: 409,
@@ -228,12 +233,12 @@ export class FinancialAccountBootstrapService {
         snapshotId: input.snapshotId,
         financialStateVersion: '1' as const,
       };
-      await client.query(`
+      await query(`
         INSERT INTO financial_accounts (
           id, user_id, name, account_type, currency, financial_state_version
         ) VALUES ($1, $2, 'Aggregate liquid account', 'aggregate_liquid', $3, 1)
       `, [input.accountId, input.ownerUserId, user.base_currency]);
-      await client.query(`
+      await query(`
         INSERT INTO balance_snapshots (
           id, user_id, account_id, amount_minor, currency, effective_at,
           effective_local_date, timezone, reason, created_by_user_id, correlation_id
@@ -249,7 +254,7 @@ export class FinancialAccountBootstrapService {
         user.timezone,
         input.correlationId,
       ]);
-      await client.query(`
+      await query(`
         INSERT INTO idempotency_results (
           id, user_id, account_id, operation, key_digest, request_digest,
           prior_financial_state_version, committed_financial_state_version,
@@ -266,7 +271,7 @@ export class FinancialAccountBootstrapService {
         input.correlationId,
         input.idempotencyRetentionMs,
       ]);
-      await client.query(`
+      await query(`
         INSERT INTO audit_events (
           id, user_id, actor_user_id, action, resource_type, resource_id,
           outcome, correlation_id, metadata
@@ -285,25 +290,108 @@ export class FinancialAccountBootstrapService {
       return { ...result, replayed: false };
     } catch (error) {
       if (committed) throw error;
+      if (error instanceof ActiveBootstrapQueryDeadlineExceeded) {
+        client.release(true);
+        released = true;
+        throw operationTimeout(error);
+      }
       if (commitSent && sqlstateOf(error) === null) {
         client.release(true);
         released = true;
         throw new BootstrapCommitUnknown(error);
       }
-      try {
-        await client.query('ROLLBACK');
-        client.release();
-        released = true;
-      } catch (rollbackError) {
+      const cleaned = await rollbackBefore(client, deadline, this.now);
+      if (!cleaned) {
         client.release(true);
         released = true;
-        throw databaseUnavailable(new AggregateError([error, rollbackError]));
+        if (error instanceof BootstrapDeadlineExceeded || sqlstateOf(error) === '57014') {
+          throw operationTimeout(error);
+        }
+        throw databaseUnavailable(error);
       }
+      client.release();
+      released = true;
       if (error instanceof FinancialError) throw error;
+      if (error instanceof BootstrapDeadlineExceeded || sqlstateOf(error) === '57014') {
+        throw operationTimeout(error);
+      }
       throw databaseUnavailable(error);
     } finally {
       if (!released) client.release(committed ? undefined : true);
     }
+  }
+}
+
+async function connectBefore(
+  pool: Pick<Pool, 'connect'>,
+  deadline: number,
+  now: () => number,
+): Promise<PoolClient> {
+  const remaining = deadline - now();
+  if (remaining <= 0) throw new BootstrapDeadlineExceeded();
+  let timedOut = false;
+  let timer: NodeJS.Timeout | undefined;
+  const connecting = pool.connect();
+  connecting.then((client) => {
+    if (timedOut) client.release();
+  }).catch(() => undefined);
+  try {
+    return await Promise.race([
+      connecting,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new BootstrapDeadlineExceeded());
+        }, remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function queryBefore<Row extends QueryResultRow = QueryResultRow>(
+  client: Pick<PoolClient, 'query'>,
+  text: string,
+  values: readonly unknown[],
+  deadline: number,
+  now: () => number,
+): Promise<import('pg').QueryResult<Row>> {
+  const remaining = deadline - now();
+  if (remaining <= 0) throw new BootstrapDeadlineExceeded();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      client.query<Row>(text, [...values]),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new ActiveBootstrapQueryDeadlineExceeded()), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function rollbackBefore(
+  client: PoolClient,
+  deadline: number,
+  now: () => number,
+): Promise<boolean> {
+  const remaining = deadline - now();
+  if (remaining <= 0) return false;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      client.query('ROLLBACK'),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new BootstrapDeadlineExceeded()), remaining);
+      }),
+    ]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -313,7 +401,7 @@ async function commitBefore(
   now: () => number,
 ): Promise<void> {
   const remaining = deadline - now();
-  if (remaining <= 0) throw new Error('Bootstrap database deadline exceeded.');
+  if (remaining <= 0) throw new BootstrapDeadlineExceeded();
   let timer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([
@@ -348,6 +436,16 @@ function idempotencyReused(): FinancialError {
   });
 }
 
+function operationTimeout(cause: unknown): FinancialError {
+  return new FinancialError({
+    code: 'FINANCIAL_OPERATION_TIMEOUT',
+    statusCode: 503,
+    safeMessage: 'The financial operation timed out. Retry safely with the same idempotency key.',
+    retryAfterSeconds: 1,
+    cause,
+  });
+}
+
 function databaseUnavailable(cause: unknown): FinancialError {
   return new FinancialError({
     code: 'FIN_DATABASE_UNAVAILABLE',
@@ -362,6 +460,20 @@ function sqlstateOf(error: unknown): string | null {
   if (!error || typeof error !== 'object' || !('code' in error)) return null;
   const code = (error as { code?: unknown }).code;
   return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? code : null;
+}
+
+class BootstrapDeadlineExceeded extends Error {
+  constructor() {
+    super('Bootstrap database deadline exceeded.');
+    this.name = 'BootstrapDeadlineExceeded';
+  }
+}
+
+class ActiveBootstrapQueryDeadlineExceeded extends BootstrapDeadlineExceeded {
+  constructor() {
+    super();
+    this.name = 'ActiveBootstrapQueryDeadlineExceeded';
+  }
 }
 
 class BootstrapCommitUnknown extends Error {

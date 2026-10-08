@@ -1,6 +1,6 @@
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { digestCanonicalRequest } from '../src/canonical.js';
+import { digestCanonicalRequest, signCanonicalPayload, verifyCanonicalPayload } from '../src/canonical.js';
 import {
   FinancialAccountBootstrapService,
   PostgresUserRepository,
@@ -12,6 +12,8 @@ type FakeClient = PoolClient & { readonly queryMock: ReturnType<typeof vi.fn> };
 
 interface ClientOptions {
   readonly commitUnknown?: boolean;
+  readonly failAccountInsert?: boolean;
+  readonly hangingRollback?: boolean;
   readonly stored?: {
     readonly accountId: string;
     readonly snapshotId: string;
@@ -24,6 +26,10 @@ function client(name: string, events: string[], options: ClientOptions = {}): Fa
     const normalized = text.replace(/\s+/g, ' ').trim();
     events.push(`${name}:query:${normalized}`);
     if (normalized === 'COMMIT' && options.commitUnknown) throw new Error('socket closed');
+    if (normalized === 'ROLLBACK' && options.hangingRollback) return new Promise(() => undefined);
+    if (normalized.includes('INSERT INTO financial_accounts') && options.failAccountInsert) {
+      throw Object.assign(new Error('statement timeout'), { code: '57014' });
+    }
     if (normalized.includes('FROM users') && normalized.includes('FOR UPDATE')) {
       return result([{ id: USER_ID, timezone: 'Asia/Ho_Chi_Minh', base_currency: 'VND' }]);
     }
@@ -62,6 +68,17 @@ function pool(clients: PoolClient[]) {
 function result<Row extends QueryResultRow>(rows: Row[], rowCount = rows.length): QueryResult<Row> {
   return { command: '', rowCount, oid: 0, fields: [], rows };
 }
+
+describe('authoritative preview provenance', () => {
+  it('accepts only an HMAC produced by the configured server key', () => {
+    const payload = { sourceTransactionId: 'source', consequence: { deltaMinor: '100' } };
+    const trustedKey = 'ab'.repeat(32);
+    const signature = signCanonicalPayload(payload, trustedKey);
+    expect(verifyCanonicalPayload(payload, signature, trustedKey)).toBe(true);
+    expect(verifyCanonicalPayload(payload, signature, 'cd'.repeat(32))).toBe(false);
+    expect(digestCanonicalRequest(payload)).not.toBe(signature);
+  });
+});
 
 describe('user persistence validation', () => {
   it('rejects invalid owner context before querying PostgreSQL', async () => {
@@ -106,6 +123,36 @@ describe('financial account bootstrap', () => {
     ));
     expect(parameters).not.toContain('raw-bootstrap-key');
     expect(events.at(-1)).toBe('bootstrap:release:clean');
+  });
+
+  it('bounds rollback cleanup and evicts when idle acknowledgement never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const events: string[] = [];
+      const connection = client('stuck-rollback', events, {
+        failAccountInsert: true,
+        hangingRollback: true,
+      });
+      const fakePool = pool([connection]);
+      const service = new FinancialAccountBootstrapService(
+        fakePool as unknown as Pick<Pool, 'connect'>,
+        Date.now,
+      );
+      const assertion = expect(service.bootstrap({
+        ownerUserId: USER_ID,
+        openingAmountMinor: '100',
+        effectiveAt: new Date(Date.now() - 1_000),
+        idempotencyKey: 'bounded-cleanup-key',
+        correlationId: 'correlation',
+        idempotencyRetentionMs: 86_400_000,
+      })).rejects.toMatchObject({ code: 'FINANCIAL_OPERATION_TIMEOUT' });
+      await vi.advanceTimersByTimeAsync(8_001);
+      await assertion;
+      expect(events).toContain('stuck-rollback:query:ROLLBACK');
+      expect(events.at(-1)).toBe('stuck-rollback:release:destroy');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('performs one same-key recovery after an uncertain bootstrap commit', async () => {

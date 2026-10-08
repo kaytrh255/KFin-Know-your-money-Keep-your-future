@@ -9,6 +9,8 @@ import {
   type CorrectionPreviewView,
 } from '../src/index.js';
 
+const PREVIEW_SIGNING_KEY = 'ab'.repeat(32);
+
 const integrationEnabled = Boolean(
   process.env.TEST_DATABASE_URL
   && process.env.KFIN_INTEGRATION_TARGET === 'non-production',
@@ -72,7 +74,7 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
     });
     return {
       ownerId: user.id,
-      repository: new PostgresFinancialRepository(database, RETENTION_MS, () => NOW),
+      repository: new PostgresFinancialRepository(database, RETENTION_MS, PREVIEW_SIGNING_KEY, () => NOW),
       snapshotId: foundation.snapshotId,
     };
   }
@@ -151,8 +153,31 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
       key,
       randomUUID(),
     );
-    expect(corrected).toMatchObject({ sourceTransactionId: created.transactionId, financialStateVersion: '3' });
+    expect(corrected).toMatchObject({
+      sourceTransactionId: created.transactionId,
+      financialStateVersion: '3',
+      consequence: {
+        currentBalance: preview.currentBalance,
+        reports: preview.reports,
+        owningDomain: { type: 'none', scheduleOccurrenceId: null, scheduleOccurrenceVersion: null },
+      },
+    });
     expect((await target.repository.getCurrentBalance(target.ownerId)).currentBalanceMinor).toBe('750000');
+
+    const firstHistoryPage = await target.repository.getTransactionCorrectionHistory(
+      target.ownerId,
+      corrected.replacementTransactionId!,
+      { limit: 1 },
+    );
+    expect(firstHistoryPage.items).toHaveLength(1);
+    expect(firstHistoryPage.nextCursor).not.toBeNull();
+    const secondHistoryPage = await target.repository.getTransactionCorrectionHistory(
+      target.ownerId,
+      corrected.replacementTransactionId!,
+      { limit: 1, cursor: firstHistoryPage.nextCursor! },
+    );
+    expect(secondHistoryPage.items).toHaveLength(1);
+    expect(secondHistoryPage.nextCursor).toBeNull();
 
     const history = await target.repository.getTransactionCorrectionHistory(
       target.ownerId,
@@ -199,12 +224,10 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
       WHERE user_id = $1 AND operation = 'financial.transaction.correct'
     `, [target.ownerId]);
     expect(receipt.rows).toHaveLength(1);
-    expect(receipt.rows[0]?.result).toEqual({
-      sourceTransactionId: created.transactionId,
-      replacementTransactionId: corrected.replacementTransactionId,
-      financialStateVersion: '3',
+    expect(receipt.rows[0]?.result).toEqual(corrected);
+    expect(receipt.rows[0]?.result).toMatchObject({
+      consequence: { currentBalance: preview.currentBalance, reports: preview.reports },
     });
-    expect(JSON.stringify(receipt.rows[0]?.result)).not.toContain('250000');
   }, 30_000);
 
   it('FIN-COR-02/04: amends a closed segment and moves active reporting without changing current balance', async () => {
@@ -241,8 +264,30 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
     expect((await target.repository.getCurrentBalance(target.ownerId))).toMatchObject({
       currentBalanceMinor: '900000', financialStateVersion: '4', snapshot: { id: nextSnapshot.snapshotId },
     });
-    expect((await target.repository.getMonthlyActuals(target.ownerId, '2026-08')).expenseMinor).toBe('0');
-    expect((await target.repository.getMonthlyActuals(target.ownerId, '2026-09')).expenseMinor).toBe('250000');
+    const sourceMonthReport = await target.repository.getMonthlyActuals(target.ownerId, '2026-08');
+    expect(sourceMonthReport.expenseMinor).toBe('0');
+    expect(sourceMonthReport.groups).toContainEqual(expect.objectContaining({
+      categoryCode: 'food',
+      balanceEffect: 'current',
+      amountMinor: '0',
+      transactionCount: 0,
+      amended: true,
+      drilldown: {
+        month: '2026-08', categoryCode: 'food', kind: 'expense', balanceEffect: 'current',
+      },
+    }));
+    const sourceGroup = sourceMonthReport.groups.find((group) => group.categoryCode === 'food');
+    expect(sourceGroup).toBeDefined();
+    const sourceDrilldown = await target.repository.listTransactions(target.ownerId, {
+      limit: 10,
+      ...sourceGroup!.drilldown,
+    });
+    expect(sourceDrilldown.items).toContainEqual(expect.objectContaining({
+      id: created.transactionId, status: 'voided', corrected: true,
+    }));
+    const destinationMonthReport = await target.repository.getMonthlyActuals(target.ownerId, '2026-09');
+    expect(destinationMonthReport.expenseMinor).toBe('250000');
+    expect(destinationMonthReport.groups).toContainEqual(expect.objectContaining({ amended: true }));
   }, 30_000);
 
   it('FIN-COR-03: corrects historical reporting with zero current-balance effect', async () => {
@@ -267,7 +312,42 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
       context: preview.context,
     }, randomUUID(), randomUUID());
     expect((await target.repository.getCurrentBalance(target.ownerId)).currentBalanceMinor).toBe('1000000');
-    expect((await target.repository.getMonthlyActuals(target.ownerId, '2026-10')).expenseMinor).toBe('250000');
+    const historicalReport = await target.repository.getMonthlyActuals(target.ownerId, '2026-10');
+    expect(historicalReport.expenseMinor).toBe('250000');
+    expect(historicalReport.groups).toContainEqual(expect.objectContaining({
+      balanceEffect: 'historical', amended: true,
+    }));
+  }, 30_000);
+
+  it('rejects a correction whose resulting directional aggregate exceeds bigint range', async () => {
+    const target = await fixture(new Date('2026-10-01T05:00:00.000Z'), '0');
+    const source = await target.repository.createTransaction(target.ownerId, {
+      kind: 'income', amountMinor: '9223372036854775806', occurredOn: '2026-10-10',
+      categoryCode: 'income_other', isUnexpected: false,
+      expectedFinancialStateVersion: '1', reviewedLatestSnapshotId: target.snapshotId,
+    }, randomUUID(), randomUUID());
+    await target.repository.createTransaction(target.ownerId, {
+      kind: 'income', amountMinor: '1', occurredOn: '2026-10-10',
+      categoryCode: 'income_other', isUnexpected: false,
+      expectedFinancialStateVersion: '2', reviewedLatestSnapshotId: target.snapshotId,
+    }, randomUUID(), randomUUID());
+    await target.repository.createTransaction(target.ownerId, {
+      kind: 'expense', amountMinor: '9223372036854775807', occurredOn: '2026-10-10',
+      categoryCode: 'food', expenseClass: 'daily', isUnexpected: false,
+      expectedFinancialStateVersion: '3', reviewedLatestSnapshotId: target.snapshotId,
+    }, randomUUID(), randomUUID());
+
+    await expect(target.repository.previewTransactionCorrection(target.ownerId, source.transactionId, {
+      reason: 'Attempt overflowing correction',
+      replacement: {
+        amountMinor: '9223372036854775807', occurredOn: '2026-10-10',
+        categoryCode: 'income_other', isUnexpected: false,
+      },
+    })).rejects.toMatchObject({ code: 'FINANCIAL_AMOUNT_OUT_OF_RANGE' });
+    expect((await target.repository.getCurrentBalance(target.ownerId))).toMatchObject({
+      financialStateVersion: '4', currentBalanceMinor: '0',
+    });
+    expect((await target.repository.getTransaction(target.ownerId, source.transactionId)).status).toBe('posted');
   }, 30_000);
 
   it('FIN-COR-05/06: rejects cross-anchor dates and reviewed authority tampering with no write', async () => {
@@ -307,9 +387,70 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
     }, randomUUID(), randomUUID())).rejects.toMatchObject({
       code: 'FIN_CORRECTION_INVALID_TRANSITION',
     });
+    const untrustedRepository = new PostgresFinancialRepository(
+      database,
+      RETENTION_MS,
+      'cd'.repeat(32),
+      () => NOW,
+    );
+    await expect(untrustedRepository.correctTransaction(
+      target.ownerId,
+      created.transactionId,
+      reviewedInput,
+      randomUUID(),
+      randomUUID(),
+    )).rejects.toMatchObject({ code: 'FIN_CORRECTION_INVALID_TRANSITION' });
     const source = await target.repository.getTransaction(target.ownerId, created.transactionId);
     expect(source).toMatchObject({ status: 'posted', version: '1' });
     expect((await target.repository.getCurrentBalance(target.ownerId)).financialStateVersion).toBe('3');
+  }, 30_000);
+
+  it('uses current user timezone/version authority for preview commit and new snapshots', async () => {
+    const target = await fixture();
+    const created = await createExpense(target, { amountMinor: '1000', occurredOn: '2026-10-10' });
+    const preview = await previewAmount(target, created.transactionId, '900', '2026-10-10');
+
+    await database.query(`
+      UPDATE users
+      SET timezone = 'America/Los_Angeles', version = version + 1,
+          updated_at = clock_timestamp()
+      WHERE id = $1
+    `, [target.ownerId]);
+
+    await expect(target.repository.correctTransaction(target.ownerId, created.transactionId, {
+      reason: 'Correct entered financial fact',
+      replacement: {
+        amountMinor: '900', occurredOn: '2026-10-10', categoryCode: 'food',
+        expenseClass: 'daily', isUnexpected: false,
+      },
+      context: preview.context,
+    }, randomUUID(), randomUUID())).rejects.toMatchObject({ code: 'FIN_CORRECTION_STALE_STATE' });
+
+    await expect(target.repository.createTransaction(target.ownerId, {
+      kind: 'expense',
+      amountMinor: '1',
+      occurredOn: '2026-10-15',
+      categoryCode: 'food',
+      expenseClass: 'daily',
+      isUnexpected: false,
+      expectedFinancialStateVersion: '2',
+      reviewedLatestSnapshotId: target.snapshotId,
+    }, randomUUID(), randomUUID())).rejects.toMatchObject({ code: 'FINANCIAL_VALIDATION_FAILED' });
+
+    const snapshot = await target.repository.createSnapshot(target.ownerId, {
+      amountMinor: '999000',
+      effectiveAt: '2026-10-15T04:30:00.000Z',
+      expectedFinancialStateVersion: '2',
+      reviewedLatestSnapshotId: target.snapshotId,
+    }, randomUUID(), randomUUID());
+    const persisted = await database.query<{ timezone: string; effective_local_date: string }>(`
+      SELECT timezone, effective_local_date::text AS effective_local_date
+      FROM balance_snapshots WHERE id = $1
+    `, [snapshot.snapshotId]);
+    expect(persisted.rows[0]).toEqual({
+      timezone: 'America/Los_Angeles',
+      effective_local_date: '2026-10-14',
+    });
   }, 30_000);
 
   it('FIN-COR-07: standalone void reverses a latest effect exactly once and replays', async () => {
@@ -335,6 +476,11 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
       sourceTransactionId: created.transactionId,
       replacementTransactionId: null,
       financialStateVersion: '3',
+      consequence: {
+        currentBalance: preview.currentBalance,
+        reports: preview.reports,
+        owningDomain: { type: 'none', scheduleOccurrenceId: null, scheduleOccurrenceVersion: null },
+      },
     });
     expect((await target.repository.getCurrentBalance(target.ownerId)).currentBalanceMinor).toBe('1000000');
     await expect(target.repository.voidTransaction(

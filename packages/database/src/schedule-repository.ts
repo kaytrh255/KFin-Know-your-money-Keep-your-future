@@ -16,6 +16,7 @@ import {
   type OccurrenceState,
   type TransactionKind,
 } from '@kfin/domain';
+import { assertFinancialAggregateBounds } from './aggregate-bounds.js';
 import { digestCanonicalRequest } from './canonical.js';
 import {
   AccountFinancialSerializer,
@@ -213,7 +214,7 @@ export class PostgresScheduleRepository {
           category.id,
           expenseClass,
           dueOn,
-          latestSnapshot.timezone,
+          account.timezone,
         ]);
         await transaction.query(`
           INSERT INTO scheduled_occurrences (
@@ -270,8 +271,13 @@ export class PostgresScheduleRepository {
 
   async listOccurrences(
     ownerUserId: string,
-    options: { readonly state?: OccurrenceState; readonly kind?: TransactionKind; readonly limit: number },
-  ): Promise<{ readonly items: OccurrenceView[] }> {
+    options: {
+      readonly state?: OccurrenceState;
+      readonly kind?: TransactionKind;
+      readonly limit: number;
+      readonly cursor?: string;
+    },
+  ): Promise<{ readonly items: OccurrenceView[]; readonly nextCursor: string | null }> {
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100) {
       throw validationError('Occurrence page limit must be between 1 and 100.');
     }
@@ -285,14 +291,25 @@ export class PostgresScheduleRepository {
       values.push(options.kind);
       filters.push(`occurrence.transaction_kind = $${values.length}`);
     }
-    values.push(options.limit);
+    const cursor = options.cursor ? decodeOccurrenceCursor(options.cursor) : null;
+    if (cursor) {
+      values.push(cursor.dueOn, cursor.id);
+      filters.push(`(occurrence.due_on, occurrence.id) > ($${values.length - 1}::date, $${values.length}::uuid)`);
+    }
+    values.push(options.limit + 1);
     const result = await this.pool.query<OccurrenceRow>(`${occurrenceSelect}
       WHERE occurrence.user_id = $1
       ${filters.length === 0 ? '' : `AND ${filters.join(' AND ')}`}
       ORDER BY occurrence.due_on ASC, occurrence.id ASC
       LIMIT $${values.length}
     `, values);
-    return { items: result.rows.map((row) => this.mapOccurrence(row)) };
+    const hasMore = result.rows.length > options.limit;
+    const rows = result.rows.slice(0, options.limit);
+    const last = rows.at(-1);
+    return {
+      items: rows.map((row) => this.mapOccurrence(row)),
+      nextCursor: hasMore && last ? encodeOccurrenceCursor(last.due_on, last.id) : null,
+    };
   }
 
   async confirmOccurrence(
@@ -337,7 +354,7 @@ export class PostgresScheduleRepository {
         const classification = classifyTransaction({
           occurredOn,
           snapshotEffectiveLocalDate: latestSnapshot.effectiveLocalDate,
-          currentLocalDate: localDateAt(this.now(), latestSnapshot.timezone),
+          currentLocalDate: localDateAt(this.now(), account.timezone),
           ...(input.alreadyIncludedInSnapshot === undefined
             ? {}
             : { alreadyIncludedInSnapshot: input.alreadyIncludedInSnapshot }),
@@ -373,6 +390,12 @@ export class PostgresScheduleRepository {
             AND state = 'scheduled' AND version = $5
         `, [ownerUserId, accountId, occurrenceId, transactionId, occurrence.version]);
         if (updated.rowCount !== 1) throw new StableIdempotentFinancialError(occurrenceStaleError());
+        await assertFinancialAggregateBounds(
+          transaction,
+          ownerUserId,
+          accountId,
+          [occurredOn.slice(0, 7)],
+        );
         const occurrenceVersion = (parseDatabaseBigint(occurrence.version) + 1n).toString();
         return {
           value: {
@@ -595,6 +618,26 @@ function occurrenceStaleError(): FinancialError {
 
 function directionOf(kind: TransactionKind): OccurrenceDirection {
   return kind === 'income' ? 'incoming' : 'outgoing';
+}
+
+function encodeOccurrenceCursor(dueOn: string, id: string): string {
+  return Buffer.from(JSON.stringify({ dueOn, id }), 'utf8').toString('base64url');
+}
+
+function decodeOccurrenceCursor(value: string): { readonly dueOn: string; readonly id: string } {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+    if (!parsed || typeof parsed !== 'object') throw new Error('invalid cursor');
+    const candidate = parsed as Record<string, unknown>;
+    if (
+      typeof candidate.dueOn !== 'string'
+      || typeof candidate.id !== 'string'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate.id)
+    ) throw new Error('invalid cursor');
+    return { dueOn: assertLocalDate(candidate.dueOn), id: candidate.id };
+  } catch {
+    throw validationError('Occurrence cursor is invalid.');
+  }
 }
 
 function nullableIso(value: Date | string | null): string | null {

@@ -6,6 +6,11 @@ const scheduleMigrationUrl = new URL(
   '../migrations/0002_one_off_schedule_occurrences.sql',
   import.meta.url,
 );
+const aggregateMigrationUrl = new URL(
+  '../migrations/0003_financial_aggregate_bounds.sql',
+  import.meta.url,
+);
+const correctionSourceUrl = new URL('../src/transaction-corrections.ts', import.meta.url);
 
 describe('reviewed financial foundation migration', () => {
   it('defines owner/currency/snapshot composite integrity and one account per user', async () => {
@@ -70,5 +75,27 @@ describe('one-off schedule occurrence migration', () => {
     expect(sql).toContain("confirmation_policy TEXT NOT NULL DEFAULT 'explicit'");
     expect(sql).toContain('scheduled occurrence authority fields are immutable');
     expect(sql).toContain('terminal scheduled occurrence state is immutable');
+  });
+});
+
+
+describe('financial remediation invariants', () => {
+  it('defers database aggregate-range validation until each transaction reaches its final state', async () => {
+    const sql = await readFile(aggregateMigrationUrl, 'utf8');
+    expect(sql).toContain('DEFERRABLE INITIALLY DEFERRED');
+    expect(sql).toContain('current_balance > 9223372036854775807');
+    expect(sql).toContain('monthly_income - monthly_expense');
+    expect(sql).toContain("ERRCODE = '22003'");
+  });
+
+  it('does not acquire a second source-snapshot lock after locking the correction transaction', async () => {
+    const source = await readFile(correctionSourceUrl, 'utf8');
+    const correctionLock = source.slice(
+      source.indexOf('async function lockCorrectionSource'),
+      source.indexOf('function validateReviewedSource'),
+    );
+    expect(correctionLock).toContain('FOR UPDATE OF txn');
+    expect(correctionLock).not.toContain('FOR UPDATE OF source_snapshot');
+    expect(correctionLock).not.toMatch(/SELECT id\s+FROM balance_snapshots/);
   });
 });

@@ -11,6 +11,7 @@ const runtime = createDatabaseRuntime(config.database);
 const financialService = new PostgresFinancialRepository(
   runtime.pool,
   config.idempotencyRetentionMs,
+  config.financialPreviewSigningKey,
 );
 const scheduleService = new PostgresScheduleRepository(
   runtime.pool,

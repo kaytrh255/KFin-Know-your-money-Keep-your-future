@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   createOneOffScheduleBodySchema,
+  occurrenceListQuerySchema,
+  occurrenceListResponseSchema,
   occurrenceSchema,
   occurrenceStateSchema,
 } from '../src/index.js';
@@ -76,4 +78,13 @@ describe('schedule contracts', () => {
     expect(parsed.state).toBe('confirmed');
     expect(parsed.presentation).toBe('paid');
   });
+
+  it('requires bounded occurrence pages and exposes continuation cursors', () => {
+    expect(occurrenceListQuerySchema.parse({ limit: '2', cursor: 'opaque-next' }))
+      .toMatchObject({ limit: 2, cursor: 'opaque-next' });
+    expect(occurrenceListQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
+    expect(occurrenceListResponseSchema.safeParse({ items: [], nextCursor: null }).success).toBe(true);
+    expect(occurrenceListResponseSchema.safeParse({ items: [] }).success).toBe(false);
+  });
+
 });

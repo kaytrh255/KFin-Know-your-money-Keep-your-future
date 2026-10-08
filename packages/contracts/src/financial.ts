@@ -7,6 +7,7 @@ import {
   positiveVersionSchema,
   signedMinorSchema,
   uuidSchema,
+  yearMonthSchema,
 } from './common.js';
 
 export const transactionKindSchema = z.enum(['income', 'expense']);
@@ -118,6 +119,8 @@ export const correctionReviewContextSchema = z.strictObject({
   reviewedSourceAlreadyIncludedInSnapshot: z.boolean(),
   reviewedSourceKind: transactionKindSchema,
   reviewedSourceCurrency: z.string().regex(/^[A-Z]{3}$/),
+  reviewedUserTimezone: z.string().min(1).max(255),
+  reviewedUserVersion: positiveVersionSchema,
   reviewedOwningDomain: correctionOwningDomainReviewSchema,
   reviewedPreviewDigest: z.string().regex(/^[0-9a-f]{64}$/),
 });
@@ -147,7 +150,7 @@ const correctionSourceFactSchema = correctionReplacementFactSchema.extend({
 });
 
 const reportImpactSchema = z.strictObject({
-  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  month: yearMonthSchema,
   categoryCode: z.string(),
   kind: transactionKindSchema,
 });
@@ -189,14 +192,31 @@ export const correctionCommitResponseSchema = z.strictObject({
   sourceTransactionId: uuidSchema,
   replacementTransactionId: uuidSchema.nullable(),
   financialStateVersion: positiveVersionSchema,
+  consequence: z.strictObject({
+    currentBalance: z.strictObject({
+      beforeMinor: signedMinorSchema,
+      deltaMinor: signedMinorSchema,
+      afterMinor: signedMinorSchema,
+      changes: z.boolean(),
+    }),
+    reports: z.strictObject({
+      removed: reportImpactSchema,
+      added: reportImpactSchema.nullable(),
+    }),
+    owningDomain: z.strictObject({
+      type: z.enum(['none', 'schedule']),
+      scheduleOccurrenceId: uuidSchema.nullable(),
+      scheduleOccurrenceVersion: positiveVersionSchema.nullable(),
+    }),
+  }),
 });
 
 export const monthlyActualsQuerySchema = z.strictObject({
-  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  month: yearMonthSchema,
 });
 
 export const monthlyActualsResponseSchema = z.strictObject({
-  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/),
+  month: yearMonthSchema,
   currency: z.string().regex(/^[A-Z]{3}$/),
   incomeMinor: signedMinorSchema,
   expenseMinor: signedMinorSchema,
@@ -204,9 +224,16 @@ export const monthlyActualsResponseSchema = z.strictObject({
   groups: z.array(z.strictObject({
     categoryCode: z.string(),
     kind: transactionKindSchema,
+    balanceEffect: balanceEffectSchema,
     amountMinor: signedMinorSchema,
     transactionCount: z.number().int().nonnegative(),
     amended: z.boolean(),
+    drilldown: z.strictObject({
+      month: yearMonthSchema,
+      categoryCode: z.string(),
+      kind: transactionKindSchema,
+      balanceEffect: balanceEffectSchema,
+    }),
   })),
 });
 
@@ -214,13 +241,22 @@ export const transactionPathSchema = z.strictObject({ id: uuidSchema });
 export const transactionListQuerySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().min(1).max(512).optional(),
+  month: yearMonthSchema.optional(),
+  categoryCode: z.string().regex(/^[a-z][a-z0-9_]{1,62}$/).optional(),
+  kind: transactionKindSchema.optional(),
+  balanceEffect: balanceEffectSchema.optional(),
 });
 export const transactionListResponseSchema = z.strictObject({
   items: z.array(transactionSchema),
   nextCursor: z.string().nullable(),
 });
+export const transactionCorrectionHistoryQuerySchema = z.strictObject({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(512).optional(),
+});
 export const transactionCorrectionHistoryResponseSchema = z.strictObject({
-  items: z.array(transactionSchema).min(1),
+  items: z.array(transactionSchema),
+  nextCursor: z.string().nullable(),
 });
 
 export {
@@ -241,3 +277,4 @@ export type CurrentBalance = z.infer<typeof currentBalanceSchema>;
 export type MonthlyActuals = z.infer<typeof monthlyActualsResponseSchema>;
 export type Transaction = z.infer<typeof transactionSchema>;
 export type TransactionListQuery = z.infer<typeof transactionListQuerySchema>;
+export type TransactionCorrectionHistoryQuery = z.infer<typeof transactionCorrectionHistoryQuerySchema>;

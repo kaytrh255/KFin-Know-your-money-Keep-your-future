@@ -6,6 +6,7 @@ import {
   correctionCurrentBalanceDelta,
   FinancialError,
   localDateAt,
+  monthBounds,
   parseDatabaseBigint,
   parsePositiveMinor,
   unavailableError,
@@ -15,11 +16,16 @@ import {
   type ExpenseClass,
   type TransactionKind,
 } from '@kfin/domain';
-import { digestCanonicalRequest } from './canonical.js';
+import {
+  assertCorrectionAggregateProjection,
+  assertFinancialAggregateBounds,
+} from './aggregate-bounds.js';
+import { digestCanonicalRequest, signCanonicalPayload, verifyCanonicalPayload } from './canonical.js';
 import {
   AccountFinancialSerializer,
   StableIdempotentFinancialError,
   type BoundedTransaction,
+  type LockedAccount,
   type LockedSnapshot,
 } from './serialization.js';
 
@@ -41,6 +47,8 @@ export interface CorrectionReviewContext {
   readonly reviewedSourceAlreadyIncludedInSnapshot: boolean;
   readonly reviewedSourceKind: TransactionKind;
   readonly reviewedSourceCurrency: string;
+  readonly reviewedUserTimezone: string;
+  readonly reviewedUserVersion: string;
   readonly reviewedOwningDomain: {
     readonly type: 'none' | 'schedule';
     readonly scheduleOccurrenceId: string | null;
@@ -114,10 +122,21 @@ export interface CorrectionPreviewView {
   readonly context: CorrectionReviewContext;
 }
 
+export interface CorrectionConsequence {
+  readonly currentBalance: CorrectionPreviewView['currentBalance'];
+  readonly reports: CorrectionPreviewView['reports'];
+  readonly owningDomain: {
+    readonly type: 'none' | 'schedule';
+    readonly scheduleOccurrenceId: string | null;
+    readonly scheduleOccurrenceVersion: string | null;
+  };
+}
+
 export interface CorrectionCommitResult {
   readonly sourceTransactionId: string;
   readonly replacementTransactionId: string | null;
   readonly financialStateVersion: string;
+  readonly consequence: CorrectionConsequence;
 }
 
 export interface MonthlyActualsView {
@@ -129,9 +148,16 @@ export interface MonthlyActualsView {
   readonly groups: {
     readonly categoryCode: string;
     readonly kind: TransactionKind;
+    readonly balanceEffect: BalanceEffect;
     readonly amountMinor: string;
     readonly transactionCount: number;
     readonly amended: boolean;
+    readonly drilldown: {
+      readonly month: string;
+      readonly categoryCode: string;
+      readonly kind: TransactionKind;
+      readonly balanceEffect: BalanceEffect;
+    };
   }[];
 }
 
@@ -139,6 +165,12 @@ interface ReportImpact {
   readonly month: string;
   readonly categoryCode: string;
   readonly kind: TransactionKind;
+}
+
+interface PreviewProvenance {
+  readonly currentBalance: CorrectionPreviewView['currentBalance'];
+  readonly reports: CorrectionPreviewView['reports'];
+  readonly owningDomain: CorrectionPreviewView['owningDomain'];
 }
 
 interface SourceRow extends QueryResultRow {
@@ -173,6 +205,7 @@ interface PreviewSourceRow extends SourceRow {
   financial_state_version: string;
   current_balance_minor: string;
   current_timezone: string;
+  current_user_version: string;
 }
 
 interface CategoryRow extends QueryResultRow {
@@ -182,6 +215,7 @@ interface CategoryRow extends QueryResultRow {
 interface MonthlyRow extends QueryResultRow {
   category_code: string;
   kind: TransactionKind;
+  balance_effect: BalanceEffect;
   amount_minor: string;
   transaction_count: string;
   amended: boolean;
@@ -203,8 +237,12 @@ export class PostgresTransactionCorrectionService {
   constructor(
     private readonly pool: Pool,
     private readonly idempotencyRetentionMs: number,
+    private readonly previewSigningKey: string,
     private readonly now: () => Date = () => new Date(),
   ) {
+    if (!/^[a-fA-F0-9]{64}$/.test(previewSigningKey)) {
+      throw new Error('Financial preview signing key must be 32 bytes encoded as hexadecimal.');
+    }
     this.serializer = new AccountFinancialSerializer(pool, () => this.now().getTime());
   }
 
@@ -215,8 +253,21 @@ export class PostgresTransactionCorrectionService {
   ): Promise<CorrectionPreviewView> {
     const reason = assertReason(input.reason);
     const source = await this.loadPreviewSource(ownerUserId, sourceTransactionId);
-    const replacement = await this.resolveReplacement(this.pool, ownerUserId, source, input.replacement);
-    return buildPreview('correction', source, replacement, reason);
+    const replacement = await this.resolveReplacement(
+      this.pool,
+      ownerUserId,
+      source,
+      input.replacement,
+      undefined,
+      source.current_timezone,
+    );
+    await assertCorrectionAggregateProjection(
+      this.pool,
+      ownerUserId,
+      source.account_id,
+      aggregateProjection(source, source.latest_snapshot_id, replacement),
+    );
+    return buildPreview('correction', source, replacement, reason, this.previewSigningKey);
   }
 
   async previewVoid(
@@ -226,7 +277,13 @@ export class PostgresTransactionCorrectionService {
   ): Promise<CorrectionPreviewView> {
     const reason = assertReason(input.reason);
     const source = await this.loadPreviewSource(ownerUserId, sourceTransactionId);
-    return buildPreview('void', source, null, reason);
+    await assertCorrectionAggregateProjection(
+      this.pool,
+      ownerUserId,
+      source.account_id,
+      aggregateProjection(source, source.latest_snapshot_id, null),
+    );
+    return buildPreview('void', source, null, reason, this.previewSigningKey);
   }
 
   async correct(
@@ -265,13 +322,27 @@ export class PostgresTransactionCorrectionService {
           accountId,
           sourceTransactionId,
         );
-        validateReviewedSource(source, input.context);
+        validateReviewedSource(source, input.context, account);
         const replacement = await this.resolveReplacement(
           transaction,
           ownerUserId,
           source,
           input.replacement,
           latestSnapshot,
+          account.timezone,
+        );
+        const aggregateBefore = await assertCorrectionAggregateProjection(
+          transaction,
+          ownerUserId,
+          accountId,
+          aggregateProjection(source, latestSnapshot.id, replacement),
+        );
+        const provenance = buildPreviewProvenance(
+          'correction',
+          source,
+          replacement,
+          aggregateBefore.balance,
+          latestSnapshot.id,
         );
         assertPreviewDigest(
           'correction',
@@ -279,7 +350,10 @@ export class PostgresTransactionCorrectionService {
           reason,
           replacement,
           input.context,
+          provenance,
+          this.previewSigningKey,
         );
+        const consequence = buildConsequence(source, provenance);
 
         await transaction.query(`
           INSERT INTO transactions (
@@ -306,12 +380,17 @@ export class PostgresTransactionCorrectionService {
         ]);
         await transferScheduleClaim(transaction, source, replacementTransactionId);
         await voidSource(transaction, source, reason);
+        await assertFinancialAggregateBounds(transaction, ownerUserId, accountId, [
+          source.occurred_on.slice(0, 7),
+          replacement.occurredOn.slice(0, 7),
+        ]);
 
         return {
           value: {
             sourceTransactionId: source.id,
             replacementTransactionId,
             financialStateVersion: committedFinancialStateVersion.toString(),
+            consequence,
           },
           audit: {
             action: 'financial.transaction.correct',
@@ -327,6 +406,7 @@ export class PostgresTransactionCorrectionService {
       sourceTransactionId: String(result.value.sourceTransactionId),
       replacementTransactionId: String(result.value.replacementTransactionId),
       financialStateVersion: result.financialStateVersion.toString(),
+      consequence: result.value.consequence as unknown as CorrectionConsequence,
     };
   }
 
@@ -357,25 +437,54 @@ export class PostgresTransactionCorrectionService {
       successStatus: 200,
       correlationId,
       idempotencyRetentionMs: this.idempotencyRetentionMs,
-      work: async ({ transaction, latestSnapshot, committedFinancialStateVersion }) => {
+      work: async ({ transaction, account, latestSnapshot, committedFinancialStateVersion }) => {
         const source = await lockCorrectionSource(
           transaction,
           ownerUserId,
           accountId,
           sourceTransactionId,
         );
-        validateReviewedSource(source, input.context);
-        assertPreviewDigest('void', source.id, reason, null, input.context);
+        validateReviewedSource(source, input.context, account);
+        const aggregateBefore = await assertCorrectionAggregateProjection(
+          transaction,
+          ownerUserId,
+          accountId,
+          aggregateProjection(source, latestSnapshot.id, null),
+        );
+        const provenance = buildPreviewProvenance(
+          'void',
+          source,
+          null,
+          aggregateBefore.balance,
+          latestSnapshot.id,
+        );
+        assertPreviewDigest(
+          'void',
+          source.id,
+          reason,
+          null,
+          input.context,
+          provenance,
+          this.previewSigningKey,
+        );
+        const consequence = buildConsequence(source, provenance);
         if (source.schedule_occurrence_id !== null) {
           throw new StableIdempotentFinancialError(linkedDomainRequiredError());
         }
         await voidSource(transaction, source, reason);
+        await assertFinancialAggregateBounds(
+          transaction,
+          ownerUserId,
+          accountId,
+          [source.occurred_on.slice(0, 7)],
+        );
 
         return {
           value: {
             sourceTransactionId: source.id,
             replacementTransactionId: null,
             financialStateVersion: committedFinancialStateVersion.toString(),
+            consequence,
           },
           audit: {
             action: 'financial.transaction.void',
@@ -397,6 +506,7 @@ export class PostgresTransactionCorrectionService {
       sourceTransactionId: String(result.value.sourceTransactionId),
       replacementTransactionId: null,
       financialStateVersion: result.financialStateVersion.toString(),
+      consequence: result.value.consequence as unknown as CorrectionConsequence,
     };
   }
 
@@ -410,18 +520,26 @@ export class PostgresTransactionCorrectionService {
     if (!accountRow) throw unavailableError();
 
     const result = await this.pool.query<MonthlyRow>(`
-      SELECT category.code AS category_code, txn.kind,
-             SUM(txn.amount_minor)::numeric AS amount_minor,
-             COUNT(*)::text AS transaction_count,
-             BOOL_OR(txn.supersedes_transaction_id IS NOT NULL) AS amended
+      SELECT category.code AS category_code, txn.kind, txn.balance_effect,
+             COALESCE(SUM(txn.amount_minor) FILTER (WHERE txn.status = 'posted'), 0)::numeric AS amount_minor,
+             COUNT(*) FILTER (WHERE txn.status = 'posted')::text AS transaction_count,
+             BOOL_OR(
+               txn.status = 'voided'
+               OR txn.supersedes_transaction_id IS NOT NULL
+               OR successor.id IS NOT NULL
+             ) AS amended
       FROM transactions AS txn
       JOIN categories AS category ON category.id = txn.category_id
+      LEFT JOIN transactions AS successor
+        ON successor.user_id = txn.user_id
+       AND successor.account_id = txn.account_id
+       AND successor.supersedes_transaction_id = txn.id
       WHERE txn.user_id = $1
-        AND txn.status = 'posted'
+        AND txn.status IN ('posted', 'voided')
         AND txn.occurred_on >= $2::date
         AND txn.occurred_on < $3::date
-      GROUP BY category.code, txn.kind
-      ORDER BY txn.kind, category.code
+      GROUP BY category.code, txn.kind, txn.balance_effect
+      ORDER BY txn.kind, category.code, txn.balance_effect
     `, [ownerUserId, start, end]);
 
     let income = 0n;
@@ -433,9 +551,16 @@ export class PostgresTransactionCorrectionService {
       return {
         categoryCode: row.category_code,
         kind: row.kind,
+        balanceEffect: row.balance_effect,
         amountMinor: amount.toString(),
         transactionCount: Number.parseInt(row.transaction_count, 10),
         amended: row.amended,
+        drilldown: {
+          month,
+          categoryCode: row.category_code,
+          kind: row.kind,
+          balanceEffect: row.balance_effect,
+        },
       };
     });
     const net = assertMoneyRange(income - expense);
@@ -470,7 +595,7 @@ export class PostgresTransactionCorrectionService {
              current_balance.snapshot_id AS latest_snapshot_id,
              current_balance.financial_state_version,
              current_balance.current_balance_minor,
-             owner.timezone AS current_timezone
+             owner.timezone AS current_timezone, owner.version AS current_user_version
       FROM transactions AS txn
       JOIN categories AS category ON category.id = txn.category_id
       JOIN balance_snapshots AS source_snapshot
@@ -511,7 +636,8 @@ export class PostgresTransactionCorrectionService {
     ownerUserId: string,
     source: SourceRow,
     input: CorrectionReplacementInput,
-    latestSnapshot?: LockedSnapshot,
+    latestSnapshot: LockedSnapshot | undefined,
+    currentTimezone: string,
   ): Promise<ReplacementFacts> {
     const amountMinor = parsePositiveMinor(input.amountMinor);
     const expenseClass = validateTransactionClassification({
@@ -529,12 +655,7 @@ export class PostgresTransactionCorrectionService {
       latestSnapshotId: latestSnapshot?.id ?? (source as PreviewSourceRow).latest_snapshot_id,
       snapshotEffectiveLocalDate: source.snapshot_effective_local_date,
       nextSnapshotEffectiveLocalDate: source.next_snapshot_effective_local_date,
-      currentLocalDate: localDateAt(
-        this.now(),
-        latestSnapshot?.timezone
-          ?? (source as PreviewSourceRow).current_timezone
-          ?? source.snapshot_timezone,
-      ),
+      currentLocalDate: localDateAt(this.now(), currentTimezone),
     }, input.occurredOn);
     const categorySql = `
       SELECT id
@@ -582,21 +703,6 @@ async function lockCorrectionSource(
   accountId: string,
   sourceTransactionId: string,
 ): Promise<SourceRow> {
-  const reference = await transaction.query<{ balance_snapshot_id: string }>(`
-    SELECT balance_snapshot_id
-    FROM transactions
-    WHERE user_id = $1 AND account_id = $2 AND id = $3
-  `, [ownerUserId, accountId, sourceTransactionId]);
-  const sourceReference = reference.rows[0];
-  if (!sourceReference) throw unavailableError();
-
-  await transaction.query(`
-    SELECT id
-    FROM balance_snapshots
-    WHERE user_id = $1 AND account_id = $2 AND id = $3
-    FOR UPDATE
-  `, [ownerUserId, accountId, sourceReference.balance_snapshot_id]);
-
   const result = await transaction.query<SourceRow>(`
     SELECT txn.id, txn.user_id, txn.account_id, txn.balance_snapshot_id,
            txn.kind, txn.amount_minor, txn.currency,
@@ -636,8 +742,9 @@ async function lockCorrectionSource(
   const source = result.rows[0];
   if (!source) throw unavailableError();
 
-  // Account, snapshot, and transaction are already locked. Owning-domain rows follow
-  // in the global lock order; future debt/purchase families must be appended after this.
+  // The serializer locked account then latest snapshot; this function locks the
+  // transaction next. Immutable source snapshots are read without another row lock,
+  // then owning-domain rows follow in the global order.
   const scheduleClaim = await transaction.query<{ id: string; version: string }>(`
     SELECT id, version
     FROM scheduled_occurrences
@@ -650,7 +757,17 @@ async function lockCorrectionSource(
   return source;
 }
 
-function validateReviewedSource(source: SourceRow, context: CorrectionReviewContext): void {
+function validateReviewedSource(
+  source: SourceRow,
+  context: CorrectionReviewContext,
+  account: LockedAccount,
+): void {
+  if (
+    account.timezone !== context.reviewedUserTimezone
+    || account.userVersion.toString() !== context.reviewedUserVersion
+  ) {
+    throw new StableIdempotentFinancialError(correctionStaleError());
+  }
   if (
     source.status !== 'posted'
     || source.successor_id !== null
@@ -746,18 +863,17 @@ function buildPreview(
   source: PreviewSourceRow,
   replacement: ReplacementFacts | null,
   reason: string,
+  previewSigningKey: string,
 ): CorrectionPreviewView {
   const sourceAmount = parseDatabaseBigint(source.amount_minor);
-  const replacementAmount = replacement?.amountMinor ?? null;
   const before = assertMoneyRange(parseDatabaseBigint(source.current_balance_minor));
-  const delta = correctionCurrentBalanceDelta({
-    amountMinor: sourceAmount,
-    kind: source.kind,
-    balanceEffect: source.balance_effect,
-    balanceSnapshotId: source.balance_snapshot_id,
-    latestSnapshotId: source.latest_snapshot_id,
-  }, replacementAmount);
-  const after = applyCorrectionDelta(before, delta);
+  const provenance = buildPreviewProvenance(
+    operation,
+    source,
+    replacement,
+    before,
+    source.latest_snapshot_id,
+  );
   const sourceFact = {
     transactionId: source.id,
     amountMinor: sourceAmount.toString(),
@@ -776,6 +892,8 @@ function buildPreview(
     reviewedSourceAlreadyIncludedInSnapshot: source.already_included_in_snapshot,
     reviewedSourceKind: source.kind,
     reviewedSourceCurrency: source.currency.trim(),
+    reviewedUserTimezone: source.current_timezone,
+    reviewedUserVersion: parseDatabaseBigint(source.current_user_version).toString(),
     reviewedOwningDomain: {
       type: source.schedule_occurrence_id === null ? 'none' : 'schedule',
       scheduleOccurrenceId: source.schedule_occurrence_id,
@@ -803,6 +921,124 @@ function buildPreview(
       alreadyIncludedInSnapshot: source.already_included_in_snapshot,
       segment: source.balance_snapshot_id === source.latest_snapshot_id ? 'latest' : 'closed',
     },
+    currentBalance: provenance.currentBalance,
+    reports: provenance.reports,
+    owningDomain: provenance.owningDomain,
+    context: {
+      ...reviewedContext,
+      reviewedPreviewDigest: previewDigest(
+        operation,
+        source.id,
+        reason,
+        replacement,
+        reviewedContext,
+        provenance,
+        previewSigningKey,
+      ),
+    },
+  };
+}
+
+function assertPreviewDigest(
+  operation: 'correction' | 'void',
+  sourceTransactionId: string,
+  reason: string,
+  replacement: ReplacementFacts | null,
+  context: CorrectionReviewContext,
+  provenance: PreviewProvenance,
+  previewSigningKey: string,
+): void {
+  const { reviewedPreviewDigest, ...reviewedContext } = context;
+  if (!verifyCanonicalPayload(
+    previewPayload(operation, sourceTransactionId, reason, replacement, reviewedContext, provenance),
+    reviewedPreviewDigest,
+    previewSigningKey,
+  )) {
+    throw new FinancialError({
+      code: 'FIN_CORRECTION_INVALID_TRANSITION',
+      statusCode: 409,
+      safeMessage: 'The correction does not match the reviewed consequence preview.',
+    });
+  }
+}
+
+function previewDigest(
+  operation: 'correction' | 'void',
+  sourceTransactionId: string,
+  reason: string,
+  replacement: ReplacementFacts | null,
+  context: Omit<CorrectionReviewContext, 'reviewedPreviewDigest'>,
+  provenance: PreviewProvenance,
+  previewSigningKey: string,
+): string {
+  return signCanonicalPayload(
+    previewPayload(operation, sourceTransactionId, reason, replacement, context, provenance),
+    previewSigningKey,
+  );
+}
+
+function previewPayload(
+  operation: 'correction' | 'void',
+  sourceTransactionId: string,
+  reason: string,
+  replacement: ReplacementFacts | null,
+  context: Omit<CorrectionReviewContext, 'reviewedPreviewDigest'>,
+  provenance: PreviewProvenance,
+): Readonly<Record<string, unknown>> {
+  return {
+    operation,
+    sourceTransactionId,
+    reason,
+    replacement: replacement === null ? null : {
+      amountMinor: replacement.amountMinor,
+      occurredOn: replacement.occurredOn,
+      categoryCode: replacement.categoryCode,
+      expenseClass: replacement.expenseClass,
+      isUnexpected: replacement.isUnexpected,
+      note: replacement.note,
+    },
+    context,
+    consequence: provenance,
+  };
+}
+
+function aggregateProjection(
+  source: SourceRow,
+  latestSnapshotId: string,
+  replacement: ReplacementFacts | null,
+) {
+  return {
+    source: {
+      kind: source.kind,
+      amount: parseDatabaseBigint(source.amount_minor),
+      occurredOn: source.occurred_on,
+      balanceEffect: source.balance_effect,
+      balanceSnapshotId: source.balance_snapshot_id,
+    },
+    latestSnapshotId,
+    replacement: replacement === null ? null : {
+      amount: replacement.amountMinor,
+      occurredOn: replacement.occurredOn,
+    },
+  };
+}
+
+function buildPreviewProvenance(
+  operation: 'correction' | 'void',
+  source: SourceRow,
+  replacement: ReplacementFacts | null,
+  before: bigint,
+  latestSnapshotId: string,
+): PreviewProvenance {
+  const delta = correctionCurrentBalanceDelta({
+    amountMinor: parseDatabaseBigint(source.amount_minor),
+    kind: source.kind,
+    balanceEffect: source.balance_effect,
+    balanceSnapshotId: source.balance_snapshot_id,
+    latestSnapshotId,
+  }, replacement?.amountMinor ?? null);
+  const after = applyCorrectionDelta(before, delta);
+  return {
     currentBalance: {
       beforeMinor: before.toString(),
       deltaMinor: delta.toString(),
@@ -827,64 +1063,24 @@ function buildPreview(
         ? null
         : parseDatabaseBigint(source.schedule_occurrence_version).toString(),
     },
-    context: {
-      ...reviewedContext,
-      reviewedPreviewDigest: previewDigest(
-        operation,
-        source.id,
-        reason,
-        replacement,
-        reviewedContext,
-      ),
-    },
   };
 }
 
-function assertPreviewDigest(
-  operation: 'correction' | 'void',
-  sourceTransactionId: string,
-  reason: string,
-  replacement: ReplacementFacts | null,
-  context: CorrectionReviewContext,
-): void {
-  const { reviewedPreviewDigest, ...reviewedContext } = context;
-  const expected = previewDigest(
-    operation,
-    sourceTransactionId,
-    reason,
-    replacement,
-    reviewedContext,
-  );
-  if (reviewedPreviewDigest !== expected) {
-    throw new FinancialError({
-      code: 'FIN_CORRECTION_INVALID_TRANSITION',
-      statusCode: 409,
-      safeMessage: 'The correction does not match the reviewed consequence preview.',
-    });
-  }
-}
-
-function previewDigest(
-  operation: 'correction' | 'void',
-  sourceTransactionId: string,
-  reason: string,
-  replacement: ReplacementFacts | null,
-  context: Omit<CorrectionReviewContext, 'reviewedPreviewDigest'>,
-): string {
-  return digestCanonicalRequest({
-    operation,
-    sourceTransactionId,
-    reason,
-    replacement: replacement === null ? null : {
-      amountMinor: replacement.amountMinor,
-      occurredOn: replacement.occurredOn,
-      categoryCode: replacement.categoryCode,
-      expenseClass: replacement.expenseClass,
-      isUnexpected: replacement.isUnexpected,
-      note: replacement.note,
+function buildConsequence(
+  source: SourceRow,
+  provenance: PreviewProvenance,
+): CorrectionConsequence {
+  return {
+    currentBalance: provenance.currentBalance,
+    reports: provenance.reports,
+    owningDomain: {
+      type: source.schedule_occurrence_id === null ? 'none' : 'schedule',
+      scheduleOccurrenceId: source.schedule_occurrence_id,
+      scheduleOccurrenceVersion: source.schedule_occurrence_version === null
+        ? null
+        : (parseDatabaseBigint(source.schedule_occurrence_version) + 1n).toString(),
     },
-    context,
-  });
+  };
 }
 
 function correctionAuditMetadata(
@@ -959,24 +1155,6 @@ function assertReason(value: string): string {
 
 function reportImpact(occurredOn: string, categoryCode: string, kind: TransactionKind): ReportImpact {
   return { month: occurredOn.slice(0, 7), categoryCode, kind };
-}
-
-function monthBounds(month: string): { start: string; end: string } {
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
-    throw new FinancialError({
-      code: 'FINANCIAL_VALIDATION_FAILED',
-      statusCode: 400,
-      safeMessage: 'Report month must use YYYY-MM format.',
-    });
-  }
-  const [yearText, monthText] = month.split('-');
-  const year = Number(yearText);
-  const monthIndex = Number(monthText) - 1;
-  const next = new Date(Date.UTC(year, monthIndex + 1, 1));
-  return {
-    start: `${month}-01`,
-    end: `${String(next.getUTCFullYear()).padStart(4, '0')}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-01`,
-  };
 }
 
 function asDate(value: Date | string): Date {

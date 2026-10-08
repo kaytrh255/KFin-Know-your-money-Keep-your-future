@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 export function digestSecret(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -6,6 +6,21 @@ export function digestSecret(value: string): string {
 
 export function digestCanonicalRequest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
+}
+
+export function signCanonicalPayload(value: unknown, key: string | Buffer): string {
+  return createHmac('sha256', key).update(canonicalJson(value), 'utf8').digest('hex');
+}
+
+export function verifyCanonicalPayload(
+  value: unknown,
+  signature: string,
+  key: string | Buffer,
+): boolean {
+  if (!/^[a-f0-9]{64}$/.test(signature)) return false;
+  const expected = Buffer.from(signCanonicalPayload(value, key), 'hex');
+  const supplied = Buffer.from(signature, 'hex');
+  return supplied.length === expected.length && timingSafeEqual(supplied, expected);
 }
 
 export function canonicalJson(value: unknown): string {

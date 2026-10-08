@@ -63,10 +63,12 @@ export const occurrenceListQuerySchema = z.strictObject({
   state: occurrenceStateSchema.optional(),
   kind: transactionKindSchema.optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().min(1).max(512).optional(),
 });
 
 export const occurrenceListResponseSchema = z.strictObject({
   items: z.array(occurrenceSchema),
+  nextCursor: z.string().nullable(),
 });
 
 export const occurrencePathSchema = z.strictObject({ id: uuidSchema });

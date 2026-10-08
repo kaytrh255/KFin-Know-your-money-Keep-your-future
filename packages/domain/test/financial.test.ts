@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertLocalDate,
   calculateCurrentBalance,
   classifyTransaction,
   FinancialError,
+  monthBounds,
   parsePositiveMinor,
   parseSignedMinor,
   POSTGRES_BIGINT_MAXIMUM,
@@ -19,6 +21,16 @@ describe('integer money', () => {
     'rejects invalid positive minor units: %s',
     (value) => expect(() => parsePositiveMinor(value)).toThrow(FinancialError),
   );
+});
+
+describe('supported calendar years', () => {
+  it('handles years 0001-0099 without JavaScript Date remapping and rejects year 0000', () => {
+    expect(assertLocalDate('0001-01-31')).toBe('0001-01-31');
+    expect(monthBounds('0001-01')).toEqual({ start: '0001-01-01', end: '0001-02-01' });
+    expect(monthBounds('0099-12')).toEqual({ start: '0099-12-01', end: '0100-01-01' });
+    expect(() => assertLocalDate('0000-01-01')).toThrow(FinancialError);
+    expect(() => monthBounds('0000-01')).toThrow(FinancialError);
+  });
 });
 
 describe('snapshot-segment classification', () => {

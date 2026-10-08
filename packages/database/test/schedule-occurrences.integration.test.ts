@@ -9,6 +9,8 @@ import {
   PostgresUserRepository,
 } from '../src/index.js';
 
+const PREVIEW_SIGNING_KEY = 'ab'.repeat(32);
+
 const integrationEnabled = Boolean(
   process.env.TEST_DATABASE_URL
   && process.env.KFIN_INTEGRATION_TARGET === 'non-production',
@@ -77,7 +79,7 @@ integration('one-off schedule occurrences on real PostgreSQL', () => {
       snapshotId: foundation.snapshotId,
       accountId: foundation.accountId,
       schedule: new PostgresScheduleRepository(database, RETENTION_MS, now),
-      financial: new PostgresFinancialRepository(database, RETENTION_MS, now),
+      financial: new PostgresFinancialRepository(database, RETENTION_MS, PREVIEW_SIGNING_KEY, now),
       setNow: (value) => { currentNow = value; },
     };
   }
@@ -111,6 +113,22 @@ integration('one-off schedule occurrences on real PostgreSQL', () => {
       key,
       randomUUID(),
     )).resolves.toEqual(created);
+    await target.schedule.createOneOff(target.ownerId, {
+      ...expenseSchedule(target, '2'), title: 'Utilities', dueOn: '2026-10-16',
+    }, randomUUID(), randomUUID());
+    await target.schedule.createOneOff(target.ownerId, {
+      ...expenseSchedule(target, '3'), title: 'Insurance', dueOn: '2026-10-17',
+    }, randomUUID(), randomUUID());
+    const firstPage = await target.schedule.listOccurrences(target.ownerId, { limit: 2 });
+    expect(firstPage.items).toHaveLength(2);
+    expect(firstPage.nextCursor).not.toBeNull();
+    const secondPage = await target.schedule.listOccurrences(target.ownerId, {
+      limit: 2,
+      cursor: firstPage.nextCursor!,
+    });
+    expect(secondPage.items).toHaveLength(1);
+    expect(secondPage.nextCursor).toBeNull();
+    expect(new Set([...firstPage.items, ...secondPage.items].map((item) => item.id)).size).toBe(3);
 
     expect(await target.schedule.getOccurrence(target.ownerId, created.occurrenceId)).toMatchObject({
       state: 'scheduled', presentation: 'upcoming', direction: 'outgoing', version: '1',
@@ -122,7 +140,7 @@ integration('one-off schedule occurrences on real PostgreSQL', () => {
     expect(await target.schedule.getOccurrence(target.ownerId, created.occurrenceId)).toMatchObject({
       state: 'scheduled', presentation: 'overdue', version: '1',
     });
-    expect((await target.financial.getCurrentBalance(target.ownerId)).financialStateVersion).toBe('2');
+    expect((await target.financial.getCurrentBalance(target.ownerId)).financialStateVersion).toBe('4');
 
     const stored = await database.query<{ state: string; confirmed_transaction_id: string | null }>(`
       SELECT state, confirmed_transaction_id FROM scheduled_occurrences
@@ -191,11 +209,23 @@ integration('one-off schedule occurrences on real PostgreSQL', () => {
       scheduleOccurrenceId: created.occurrenceId,
       scheduleOccurrenceVersion: '2',
     });
+    const linkedVoidKey = randomUUID();
+    const linkedVoidInput = {
+      reason: 'Attempt to orphan schedule claim',
+      context: voidPreview.context,
+    };
     await expect(target.financial.voidTransaction(
       target.ownerId,
       confirmed.transactionId,
-      { reason: 'Attempt to orphan schedule claim', context: voidPreview.context },
+      linkedVoidInput,
+      linkedVoidKey,
       randomUUID(),
+    )).rejects.toMatchObject({ code: 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED' });
+    await expect(target.financial.voidTransaction(
+      target.ownerId,
+      confirmed.transactionId,
+      linkedVoidInput,
+      linkedVoidKey,
       randomUUID(),
     )).rejects.toMatchObject({ code: 'FIN_CORRECTION_LINKED_DOMAIN_REQUIRED' });
     expect((await target.financial.getCurrentBalance(target.ownerId)).financialStateVersion).toBe('3');
@@ -242,7 +272,16 @@ integration('one-off schedule occurrences on real PostgreSQL', () => {
       randomUUID(),
       randomUUID(),
     );
-    expect(corrected.financialStateVersion).toBe('4');
+    expect(corrected).toMatchObject({
+      financialStateVersion: '4',
+      consequence: {
+        owningDomain: {
+          type: 'schedule',
+          scheduleOccurrenceId: created.occurrenceId,
+          scheduleOccurrenceVersion: '3',
+        },
+      },
+    });
     expect(await target.schedule.getOccurrence(target.ownerId, created.occurrenceId)).toMatchObject({
       state: 'confirmed',
       presentation: 'paid',
