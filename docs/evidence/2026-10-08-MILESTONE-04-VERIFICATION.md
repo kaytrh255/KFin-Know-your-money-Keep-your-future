@@ -17,6 +17,8 @@ KFIN_INTEGRATION_TARGET=non-production \
 TEST_DATABASE_URL='postgresql://…' \
 corepack pnpm run test:integration
 corepack pnpm run test
+MIGRATION_DATABASE_URL='postgresql://…' corepack pnpm run db:migrate
+NODE_ENV=development … corepack pnpm --filter @kfin/api start   # live HTTP smoke
 ```
 
 Observed results on the implementation head:
@@ -28,6 +30,8 @@ Observed results on the implementation head:
 - credential-free suites: `12` contract, `13` domain, `10` transport, `15` API route, `6` migration-contract (total suite) and `7` configuration cases passed;
 - real-PostgreSQL integration suites: `15` new Trusted Private Beta access cases plus the `15` pre-existing foundation/correction/schedule cases passed — `30` total;
 - full `vitest run` with the database configured: **173 tests, 173 passed**.
+
+A live end-to-end smoke test ran the wired server (`apps/api/src/server.ts`) against a migrated disposable database with secure cookies disabled for local HTTP. Observed status codes: `/health/live` and `/health/ready` `200`; `/api/v1/auth/me` and `/api/v1/financial-account` without a cookie `401`; with the session cookie `/api/v1/auth/me`, `/api/v1/auth/sessions`, and `/api/v1/auth/security-events` `200` (user-visible history only) and `/api/v1/financial-account` `404` from the financial service for an account that does not exist yet; `POST /api/v1/auth/logout` `403` without a CSRF token, `403` with a wrong token, `403` from a foreign origin, and `200` with the bound token and same origin, after which the same cookie returned `401`; `POST /api/v1/auth/register` with an unissued code `400`; `POST /api/v1/auth/login` for an unknown account `401`; `POST /api/v1/auth/password/reset-request` `200` with a generic accepted body. The smoke database and scratch files were dropped afterwards and are not part of the change set.
 
 The evidence-harness commands initially failed `3` of `16` cases in this sandbox because the working clone did not contain the frozen baseline commit (`git show a48d2c56…:docs/architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md` failed with "exists on disk, but not in …"). After fetching that baseline commit the same commands passed `16/16`. The failure was a clone artifact of the sandbox, not a code defect, and no PASS was claimed for it.
 
@@ -69,6 +73,7 @@ Executed against a disposable, explicitly designated non-production PostgreSQL i
 | Run | Head | Observed result | Disposition |
 |---|---|---|---|
 | [`37801117962`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37801117962) | `c0f52c9e544275352d36c477eb00ec809e655aad` | **SUCCESS**; all `10` job steps passed, including frozen install, evidence-harness validation, typecheck, credential-free tests, and the isolated real-PostgreSQL integration stage | Synthetic implementation evidence for this milestone and regression coverage for Milestones 01–03 |
+| [`37801626110`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37801626110) | `38ef5e3c3a081e1355409c6eaa297742f98de6df` | **SUCCESS**; documentation-only head, same `10` steps passed | Confirms the verification record commit did not change behaviour |
 
 The CI integration stage provisions ephemeral PostgreSQL `17.6`. The sandbox verification instance was PostgreSQL `16.2`; no PostgreSQL-version-specific behaviour is relied upon by this milestone.
 
