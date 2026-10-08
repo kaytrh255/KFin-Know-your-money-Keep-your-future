@@ -145,6 +145,7 @@ interface TransactionRow extends QueryResultRow {
   superseded_by_transaction_id: string | null;
   balance_snapshot_id: string;
   created_at: Date;
+  cursor_created_at: string;
   updated_at: Date;
   version: string;
 }
@@ -452,7 +453,7 @@ export class PostgresFinancialRepository {
     const last = rows.at(-1);
     return {
       items: rows.map(mapTransaction),
-      nextCursor: hasMore && last ? encodeHistoryCursor(asDate(last.created_at).toISOString(), last.id) : null,
+      nextCursor: hasMore && last ? encodeHistoryCursor(last.cursor_created_at, last.id) : null,
     };
   }
 
@@ -584,7 +585,9 @@ const transactionSelect = `
          txn.supersedes_transaction_id,
          successor.id AS superseded_by_transaction_id,
          txn.balance_snapshot_id,
-         txn.created_at, txn.updated_at, txn.version
+         txn.created_at,
+         to_char(txn.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at,
+         txn.updated_at, txn.version
   FROM transactions AS txn
   JOIN categories AS category ON category.id = txn.category_id
   LEFT JOIN transactions AS successor
@@ -658,10 +661,11 @@ function decodeHistoryCursor(value: string): { readonly createdAt: string; reado
       || typeof candidate.id !== 'string'
       || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(candidate.id)
     ) throw new Error('invalid cursor');
-    const instant = new Date(candidate.createdAt);
-    if (Number.isNaN(instant.getTime()) || instant.toISOString() !== candidate.createdAt) {
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(candidate.createdAt)) {
       throw new Error('invalid cursor');
     }
+    const instant = new Date(candidate.createdAt);
+    if (Number.isNaN(instant.getTime())) throw new Error('invalid cursor');
     return { createdAt: candidate.createdAt, id: candidate.id };
   } catch {
     throw validationError('Correction history cursor is invalid.');
