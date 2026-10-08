@@ -1,10 +1,10 @@
 # SPEC-FIN-02 PostgreSQL evidence harness
 
-This directory is standalone evidence-generation infrastructure for frozen candidate commit `e298e6b4e142d79a9be0b317d6925c53e9c19d69`. It is **not** the KFin application, a production migration, owner approval, ADR acceptance, blocker closure, or permission to open the Implementation Gate.
+This directory is standalone evidence-generation infrastructure for the accepted frozen specification baseline `a48d2c5683550859c1b4e19e9d06750616adc0a2`. It is **not** the KFin application, a production migration, owner approval, ADR acceptance, blocker closure, or permission to open the Implementation Gate.
 
 ## 1. Prerequisites
 
-- Node.js 22 or later and npm.
+- Node.js 22 or later with Corepack and the repository-pinned pnpm version.
 - A dedicated **non-production** PostgreSQL/Supabase project containing no real users or production data.
 - A PostgreSQL role able to create/drop one `kfin_fin02_*` schema and create tables, indexes, triggers, and a PL/pgSQL test function inside it.
 - Multiple concurrent connections plus visibility of the role's own sessions through `pg_stat_activity`, `pg_locks`, and `pg_blocking_pids`.
@@ -14,9 +14,9 @@ This directory is standalone evidence-generation infrastructure for frozen candi
 Install the pinned driver:
 
 ```bash
-npm ci
-npm run check
-npm test
+corepack pnpm install --frozen-lockfile
+corepack pnpm run evidence:check
+corepack pnpm run evidence:test
 ```
 
 ## 2. Secret-safe configuration
@@ -36,9 +36,9 @@ The harness refuses any database connection unless `KFIN_EVIDENCE_TARGET=non-pro
 Migration `001_account_financial_serialization_evidence.sql` creates only the minimum synthetic model: users, `financial_accounts`, immutable snapshots, transactions/correction chain, scheduled-occurrence link, idempotency results, audit metadata, and deterministic fault rows/functions.
 
 ```bash
-npm run evidence:setup
-npm run evidence:reset
-npm run evidence:drop
+corepack pnpm run evidence:setup
+corepack pnpm run evidence:reset
+corepack pnpm run evidence:drop
 ```
 
 The default namespace is `kfin_fin02_evidence`. Override it with `--schema kfin_fin02_<name>` or `KFIN_EVIDENCE_SCHEMA`; destructive operations reject every other prefix. A full run resets the namespace first and drops it afterward. Use `--keep-schema` only for controlled failure investigation.
@@ -50,20 +50,20 @@ All IDs, amounts, dates, users, keys, and correlations are synthetic. Raw idempo
 Complete closure-shaped execution (FIN-RACE-01–08; FIN-RACE-01–05 run 100 repetitions per forced order):
 
 ```bash
-npm run evidence:run
+corepack pnpm run evidence:run
 ```
 
 One case:
 
 ```bash
-npm run evidence:case -- --case FIN-RACE-06
-npm run evidence:case -- --case FIN-RACE-07 --keep-schema
+corepack pnpm run evidence:case -- --case FIN-RACE-06
+corepack pnpm run evidence:case -- --case FIN-RACE-07 --keep-schema
 ```
 
 A developer smoke count is allowed, but cannot become PASS evidence:
 
 ```bash
-npm run evidence:case -- --case FIN-RACE-01 --repetitions 2
+corepack pnpm run evidence:case -- --case FIN-RACE-01 --repetitions 2
 ```
 
 Any FIN-RACE-01–05 run below 100 repetitions per forced order is labelled `NOT RUN` for closure purposes even if its executed assertions succeed. If `DATABASE_URL` is absent, all selected PostgreSQL cases are emitted as `BLOCKED`; the command does not fabricate observations.
@@ -129,4 +129,4 @@ Even a complete PASS does not itself approve the evidence. Named mandatory owner
 - If the role cannot observe its lock waits, cancel its own backend, create PL/pgSQL functions, or use concurrent connections, affected cases fail or block; the harness does not downgrade the oracle.
 - Network appliances that prevent the loopback fault relay from reaching the Supabase endpoint block FIN-RACE-07.
 - The configured 500 ms cleanup reserve is evidence-harness instrumentation recorded in artifacts; it does not silently amend or approve the frozen candidate's policy values.
-- PostgreSQL/Supabase runtime tests have not run until a real `DATABASE_URL` execution produces artifacts. Local `npm test` validates the harness itself only.
+- PostgreSQL/Supabase runtime tests have not run until a real `DATABASE_URL` execution produces artifacts. Local `corepack pnpm run evidence:test` validates the harness itself only.

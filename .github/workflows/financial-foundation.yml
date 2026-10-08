@@ -1,0 +1,51 @@
+name: Financial foundation CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: kfin_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: kfin_synthetic_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kfin_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_test
+      KFIN_INTEGRATION_TARGET: non-production
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install locked dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Validate evidence harness
+        run: |
+          corepack pnpm run evidence:check
+          corepack pnpm run evidence:test
+      - name: Typecheck application and tests
+        run: corepack pnpm run typecheck
+      - name: Run credential-free unit and API tests
+        run: corepack pnpm run test:unit
+      - name: Run isolated real-PostgreSQL integration test
+        run: corepack pnpm run test:integration

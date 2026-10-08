@@ -1,4 +1,4 @@
-export const FROZEN_SOURCE_COMMIT = 'e298e6b4e142d79a9be0b317d6925c53e9c19d69';
+export const FROZEN_SOURCE_COMMIT = 'a48d2c5683550859c1b4e19e9d06750616adc0a2';
 export const POLICY_ID = 'account_financial_serialization.v1';
 export const SCHEMA_VERSION = '001';
 

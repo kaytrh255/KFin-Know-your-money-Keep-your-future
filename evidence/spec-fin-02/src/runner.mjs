@@ -181,7 +181,7 @@ function gitHarnessCommit() {
 }
 
 function reproductionCommand(caseId, config) {
-  return `npm run evidence:case -- --case ${caseId} --repetitions ${config.repetitions}`;
+  return `corepack pnpm run evidence:case -- --case ${caseId} --repetitions ${config.repetitions}`;
 }
 
 function exitCodeFor(overall) {

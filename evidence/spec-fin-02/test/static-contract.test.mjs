@@ -6,7 +6,7 @@ import { verifyFrozenAuthoritativeDocs } from '../src/runner.mjs';
 
 test('authoritative documents remain byte-identical to frozen candidate', () => {
   assert.doesNotThrow(() => verifyFrozenAuthoritativeDocs());
-  assert.equal(FROZEN_SOURCE_COMMIT, 'e298e6b4e142d79a9be0b317d6925c53e9c19d69');
+  assert.equal(FROZEN_SOURCE_COMMIT, 'a48d2c5683550859c1b4e19e9d06750616adc0a2');
 });
 
 test('physical evidence schema contains required state and ownership constraints', async () => {
