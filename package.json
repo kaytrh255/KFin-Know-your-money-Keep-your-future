@@ -1,0 +1,22 @@
+{
+  "name": "kfin-spec-fin-02-evidence",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone PostgreSQL evidence harness for KFin SPEC-FIN-02",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "check": "node evidence/spec-fin-02/scripts/check.mjs",
+    "test": "node --test evidence/spec-fin-02/test/*.test.mjs",
+    "evidence:setup": "node evidence/spec-fin-02/src/cli.mjs setup",
+    "evidence:reset": "node evidence/spec-fin-02/src/cli.mjs reset",
+    "evidence:drop": "node evidence/spec-fin-02/src/cli.mjs drop",
+    "evidence:run": "node evidence/spec-fin-02/src/cli.mjs run",
+    "evidence:case": "node evidence/spec-fin-02/src/cli.mjs run"
+  },
+  "dependencies": {
+    "pg": "8.16.3"
+  }
+}

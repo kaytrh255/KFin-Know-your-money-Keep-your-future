@@ -1,0 +1,19 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node.js dependencies and transient output
+node_modules/
+npm-debug.log*
+
+# SPEC-FIN-02 runtime evidence (may contain environment metadata)
+.artifacts/
+evidence/spec-fin-02/.runtime/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.tmp
