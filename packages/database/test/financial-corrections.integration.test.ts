@@ -52,14 +52,17 @@ integration('snapshot_correction.v1 on real PostgreSQL', () => {
     effectiveAt = new Date('2026-10-01T05:00:00.000Z'),
     openingAmountMinor = '1000000',
   ): Promise<Fixture> {
-    const user = await new PostgresUserRepository(database).create({
+    const user = await new PostgresUserRepository(database, () => NOW.getTime()).create({
       email: `correction-${randomUUID()}@example.invalid`,
       locale: 'en-VN',
       timezone: 'Asia/Ho_Chi_Minh',
       baseCurrency: 'VND',
       emailVerifiedAt: new Date(NOW.getTime() - 1_000),
     });
-    const foundation = await new FinancialAccountBootstrapService(database).bootstrap({
+    const foundation = await new FinancialAccountBootstrapService(
+      database,
+      () => NOW.getTime(),
+    ).bootstrap({
       ownerUserId: user.id,
       openingAmountMinor,
       effectiveAt,
