@@ -10,6 +10,10 @@ const aggregateMigrationUrl = new URL(
   '../migrations/0003_financial_aggregate_bounds.sql',
   import.meta.url,
 );
+const accessMigrationUrl = new URL(
+  '../migrations/0004_trusted_private_beta_access.sql',
+  import.meta.url,
+);
 const correctionSourceUrl = new URL('../src/transaction-corrections.ts', import.meta.url);
 
 describe('reviewed financial foundation migration', () => {
@@ -97,5 +101,58 @@ describe('financial remediation invariants', () => {
     expect(correctionLock).toContain('FOR UPDATE OF txn');
     expect(correctionLock).not.toContain('FOR UPDATE OF source_snapshot');
     expect(correctionLock).not.toMatch(/SELECT id\s+FROM balance_snapshots/);
+  });
+});
+
+describe('trusted private beta access migration', () => {
+  it('stores every secret as a digest and never persists a plaintext column', async () => {
+    const sql = await readFile(accessMigrationUrl, 'utf8');
+    expect(sql).toContain('code_digest BYTEA NOT NULL');
+    expect(sql).toContain('secret_digest BYTEA NOT NULL');
+    expect(sql).toContain('token_digest BYTEA NOT NULL');
+    expect(sql).toContain('csrf_digest BYTEA NOT NULL');
+    expect(sql).toContain('scope_digest BYTEA NOT NULL');
+    expect(sql).not.toMatch(/\b(?:code|otp|token|secret|password)\s+TEXT\b/i);
+    expect(sql).not.toMatch(/password_hash\s+TEXT\s+NOT\s+NULL\s+CHECK\s*\([^)]*'\$argon2id\$%'\)/);
+  });
+
+  it('binds Argon2id credentials and prevents invitation reuse', async () => {
+    const sql = await readFile(accessMigrationUrl, 'utf8');
+    expect(sql).toContain("password_hash LIKE '$argon2id$%'");
+    expect(sql).toContain('CONSTRAINT beta_invitations_code_digest_uq UNIQUE (code_digest)');
+    expect(sql).toContain('a consumed or revoked invitation is terminal');
+    expect(sql).toContain('a consumed invitation cannot be reassigned');
+    expect(sql).toContain('beta_invitations_terminal_guard_trg');
+  });
+
+  it('keeps one active challenge per user and purpose with monotonic attempts', async () => {
+    const sql = await readFile(accessMigrationUrl, 'utf8');
+    expect(sql).toContain('CREATE UNIQUE INDEX auth_challenges_one_active_uq');
+    expect(sql).toContain('a consumed auth challenge is immutable');
+    expect(sql).toContain('auth challenge attempt count cannot decrease');
+    expect(sql).toContain('auth challenge purpose and secret digest are immutable');
+  });
+
+  it('enforces session revocation, rotation, and replay containment', async () => {
+    const sql = await readFile(accessMigrationUrl, 'utf8');
+    expect(sql).toContain('CONSTRAINT session_tokens_generation_uq UNIQUE (session_id, generation)');
+    expect(sql).toContain('CONSTRAINT sessions_revocation_ck CHECK');
+    expect(sql).toContain('a revoked session cannot be restored');
+    expect(sql).toContain('CONSTRAINT session_tokens_grace_ck CHECK');
+  });
+
+  it('makes security history append-only and free of secret metadata', async () => {
+    const sql = await readFile(accessMigrationUrl, 'utf8');
+    expect(sql).toContain('security events are append-only');
+    expect(sql).toContain("NOT (metadata ?| ARRAY['password', 'otp', 'code', 'token', 'secret', 'sessionToken'])");
+    expect(sql).toContain('pg_column_size(metadata) <= 2048');
+    expect(sql).toContain("visibility IN ('user', 'operator', 'both')");
+  });
+
+  it('bounds abuse counters with a digest-only composite key', async () => {
+    const sql = await readFile(accessMigrationUrl, 'utf8');
+    expect(sql).toContain('PRIMARY KEY (scope_kind, scope_digest, window_start)');
+    expect(sql).toMatch(/scope_kind IN \(\s*'login_target'/);
+    expect(sql).toContain('CREATE INDEX auth_attempt_counters_window_idx');
   });
 });

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { financialPolicy, loadApiConfig } from '../src/index.js';
+import { authPolicy, financialPolicy, loadApiConfig } from '../src/index.js';
+
+const AUTH_SECRET = 'cd'.repeat(32);
 
 describe('configuration', () => {
   it('loads explicit database and retention configuration', () => {
@@ -9,16 +11,44 @@ describe('configuration', () => {
       DATABASE_SSL_MODE: 'disable',
       IDEMPOTENCY_RETENTION_HOURS: '24',
       FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
     });
     expect(config.idempotencyRetentionMs).toBe(86_400_000);
     expect(config.financialPreviewSigningKey).toBe('ab'.repeat(32));
     expect(config.database.poolMaximum).toBe(5);
+    expect(config.authSecret).toBe(AUTH_SECRET);
+    expect(config.authCookieSecure).toBe(true);
+    expect(config.authAllowedOrigins).toEqual([]);
+    expect(config.emailDeliveryAdapter).toBe('none');
   });
 
   it('has no silent idempotency retention default', () => {
     expect(() => loadApiConfig({
       DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      AUTH_SECRET,
     })).toThrow(/IDEMPOTENCY_RETENTION_HOURS/);
+  });
+
+  it('requires an explicit auth secret instead of a default key', () => {
+    expect(() => loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+    })).toThrow(/AUTH_SECRET/);
+  });
+
+  it('accepts only exact allowlisted origins and never a wildcard', () => {
+    const config = loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      AUTH_ALLOWED_ORIGINS: ' https://app.kfin.example , https://beta.kfin.example ',
+    });
+    expect(config.authAllowedOrigins).toEqual([
+      'https://app.kfin.example',
+      'https://beta.kfin.example',
+    ]);
   });
 
   it('pins the frozen candidate concurrency bounds', () => {
@@ -30,5 +60,39 @@ describe('configuration', () => {
       commitRecoveryBudgetMs: 2_000,
       retryableSqlstates: ['55P03', '40P01', '40001'],
     });
+  });
+
+  it('pins the candidate Trusted Private Beta access bounds', () => {
+    expect(authPolicy.id).toBe('trusted_beta_access.v1');
+    expect(authPolicy.password).toMatchObject({
+      minimumLength: 12,
+      maximumLength: 128,
+      hashPolicyVersion: 1,
+    });
+    expect(authPolicy.password.argon2).toMatchObject({
+      algorithm: 'argon2id',
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1,
+    });
+    expect(authPolicy.challenge).toMatchObject({
+      otpDigits: 6,
+      otpLifetimeMs: 600_000,
+      maximumAttempts: 5,
+      resendCooldownMs: 60_000,
+      resetLifetimeMs: 1_800_000,
+    });
+    expect(authPolicy.session).toMatchObject({
+      tokenEntropyBytes: 32,
+      csrfEntropyBytes: 32,
+      idleLifetimeMs: 2_592_000_000,
+      absoluteLifetimeMs: 7_776_000_000,
+    });
+  });
+
+  it('keeps every access secret at least 128 bits of entropy', () => {
+    expect(authPolicy.session.tokenEntropyBytes).toBeGreaterThanOrEqual(16);
+    expect(authPolicy.invitation.codeEntropyBytes).toBeGreaterThanOrEqual(16);
+    expect(authPolicy.challenge.resetSecretEntropyBytes).toBeGreaterThanOrEqual(16);
   });
 });

@@ -1,3 +1,5 @@
+export * from './auth-errors.js';
+export * from './auth.js';
 export * from './correction.js';
 export * from './dates.js';
 export * from './errors.js';
