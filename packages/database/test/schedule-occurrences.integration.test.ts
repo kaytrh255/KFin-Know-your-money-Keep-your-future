@@ -15,7 +15,7 @@ const integrationEnabled = Boolean(
 );
 const integration = describe.skipIf(!integrationEnabled);
 const RETENTION_MS = 86_400_000;
-const INITIAL_NOW = new Date('2026-10-14T05:00:00.000Z');
+const INITIAL_NOW = new Date('2026-10-15T05:00:00.000Z');
 
 interface Fixture {
   readonly ownerId: string;
@@ -51,8 +51,8 @@ integration('one-off schedule occurrences on real PostgreSQL', () => {
     }
   }, 30_000);
 
-  async function fixture(): Promise<Fixture> {
-    let currentNow = INITIAL_NOW;
+  async function fixture(initialNow = INITIAL_NOW): Promise<Fixture> {
+    let currentNow = initialNow;
     const now = () => currentNow;
     const user = await new PostgresUserRepository(database, () => currentNow.getTime()).create({
       email: `schedule-${randomUUID()}@example.invalid`,
@@ -96,7 +96,7 @@ integration('one-off schedule occurrences on real PostgreSQL', () => {
   }
 
   it('FIN-OCC-01/04: creates/replays one occurrence and derives date labels without mutation', async () => {
-    const target = await fixture();
+    const target = await fixture(new Date('2026-10-14T05:00:00.000Z'));
     const key = randomUUID();
     const created = await target.schedule.createOneOff(
       target.ownerId,
