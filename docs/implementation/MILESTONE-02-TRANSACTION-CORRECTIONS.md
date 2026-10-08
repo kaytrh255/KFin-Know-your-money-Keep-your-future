@@ -55,18 +55,18 @@ Every route derives ownership from the trusted principal, uses `Cache-Control: n
 
 | Case | Status in this milestone | Evidence boundary |
 |---|---|---|
-| `FIN-COR-01` | Implemented; automated | Latest current expense correction, exact balance, chain, active report effect |
-| `FIN-COR-02` | Implemented; automated | Closed-segment correction leaves latest balance unchanged |
-| `FIN-COR-03` | Implemented; automated | Historical correction changes report only |
-| `FIN-COR-04` | Implemented; automated | Valid month move removes source-month effect and adds replacement-month effect |
-| `FIN-COR-05` | Implemented; automated | Cross-anchor date rejected with no mutation |
-| `FIN-COR-06` | Implemented; automated | Reviewed authority/effect tampering rejected with no mutation |
-| `FIN-COR-07` | Implemented; automated | Standalone void reverses once and same-key replay is stable |
+| `FIN-COR-01` | Implemented; PostgreSQL CI PASS | Latest current expense correction, exact balance, chain, active report effect |
+| `FIN-COR-02` | Implemented; PostgreSQL CI PASS | Closed-segment correction leaves latest balance unchanged |
+| `FIN-COR-03` | Implemented; PostgreSQL CI PASS | Historical correction changes report only |
+| `FIN-COR-04` | Implemented; PostgreSQL CI PASS | Valid month move removes source-month effect and adds replacement-month effect |
+| `FIN-COR-05` | Implemented; PostgreSQL CI PASS | Cross-anchor date rejected with no mutation |
+| `FIN-COR-06` | Implemented; PostgreSQL CI PASS | Reviewed authority/effect/preview tampering rejected with no mutation |
+| `FIN-COR-07` | Implemented; PostgreSQL CI PASS | Standalone void reverses once and same-key replay is stable |
 | `FIN-COR-08` | **NOT RUN — implementation prerequisite** | Schedule/debt/planned-purchase link schemas and owning services remain outside this milestone |
-| `FIN-COR-09` | Implemented; automated | Parallel compatible same-key calls produce one chain/result; changed digest rejected |
-| `FIN-COR-10` | Partially implemented; automated for foundation paths | Competing correction and snapshot/correction races execute; link-state race remains **NOT RUN — implementation prerequisite** |
+| `FIN-COR-09` | Implemented; PostgreSQL CI PASS | Parallel compatible same-key calls produce one chain/result; changed digest rejected |
+| `FIN-COR-10` | Partial PostgreSQL CI PASS | Competing correction and snapshot/correction races passed; link-state race remains **NOT RUN — implementation prerequisite** |
 
-No FIN-COR case is represented as real-PostgreSQL PASS until the guarded CI integration job actually executes successfully. Local no-credential runs skip integration tests rather than fabricating database evidence.
+GitHub Actions run [`37758123849`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37758123849) executed the foundation test and all eight correction integration tests successfully against ephemeral synthetic PostgreSQL 17.6. Local no-credential runs still skip those tests rather than fabricating database evidence. The successful suite is not full FIN-RACE or Supabase evidence.
 
 ## Known limitations and retained OPEN items
 

@@ -2,9 +2,10 @@
 
 **Recorded:** 2026-10-08<br>
 **Frozen SDD baseline:** `a48d2c5683550859c1b4e19e9d06750616adc0a2`<br>
-**Local environment:** Arena workspace; Node.js `v22.22.3`; no PostgreSQL/Supabase credentials, binaries, or container runtime
+**Local environment:** Arena workspace; Node.js `v22.22.3`; no PostgreSQL/Supabase credentials, binaries, or container runtime<br>
+**CI environment:** GitHub Actions `ubuntu-latest`; Node.js `22.22.0`; ephemeral synthetic `postgres:17.6-alpine`
 
-This record separates tests actually executed locally from guarded PostgreSQL tests that require CI or another explicitly designated non-production target. It does not imply owner approval, FIN-RACE closure, Supabase behavior, production readiness, or release authorization.
+This record separates tests actually executed locally from the guarded PostgreSQL tests executed in CI. It does not imply owner approval, FIN-RACE closure, Supabase behavior, production readiness, or release authorization.
 
 ## Commands actually executed locally
 
@@ -37,16 +38,21 @@ git diff --check
 
 ## Status boundaries
 
-- `FIN-COR-01..07` and `FIN-COR-09`: implemented with automated guarded PostgreSQL assertions; runtime status remains pending until that suite executes on a real target.
+- `FIN-COR-01..07` and `FIN-COR-09`: implemented and executed successfully against ephemeral PostgreSQL 17.6 in CI run `37758123849`.
 - `FIN-COR-08`: **NOT RUN — implementation prerequisite**.
-- `FIN-COR-10`: correction/correction and snapshot/correction branches implemented with guarded PostgreSQL assertions; linked-domain race branch is **NOT RUN — implementation prerequisite**.
+- `FIN-COR-10`: correction/correction and snapshot/correction branches executed successfully against PostgreSQL 17.6; linked-domain race branch is **NOT RUN — implementation prerequisite**.
 - `FIN-LINK-01..06`: **NOT RUN — implementation prerequisite**.
 - `FIN-OCC-01..04`: **NOT RUN — implementation prerequisite**.
 - `FIN-RACE-01..08`: remain OPEN/BLOCKED as the dedicated forced-order, repetition, cleanup, pool, and commit-fault matrix. A passing foundation/correction integration test is not a FIN-RACE substitute.
 
-## CI status at this revision
+## GitHub Actions execution history
 
-The current workflow is configured to execute both guarded integration files against ephemeral synthetic PostgreSQL 17.6. Its result will be recorded only after an actual current-head run completes; the test definition itself is not execution evidence.
+| Run | Head | Observed result | Disposition |
+|---|---|---|---|
+| [`37757992207`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37757992207) | `3dbafb198293777bf3c0f9ee7c0cf7ebd34f1512` | **FAILURE** in all eight correction integration cases before their database actions; harness, typecheck, and `53` credential-free tests passed | The deterministic financial clock had not been injected into user/bootstrap fixture validation, so the fixed verification timestamp was compared with the runner clock. No correction PASS was claimed. The fixture was corrected to inject one clock through user, bootstrap, and financial services. |
+| [`37758123849`](https://github.com/kaytrh255/KFin-Know-your-money-Keep-your-future/actions/runs/37758123849) | `2636b7242fec07cc041396b54d039a192eae7341` | **SUCCESS**; install, frozen-baseline harness, typecheck, `53` credential-free tests, the foundation integration test, and all `8` correction integration tests completed | Real PostgreSQL 17.6 implementation evidence for the unlinked `FIN-COR-01..07`, `FIN-COR-09`, and implemented `FIN-COR-10` branches. |
+
+The successful run is narrow synthetic PostgreSQL implementation evidence. It does not execute linked-domain `FIN-COR-08`, the linked-state race branch, the dedicated repeated/fault-injected FIN-RACE suite, intended Supabase pooling, or production behavior.
 
 ## Open items retained
 
