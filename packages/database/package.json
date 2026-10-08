@@ -1,0 +1,21 @@
+{
+  "name": "@kfin/database",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "migrate": "tsx src/migrate-cli.ts"
+  },
+  "dependencies": {
+    "@kfin/domain": "workspace:*",
+    "drizzle-orm": "0.45.3",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.15"
+  }
+}

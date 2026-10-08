@@ -1,0 +1,40 @@
+{
+  "name": "kfin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "KFin financial foundation modular monolith",
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=22.12.0 <23",
+    "pnpm": ">=10.34.0 <11"
+  },
+  "scripts": {
+    "build": "tsc -b --pretty false",
+    "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false",
+    "test": "vitest run",
+    "test:unit": "vitest run --exclude '**/*.integration.test.ts'",
+    "test:integration": "vitest run packages/database/test/*.integration.test.ts",
+    "check": "corepack pnpm run evidence:check && corepack pnpm run evidence:test && corepack pnpm run typecheck && corepack pnpm run test",
+    "api:dev": "corepack pnpm --filter @kfin/api dev",
+    "api:start": "corepack pnpm --filter @kfin/api start",
+    "db:migrate": "corepack pnpm --filter @kfin/database migrate",
+    "evidence:check": "node evidence/spec-fin-02/scripts/check.mjs",
+    "evidence:test": "node --test evidence/spec-fin-02/test/*.test.mjs",
+    "evidence:setup": "node evidence/spec-fin-02/src/cli.mjs setup",
+    "evidence:reset": "node evidence/spec-fin-02/src/cli.mjs reset",
+    "evidence:drop": "node evidence/spec-fin-02/src/cli.mjs drop",
+    "evidence:run": "node evidence/spec-fin-02/src/cli.mjs run",
+    "evidence:case": "node evidence/spec-fin-02/src/cli.mjs run"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}
