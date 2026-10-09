@@ -87,4 +87,19 @@ describe('savings input rules', () => {
     expect(normalizeSavingsReason(undefined)).toBeNull();
     expect(() => normalizeSavingsReason('x'.repeat(501))).toThrow();
   });
+
+  it('rejects NUL characters in names and reasons as SAVINGS_GOAL_INVALID (QA F-1)', () => {
+    // PostgreSQL answers a NUL-bearing parameter with SQLSTATE 22021; reject it here as invalid input (422) instead.
+    for (const nulName of ['Trip\u0000fund', 'Trip\u0000', '\u0000Trip fund']) {
+      expect(() => normalizeSavingsGoalName(nulName)).toThrow(
+        expect.objectContaining({ code: 'SAVINGS_GOAL_INVALID', statusCode: 422 }),
+      );
+    }
+    expect(() => normalizeSavingsReason('Bonus\u0000')).toThrow(
+      expect.objectContaining({ code: 'SAVINGS_GOAL_INVALID', statusCode: 422 }),
+    );
+    // Control: ordinary text, including Vietnamese and CJK, stays valid.
+    expect(normalizeSavingsGoalName('Quỹ khẩn cấp 基金')).toBe('Quỹ khẩn cấp 基金');
+    expect(normalizeSavingsReason('Thưởng tết')).toBe('Thưởng tết');
+  });
 });

@@ -66,7 +66,7 @@ export function normalizeSavingsGoalName(value: string): string {
   if (name.length < 1 || name.length > SAVINGS_GOAL_NAME_MAX) {
     throw savingsGoalInvalid(`Goal name must be 1-${SAVINGS_GOAL_NAME_MAX} characters.`);
   }
-  return name;
+  return assertSavingsTextStorable(name, 'Goal name');
 }
 
 export function normalizeSavingsReason(value: string | undefined): string | null {
@@ -75,7 +75,19 @@ export function normalizeSavingsReason(value: string | undefined): string | null
   if (reason.length < 1 || reason.length > SAVINGS_REASON_MAX) {
     throw savingsGoalInvalid(`Reason must be 1-${SAVINGS_REASON_MAX} characters.`);
   }
-  return reason;
+  return assertSavingsTextStorable(reason, 'Reason');
+}
+
+/**
+ * QA F-1: PostgreSQL TEXT cannot store the NUL character (U+0000) — the server
+ * raises SQLSTATE 22021. Reject it here as invalid input (422) instead of
+ * letting it surface as a database outage (503 FIN_DATABASE_UNAVAILABLE).
+ */
+function assertSavingsTextStorable(value: string, field: string): string {
+  if (value.includes('\u0000')) {
+    throw savingsGoalInvalid(`${field} must not contain NUL characters.`);
+  }
+  return value;
 }
 
 export function assertSavingsLocalDate(value: string, field: string): string {

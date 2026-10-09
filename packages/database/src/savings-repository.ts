@@ -873,6 +873,12 @@ function mapDatabaseError(error: unknown): unknown {
   if (sqlstate === '22003' || sqlstate === '22008') {
     return savingsGoalInvalid('A savings goal value is outside the supported range.');
   }
+  if (sqlstate === '22021') {
+    // QA F-1 defense in depth: a character PostgreSQL TEXT cannot store (NUL)
+    // slipped past input normalization. It is an invalid value (422), never a
+    // database outage (503 FIN_DATABASE_UNAVAILABLE).
+    return savingsGoalInvalid('A savings goal value contains a character that cannot be stored.');
+  }
   return databaseUnavailable(error);
 }
 

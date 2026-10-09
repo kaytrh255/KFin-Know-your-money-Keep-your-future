@@ -445,4 +445,87 @@ integration('savings goals on real PostgreSQL', () => {
       status: 'archived', currentAmountMinor: '2500000', version: '2',
     });
   }, 30_000);
+
+  it('answers 422 SAVINGS_GOAL_INVALID, never 503, when a name or reason contains NUL (QA F-1)', async () => {
+    const owner = await verifiedUser();
+    const createKey = randomUUID();
+    await expect(savings.createGoal(
+      owner.id, goalInput({ name: 'Quỹ khẩn \u0000cấp' }), createKey, randomUUID(),
+    )).rejects.toMatchObject({ code: 'SAVINGS_GOAL_INVALID', statusCode: 422 });
+
+    // The rejected attempt wrote nothing, so the same key with a clean name still works.
+    const created = await savings.createGoal(owner.id, goalInput(), createKey, randomUUID());
+    expect(created).toMatchObject({ version: '1', replayed: false });
+
+    const planKey = randomUUID();
+    await expect(savings.updatePlan(owner.id, created.goalId, {
+      expectedVersion: '1', name: 'Đổi \u0000tên',
+    }, planKey, randomUUID())).rejects.toMatchObject({ code: 'SAVINGS_GOAL_INVALID', statusCode: 422 });
+    const renamed = await savings.updatePlan(owner.id, created.goalId, {
+      expectedVersion: '1', name: 'Đổi tên hợp lệ',
+    }, planKey, randomUUID());
+    expect(renamed).toMatchObject({ version: '2', replayed: false });
+
+    const updateKey = randomUUID();
+    await expect(savings.updateCurrentAmount(owner.id, created.goalId, {
+      expectedVersion: '2', currentAmountMinor: '3000000', asOf: today(), reason: 'Thưởng\u0000',
+    }, updateKey, randomUUID())).rejects.toMatchObject({ code: 'SAVINGS_GOAL_INVALID', statusCode: 422 });
+    const updated = await savings.updateCurrentAmount(owner.id, created.goalId, {
+      expectedVersion: '2', currentAmountMinor: '3000000', asOf: today(), reason: 'Thưởng tết',
+    }, updateKey, randomUUID());
+    expect(updated).toMatchObject({ version: '3', replayed: false });
+
+    expect(await counts(owner.id)).toEqual({ goals: 1, changes: 2, receipts: 3, audits: 3 });
+    expect(await savings.getGoal(owner.id, created.goalId)).toMatchObject({
+      name: 'Đổi tên hợp lệ', currentAmountMinor: '3000000', version: '3',
+    });
+  }, 30_000);
+
+  it('rejects forged history whose previous amount does not continue the goal chain (QA F-2)', async () => {
+    const owner = await verifiedUser();
+    const created = await savings.createGoal(owner.id, goalInput(), randomUUID(), randomUUID());
+    // A plan edit advances the version without an amount-change row; that seam
+    // let a forged row match every scalar field of the goal before migration 0006.
+    await savings.updatePlan(owner.id, created.goalId, {
+      expectedVersion: '1', name: 'Đổi tên hợp lệ',
+    }, randomUUID(), randomUUID());
+    await expectSqlFailure(`
+      INSERT INTO savings_amount_changes (
+        id, user_id, savings_goal_id, goal_version, previous_amount_minor, new_amount_minor,
+        as_of, source, actor_user_id, correlation_id
+      ) VALUES ($1, $2, $3, 2, 666, 2500000, $4, 'manual_update', $2, 'forge-f2')
+    `, [randomUUID(), owner.id, created.goalId, daysAgo(1)]);
+    // The forge never landed: history still holds only the initial row.
+    const history = await savings.listAmountChanges(owner.id, created.goalId, { limit: 10 });
+    expect(history.items.map((item) => item.goalVersion)).toEqual(['1']);
+    // A repository write that truthfully continues the chain still succeeds.
+    const updated = await savings.updateCurrentAmount(owner.id, created.goalId, {
+      expectedVersion: '2', currentAmountMinor: '3000000', asOf: today(),
+    }, randomUUID(), randomUUID());
+    expect(updated).toMatchObject({ version: '3', replayed: false });
+    expect((await savings.listAmountChanges(owner.id, created.goalId, { limit: 10 })).items
+      .map((item) => [item.goalVersion, item.previousAmountMinor, item.newAmountMinor]))
+      .toEqual([['3', '2500000', '3000000'], ['1', null, '2500000']]);
+    expect(await counts(owner.id)).toEqual({ goals: 1, changes: 2, receipts: 3, audits: 3 });
+  }, 30_000);
+
+  it('rejects history whose user actor is not the goal owner (QA F-3)', async () => {
+    const owner = await verifiedUser();
+    const stranger = await verifiedUser();
+    const created = await savings.createGoal(owner.id, goalInput(), randomUUID(), randomUUID());
+    await savings.updatePlan(owner.id, created.goalId, {
+      expectedVersion: '1', name: 'Chủ sở hữu đổi tên',
+    }, randomUUID(), randomUUID());
+    // Truthful chain and scalar state — only the actor is someone else.
+    await expectSqlFailure(`
+      INSERT INTO savings_amount_changes (
+        id, user_id, savings_goal_id, goal_version, previous_amount_minor, new_amount_minor,
+        as_of, source, actor_user_id, correlation_id
+      ) VALUES ($1, $2, $3, 2, 2500000, 2500000, $4, 'manual_update', $5, 'forge-f3')
+    `, [randomUUID(), owner.id, created.goalId, daysAgo(1), stranger.id]);
+    const history = await savings.listAmountChanges(owner.id, created.goalId, { limit: 10 });
+    expect(history.items.map((item) => item.goalVersion)).toEqual(['1']);
+    expect(await counts(owner.id)).toEqual({ goals: 1, changes: 1, receipts: 2, audits: 2 });
+    expect(await counts(stranger.id)).toEqual({ goals: 0, changes: 0, receipts: 0, audits: 0 });
+  }, 30_000);
 });
