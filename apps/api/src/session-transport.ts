@@ -100,6 +100,12 @@ export function isBrowserSafeRequest(request: Pick<FastifyRequest, 'method' | 'h
   return fetchSite === 'same-origin' || fetchSite === 'none';
 }
 
+/** Reads the echoed double-submit CSRF token; repeated headers are rejected. */
+export function readCsrfHeader(request: Pick<FastifyRequest, 'headers'>): string | null {
+  const value = request.headers[CSRF_HEADER_NAME];
+  return typeof value === 'string' ? value : null;
+}
+
 function serializeCookie(
   name: string,
   value: string,

@@ -4,6 +4,8 @@ import {
   correctionPreviewBodySchema,
   createSnapshotBodySchema,
   createTransactionBodySchema,
+  financialAccountListResponseSchema,
+  openFinancialAccountBodySchema,
   transactionCorrectionHistoryQuerySchema,
   transactionListQuerySchema,
   voidCommitBodySchema,
@@ -124,4 +126,20 @@ describe('financial request contracts', () => {
     expect(transactionCorrectionHistoryQuerySchema.safeParse({ limit: 101 }).success).toBe(false);
   });
 
+
+  it('accepts only the opening balance and instant for account onboarding', () => {
+    const valid = { openingBalanceMinor: '-250000', effectiveAt: '2026-10-08T08:00:00.000+07:00' };
+    expect(openFinancialAccountBodySchema.safeParse(valid).success).toBe(true);
+    for (const extra of ['ownerId', 'userId', 'accountId', 'currency', 'financialStateVersion']) {
+      expect(openFinancialAccountBodySchema.safeParse({ ...valid, [extra]: 'x' }).success).toBe(false);
+    }
+    expect(openFinancialAccountBodySchema.safeParse({ ...valid, openingBalanceMinor: 1000 }).success).toBe(false);
+    expect(openFinancialAccountBodySchema.safeParse({ openingBalanceMinor: '1' }).success).toBe(false);
+    expect(openFinancialAccountBodySchema.safeParse({ ...valid, openingBalanceMinor: '1'.repeat(65) }).success).toBe(false);
+  });
+
+  it('bounds the financial-account list response', () => {
+    expect(financialAccountListResponseSchema.safeParse({ items: [] }).success).toBe(true);
+    expect(financialAccountListResponseSchema.safeParse({ items: [], ownerId: 'x' }).success).toBe(false);
+  });
 });
