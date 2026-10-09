@@ -156,3 +156,68 @@ describe('trusted private beta access migration', () => {
     expect(sql).toContain('CREATE INDEX auth_attempt_counters_window_idx');
   });
 });
+
+const savingsMigrationUrl = new URL('../migrations/0005_savings_goals.sql', import.meta.url);
+const savingsHistoryChainMigrationUrl = new URL(
+  '../migrations/0006_savings_history_chain.sql',
+  import.meta.url,
+);
+
+describe('savings goals migration', () => {
+  it('stores bigint reserve amounts in the user base currency with status and version', async () => {
+    const sql = await readFile(savingsMigrationUrl, 'utf8');
+    expect(sql).toContain('current_amount_minor BIGINT NOT NULL CHECK (current_amount_minor >= 0)');
+    expect(sql).toContain('target_amount_minor BIGINT NOT NULL CHECK (target_amount_minor > 0)');
+    expect(sql).toContain('REFERENCES users(id, base_currency)');
+    expect(sql).toContain("status IN ('active', 'archived')");
+    expect(sql).toContain('CREATE INDEX savings_goals_owner_status_idx');
+  });
+
+  it('keeps amount history immutable and tied one-to-one to goal versions', async () => {
+    const sql = await readFile(savingsMigrationUrl, 'utf8');
+    expect(sql).toContain('savings_amount_changes_immutable_trg');
+    expect(sql).toContain('UNIQUE (savings_goal_id, goal_version)');
+    expect(sql).toContain("source IN ('initial', 'manual_update', 'planned_purchase_use', 'recovery_correction')");
+    expect(sql).toContain("(source = 'planned_purchase_use') = (planned_purchase_id IS NOT NULL)");
+    expect(sql).toContain('DEFERRABLE INITIALLY DEFERRED');
+    expect(sql).toContain('archived savings goals are terminal');
+  });
+
+  it('never references balances, snapshots, or transactions', async () => {
+    const sql = await readFile(savingsMigrationUrl, 'utf8')
+      .then((text) => text.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n'));
+    expect(sql).not.toMatch(/financial_accounts|balance_snapshots|transactions|financial_current_balances/);
+  });
+
+  it('is frozen: migration 0005 keeps the exact reviewed checksum', async () => {
+    const { createHash } = await import('node:crypto');
+    const sql = await readFile(savingsMigrationUrl, 'utf8');
+    expect(createHash('sha256').update(sql, 'utf8').digest('hex')).toBe(
+      '58f264e35dbad3744489dc72378b8f658a73de6465615d4c9ef4eda05983918e',
+    );
+  });
+});
+
+describe('savings history chain migration (QA addendum F-2/F-3)', () => {
+  it('only replaces the existing amount-change guard function; it creates no table and changes no other object', async () => {
+    const sql = await readFile(savingsHistoryChainMigrationUrl, 'utf8')
+      .then((text) => text.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n'));
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION kfin_guard_savings_amount_change()');
+    expect(sql).not.toMatch(/CREATE TABLE|ALTER TABLE|DROP TABLE|CREATE TRIGGER/i);
+    expect(sql).not.toMatch(/financial_accounts|balance_snapshots|transactions|financial_current_balances/);
+  });
+
+  it('pins every later change row to the newest earlier row of the goal history chain (F-2)', async () => {
+    const sql = await readFile(savingsHistoryChainMigrationUrl, 'utf8');
+    expect(sql).toContain('change.goal_version < NEW.goal_version');
+    expect(sql).toContain('ORDER BY change.goal_version DESC');
+    expect(sql).toContain('chain_amount IS DISTINCT FROM NEW.previous_amount_minor');
+    expect(sql).toContain('savings amount change must continue the goal history chain');
+  });
+
+  it('requires a user actor to be the goal owner (F-3)', async () => {
+    const sql = await readFile(savingsHistoryChainMigrationUrl, 'utf8');
+    expect(sql).toContain('NEW.actor_user_id IS NOT NULL AND NEW.actor_user_id <> NEW.user_id');
+    expect(sql).toContain('savings amount change user actor must be the goal owner');
+  });
+});

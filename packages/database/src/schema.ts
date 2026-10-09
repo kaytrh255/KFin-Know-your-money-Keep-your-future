@@ -303,6 +303,61 @@ export const auditEvents = pgTable('audit_events', {
   metadata: jsonb('metadata').notNull().default(sql`'{}'::jsonb`),
 });
 
+// Savings goals (migration 0005). The current amount is a declared reserve
+// estimate; amount-change rows are immutable old/new evidence.
+export const savingsGoals = pgTable('savings_goals', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull(),
+  name: text('name').notNull(),
+  targetAmountMinor: bigint('target_amount_minor', { mode: 'bigint' }).notNull(),
+  currentAmountMinor: bigint('current_amount_minor', { mode: 'bigint' }).notNull(),
+  currency: char('currency', { length: 3 }).notNull(),
+  currentAmountAsOf: date('current_amount_as_of', { mode: 'string' }).notNull(),
+  targetDate: date('target_date', { mode: 'string' }),
+  plannedContributionMinor: bigint('planned_contribution_minor', { mode: 'bigint' }),
+  contributionFrequency: text('contribution_frequency'),
+  status: text('status').notNull().default('active'),
+  archivedAt: timestamp('archived_at', { withTimezone: true, mode: 'date' }),
+  ...auditColumns,
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  version: bigint('version', { mode: 'bigint' }).notNull().default(sql`1`),
+}, (table) => [
+  check('savings_goals_cadence_requires_contribution_ck', sql`${table.contributionFrequency} IS NULL OR ${table.plannedContributionMinor} IS NOT NULL`),
+  unique('savings_goals_owner_id_uq').on(table.userId, table.id),
+  foreignKey({
+    name: 'savings_goals_user_currency_fk',
+    columns: [table.userId, table.currency],
+    foreignColumns: [users.id, users.baseCurrency],
+  }).onDelete('restrict'),
+  index('savings_goals_owner_status_idx').on(table.userId, table.status, table.createdAt, table.id),
+]);
+
+export const savingsAmountChanges = pgTable('savings_amount_changes', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull(),
+  savingsGoalId: uuid('savings_goal_id').notNull(),
+  goalVersion: bigint('goal_version', { mode: 'bigint' }).notNull(),
+  previousAmountMinor: bigint('previous_amount_minor', { mode: 'bigint' }),
+  newAmountMinor: bigint('new_amount_minor', { mode: 'bigint' }).notNull(),
+  asOf: date('as_of', { mode: 'string' }).notNull(),
+  source: text('source').notNull(),
+  plannedPurchaseId: uuid('planned_purchase_id').unique(),
+  reason: text('reason'),
+  ...auditColumns,
+  actorUserId: uuid('actor_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  actorOperatorId: uuid('actor_operator_id'),
+  correlationId: text('correlation_id').notNull(),
+}, (table) => [
+  unique('savings_amount_changes_goal_version_uq').on(table.savingsGoalId, table.goalVersion),
+  foreignKey({
+    name: 'savings_amount_changes_goal_owner_fk',
+    columns: [table.userId, table.savingsGoalId],
+    foreignColumns: [savingsGoals.userId, savingsGoals.id],
+  }).onDelete('restrict'),
+  index('savings_amount_changes_owner_goal_idx')
+    .on(table.userId, table.savingsGoalId, table.createdAt, table.id),
+]);
+
 export const schema = {
   users,
   categories,
@@ -313,6 +368,8 @@ export const schema = {
   scheduledOccurrences,
   idempotencyResults,
   auditEvents,
+  savingsGoals,
+  savingsAmountChanges,
 };
 
 // Trusted Private Beta access tables (migration 0004). Bytea columns hold

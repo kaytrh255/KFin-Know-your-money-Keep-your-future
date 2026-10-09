@@ -17,7 +17,10 @@ export type FinancialErrorCode =
   | 'FINANCIAL_RESULT_UNKNOWN'
   | 'FIN_ACCOUNT_ALREADY_EXISTS'
   | 'FIN_OPENING_BALANCE_INVALID'
-  | 'FIN_DATABASE_UNAVAILABLE';
+  | 'FIN_DATABASE_UNAVAILABLE'
+  | 'SAVINGS_GOAL_INVALID'
+  | 'SAVINGS_GOAL_VERSION_CONFLICT'
+  | 'SAVINGS_GOAL_ARCHIVED';
 
 export interface FinancialErrorOptions {
   readonly code: FinancialErrorCode;

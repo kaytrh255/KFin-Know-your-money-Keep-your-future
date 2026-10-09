@@ -5,6 +5,7 @@ export * from './identity.js';
 export * from './migrations.js';
 export * from './passwords.js';
 export * from './pool.js';
+export * from './savings-repository.js';
 export * from './schedule-repository.js';
 export * from './schema.js';
 export * from './serialization.js';
