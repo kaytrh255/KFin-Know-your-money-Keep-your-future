@@ -4,11 +4,14 @@ import {
   assertLocalDate,
   assertMoneyRange,
   classifyTransaction,
+  FinancialError,
   localDateAt,
   monthBounds,
   parseDatabaseBigint,
   parsePositiveMinor,
   parseSignedMinor,
+  POSTGRES_BIGINT_MAXIMUM,
+  POSTGRES_BIGINT_MINIMUM,
   unavailableError,
   validateTransactionClassification,
   validationError,
@@ -17,6 +20,7 @@ import {
 } from '@kfin/domain';
 import { assertFinancialAggregateBounds } from './aggregate-bounds.js';
 import { digestCanonicalRequest } from './canonical.js';
+import { FinancialAccountBootstrapService } from './identity.js';
 import { AccountFinancialSerializer } from './serialization.js';
 import {
   PostgresTransactionCorrectionService,
@@ -42,6 +46,30 @@ export interface CurrentBalanceView {
   readonly postedCurrentIncomeMinor: string;
   readonly postedCurrentExpenseMinor: string;
   readonly currentBalanceMinor: string;
+}
+
+export interface OpenFinancialAccountInput {
+  /** Signed integer minor-unit string; validated here, never trusted as-is. */
+  readonly openingBalanceMinor: string;
+  /** ISO-8601 instant of the opening known balance; must not be in the future. */
+  readonly effectiveAt: string;
+}
+
+export interface OpenFinancialAccountResult {
+  readonly accountId: string;
+  readonly snapshotId: string;
+  readonly financialStateVersion: string;
+  /** True when the result came from the stored idempotency receipt. */
+  readonly replayed: boolean;
+}
+
+export interface FinancialAccountSummaryView extends CurrentBalanceView {
+  readonly name: string;
+  readonly accountType: 'aggregate_liquid';
+}
+
+export interface FinancialAccountList {
+  readonly items: FinancialAccountSummaryView[];
 }
 
 export interface CreateSnapshotInput {
@@ -122,6 +150,11 @@ interface BalanceRow extends QueryResultRow {
   current_balance_minor: string;
 }
 
+interface AccountSummaryRow extends BalanceRow {
+  name: string;
+  account_type: 'aggregate_liquid';
+}
+
 interface CategoryRow extends QueryResultRow {
   id: string;
 }
@@ -153,6 +186,7 @@ interface TransactionRow extends QueryResultRow {
 export class PostgresFinancialRepository {
   private readonly serializer: AccountFinancialSerializer;
   private readonly corrections: PostgresTransactionCorrectionService;
+  private readonly bootstrapService: FinancialAccountBootstrapService;
 
   constructor(
     private readonly pool: Pool,
@@ -167,6 +201,70 @@ export class PostgresFinancialRepository {
       previewSigningKey,
       now,
     );
+    this.bootstrapService = new FinancialAccountBootstrapService(pool, () => this.now().getTime());
+  }
+
+  /**
+   * Onboards the aggregate financial account for an authenticated owner.
+   *
+   * The owner identifier must come from the authenticated principal. The
+   * account row, the onboarding balance snapshot, the idempotency receipt, and
+   * the audit event are written in one transaction by
+   * `FinancialAccountBootstrapService`, which also serializes concurrent
+   * onboarding on the owner row, replays a same-key/same-payload request, and
+   * rejects a second account with `FIN_ACCOUNT_ALREADY_EXISTS`.
+   */
+  async openFinancialAccount(
+    ownerUserId: string,
+    input: OpenFinancialAccountInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<OpenFinancialAccountResult> {
+    const opening = parseOpeningBalance(input, this.now());
+    const result = await this.bootstrapService.bootstrap({
+      ownerUserId,
+      openingAmountMinor: opening.amount.toString(),
+      effectiveAt: opening.effectiveAt,
+      idempotencyKey,
+      correlationId,
+      idempotencyRetentionMs: this.idempotencyRetentionMs,
+    });
+    return {
+      accountId: result.accountId,
+      snapshotId: result.snapshotId,
+      financialStateVersion: result.financialStateVersion,
+      replayed: result.replayed,
+    };
+  }
+
+  /**
+   * Lists only the authenticated owner's accounts. Balances are read from the
+   * authoritative `financial_current_balances` view (latest snapshot plus the
+   * current segment), never recomputed from whole history.
+   */
+  async listFinancialAccounts(ownerUserId: string): Promise<FinancialAccountList> {
+    const result = await this.pool.query<AccountSummaryRow>(`
+      SELECT balance.account_id, balance.currency, balance.financial_state_version,
+             balance.snapshot_id, balance.snapshot_amount_minor, balance.snapshot_effective_at,
+             balance.snapshot_effective_local_date::text AS snapshot_effective_local_date,
+             balance.posted_current_income_minor, balance.posted_current_expense_minor,
+             balance.current_balance_minor,
+             account.name, account.account_type
+      FROM financial_current_balances AS balance
+      JOIN financial_accounts AS account
+        ON account.user_id = balance.user_id
+       AND account.id = balance.account_id
+      WHERE balance.user_id = $1
+      ORDER BY account.created_at ASC, account.id ASC
+      LIMIT 100
+    `, [ownerUserId]);
+    return {
+      items: result.rows.map((row) => ({
+        ...mapBalance(row),
+        name: row.name,
+        accountType: row.account_type,
+      })),
+    };
   }
 
   async getCurrentBalance(ownerUserId: string): Promise<CurrentBalanceView> {
@@ -180,25 +278,7 @@ export class PostgresFinancialRepository {
     `, [ownerUserId]);
     const row = result.rows[0];
     if (!row) throw unavailableError();
-
-    const snapshotAmount = assertMoneyRange(parseDatabaseBigint(row.snapshot_amount_minor));
-    const income = assertMoneyRange(parseDatabaseBigint(row.posted_current_income_minor));
-    const expense = assertMoneyRange(parseDatabaseBigint(row.posted_current_expense_minor));
-    const balance = assertMoneyRange(parseDatabaseBigint(row.current_balance_minor));
-    return {
-      accountId: row.account_id,
-      currency: row.currency.trim(),
-      financialStateVersion: parseDatabaseBigint(row.financial_state_version).toString(),
-      snapshot: {
-        id: row.snapshot_id,
-        amountMinor: snapshotAmount.toString(),
-        effectiveAt: asDate(row.snapshot_effective_at).toISOString(),
-        effectiveLocalDate: row.snapshot_effective_local_date,
-      },
-      postedCurrentIncomeMinor: income.toString(),
-      postedCurrentExpenseMinor: expense.toString(),
-      currentBalanceMinor: balance.toString(),
-    };
+    return mapBalance(row);
   }
 
   async createSnapshot(
@@ -595,6 +675,63 @@ const transactionSelect = `
    AND successor.account_id = txn.account_id
    AND successor.supersedes_transaction_id = txn.id
 `;
+
+const OPENING_BALANCE_PATTERN = /^(?:0|-?[1-9][0-9]{0,18})$/;
+
+function openingBalanceInvalid(message: string): FinancialError {
+  return new FinancialError({
+    code: 'FIN_OPENING_BALANCE_INVALID',
+    statusCode: 422,
+    safeMessage: message,
+  });
+}
+
+/**
+ * Semantic validation of the onboarding known balance. Every failure is a
+ * `422 FIN_OPENING_BALANCE_INVALID`; the bootstrap service repeats its own
+ * checks as defense in depth.
+ */
+export function parseOpeningBalance(
+  input: OpenFinancialAccountInput,
+  now: Date,
+): { readonly amount: bigint; readonly effectiveAt: Date } {
+  if (typeof input.openingBalanceMinor !== 'string' || !OPENING_BALANCE_PATTERN.test(input.openingBalanceMinor)) {
+    throw openingBalanceInvalid('Opening balance must be an integer minor-unit string.');
+  }
+  const amount = BigInt(input.openingBalanceMinor);
+  if (amount < POSTGRES_BIGINT_MINIMUM || amount > POSTGRES_BIGINT_MAXIMUM) {
+    throw openingBalanceInvalid('Opening balance is outside the supported range.');
+  }
+  const effectiveAt = new Date(input.effectiveAt);
+  if (typeof input.effectiveAt !== 'string' || Number.isNaN(effectiveAt.getTime())) {
+    throw openingBalanceInvalid('Opening balance time is invalid.');
+  }
+  if (effectiveAt.getTime() > now.getTime()) {
+    throw openingBalanceInvalid('Opening balance time must not be in the future.');
+  }
+  return { amount, effectiveAt };
+}
+
+function mapBalance(row: BalanceRow): CurrentBalanceView {
+  const snapshotAmount = assertMoneyRange(parseDatabaseBigint(row.snapshot_amount_minor));
+  const income = assertMoneyRange(parseDatabaseBigint(row.posted_current_income_minor));
+  const expense = assertMoneyRange(parseDatabaseBigint(row.posted_current_expense_minor));
+  const balance = assertMoneyRange(parseDatabaseBigint(row.current_balance_minor));
+  return {
+    accountId: row.account_id,
+    currency: row.currency.trim(),
+    financialStateVersion: parseDatabaseBigint(row.financial_state_version).toString(),
+    snapshot: {
+      id: row.snapshot_id,
+      amountMinor: snapshotAmount.toString(),
+      effectiveAt: asDate(row.snapshot_effective_at).toISOString(),
+      effectiveLocalDate: row.snapshot_effective_local_date,
+    },
+    postedCurrentIncomeMinor: income.toString(),
+    postedCurrentExpenseMinor: expense.toString(),
+    currentBalanceMinor: balance.toString(),
+  };
+}
 
 function mapTransaction(row: TransactionRow | undefined): TransactionView {
   if (!row) throw new Error('Expected one inserted transaction row.');

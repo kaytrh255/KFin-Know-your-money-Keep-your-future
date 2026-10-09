@@ -278,3 +278,45 @@ export type MonthlyActuals = z.infer<typeof monthlyActualsResponseSchema>;
 export type Transaction = z.infer<typeof transactionSchema>;
 export type TransactionListQuery = z.infer<typeof transactionListQuerySchema>;
 export type TransactionCorrectionHistoryQuery = z.infer<typeof transactionCorrectionHistoryQuerySchema>;
+
+/**
+ * Milestone 05 — authenticated financial-account onboarding.
+ *
+ * The body carries only the opening known balance and its effective instant.
+ * Ownership is never accepted from the client: a strict object rejects any
+ * `ownerId`, `userId`, `accountId`, currency, or version field. The opening
+ * amount is typed as a bounded string here and validated semantically by the
+ * service so a malformed amount yields `422 FIN_OPENING_BALANCE_INVALID`
+ * rather than a generic contract failure.
+ */
+export const openFinancialAccountBodySchema = z.strictObject({
+  openingBalanceMinor: z.string().max(64),
+  effectiveAt: instantSchema,
+});
+
+export const openFinancialAccountResponseSchema = z.strictObject({
+  accountId: uuidSchema,
+  snapshotId: uuidSchema,
+  financialStateVersion: positiveVersionSchema,
+});
+
+export const financialAccountSummarySchema = z.strictObject({
+  accountId: uuidSchema,
+  name: z.string().min(1).max(120),
+  accountType: z.literal('aggregate_liquid'),
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  financialStateVersion: positiveVersionSchema,
+  snapshot: z.strictObject({
+    id: uuidSchema,
+    amountMinor: signedMinorSchema,
+    effectiveAt: instantSchema,
+    effectiveLocalDate: localDateSchema,
+  }),
+  postedCurrentIncomeMinor: signedMinorSchema,
+  postedCurrentExpenseMinor: signedMinorSchema,
+  currentBalanceMinor: signedMinorSchema,
+});
+
+export const financialAccountListResponseSchema = z.strictObject({
+  items: z.array(financialAccountSummarySchema).max(100),
+});

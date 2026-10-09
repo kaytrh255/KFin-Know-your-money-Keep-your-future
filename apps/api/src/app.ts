@@ -23,6 +23,7 @@ import {
   createTransactionResponseSchema,
   currentBalanceSchema,
   errorResponseSchema,
+  financialAccountListResponseSchema,
   idempotencyHeadersSchema,
   monthlyActualsQuerySchema,
   monthlyActualsResponseSchema,
@@ -30,6 +31,8 @@ import {
   occurrenceListResponseSchema,
   occurrencePathSchema,
   occurrenceSchema,
+  openFinancialAccountBodySchema,
+  openFinancialAccountResponseSchema,
   transactionCorrectionHistoryQuerySchema,
   transactionCorrectionHistoryResponseSchema,
   transactionListQuerySchema,
@@ -55,8 +58,11 @@ import type {
   CreateTransactionInput,
   CreateTransactionResult,
   CurrentBalanceView,
+  FinancialAccountList,
   MonthlyActualsView,
   OccurrenceView,
+  OpenFinancialAccountInput,
+  OpenFinancialAccountResult,
   PreviewCorrectionInput,
   PreviewVoidInput,
   TransactionCorrectionHistory,
@@ -65,15 +71,27 @@ import type {
   TransitionOccurrenceInput,
   TransitionOccurrenceResult,
 } from '@kfin/database';
-import { FinancialError, KfinServiceError } from '@kfin/domain';
+import { csrfFailedError, FinancialError, KfinServiceError } from '@kfin/domain';
 import { registerAuthRoutes, type AuthApiService } from './auth-routes.js';
 import { UnavailableEmailAdapter, type EmailDeliveryAdapter } from './email-delivery.js';
-import type { SessionTransportOptions } from './session-transport.js';
+import {
+  isBrowserSafeRequest,
+  readCsrfHeader,
+  type SessionTransportOptions,
+} from './session-transport.js';
 import type { AuthenticateRequest } from './types.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface FinancialApiService {
+  /** Owner always comes from the authenticated principal, never from input. */
+  openFinancialAccount(
+    ownerUserId: string,
+    input: OpenFinancialAccountInput,
+    idempotencyKey: string,
+    correlationId: string,
+  ): Promise<OpenFinancialAccountResult>;
+  listFinancialAccounts(ownerUserId: string): Promise<FinancialAccountList>;
   getCurrentBalance(ownerUserId: string): Promise<CurrentBalanceView>;
   createSnapshot(
     ownerUserId: string,
@@ -219,6 +237,22 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     request.principal = principal;
   };
 
+  /**
+   * Authentication plus the Milestone 04 browser state-change defense:
+   * same-origin (or same-site Fetch Metadata) and the session-bound
+   * double-submit CSRF token. Runs at `preValidation`, so a cross-site or
+   * token-less request is rejected before its body is interpreted. Fails
+   * closed when no session-backed CSRF binding or verifier is available.
+   */
+  const requireCsrfProtectedAuthentication = async (request: FastifyRequest): Promise<void> => {
+    await requireAuthentication(request);
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
+    const csrfDigest = request.principal?.csrfDigest;
+    const verifier = options.authService;
+    if (typeof csrfDigest !== 'string' || !verifier) throw csrfFailedError();
+    if (!verifier.verifyCsrfToken(readCsrfHeader(request), csrfDigest)) throw csrfFailedError();
+  };
+
   app.get('/health/live', { schema: { hide: true } }, async () => ({ status: 'ok' }));
   app.get('/health/ready', { schema: { hide: true } }, async (_request, reply) => {
     if (!options.readinessPool) return { status: 'ok', database: 'not-configured' };
@@ -244,6 +278,49 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       absoluteLifetimeSeconds: options.authAbsoluteLifetimeSeconds ?? 90 * 24 * 60 * 60,
     });
   }
+
+  app.post('/api/v1/financial-account', {
+    preValidation: requireCsrfProtectedAuthentication,
+    schema: {
+      tags: ['financial-accounts'],
+      headers: idempotencyHeadersSchema,
+      body: openFinancialAccountBodySchema,
+      response: {
+        201: openFinancialAccountResponseSchema,
+        400: errorResponseSchema,
+        401: errorResponseSchema,
+        403: errorResponseSchema,
+        404: errorResponseSchema,
+        409: errorResponseSchema,
+        422: errorResponseSchema,
+        503: errorResponseSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const result = await options.financialService.openFinancialAccount(
+      requireUserId(request),
+      {
+        openingBalanceMinor: request.body.openingBalanceMinor,
+        effectiveAt: request.body.effectiveAt,
+      },
+      request.headers['idempotency-key'],
+      request.id,
+    );
+    if (result.replayed) reply.header('Idempotency-Replayed', 'true');
+    return reply.code(201).send({
+      accountId: result.accountId,
+      snapshotId: result.snapshotId,
+      financialStateVersion: result.financialStateVersion,
+    });
+  });
+
+  app.get('/api/v1/financial-accounts', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-accounts'],
+      response: { 200: financialAccountListResponseSchema, 401: errorResponseSchema },
+    },
+  }, async (request) => options.financialService.listFinancialAccounts(requireUserId(request)));
 
   app.get('/api/v1/financial-account', {
     preHandler: requireAuthentication,

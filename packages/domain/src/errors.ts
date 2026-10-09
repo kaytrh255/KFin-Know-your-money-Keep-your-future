@@ -16,6 +16,7 @@ export type FinancialErrorCode =
   | 'FINANCIAL_OPERATION_TIMEOUT'
   | 'FINANCIAL_RESULT_UNKNOWN'
   | 'FIN_ACCOUNT_ALREADY_EXISTS'
+  | 'FIN_OPENING_BALANCE_INVALID'
   | 'FIN_DATABASE_UNAVAILABLE';
 
 export interface FinancialErrorOptions {

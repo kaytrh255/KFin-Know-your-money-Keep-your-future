@@ -108,6 +108,13 @@ function correctionPreview() {
 
 function service(): FinancialApiService {
   return {
+    openFinancialAccount: vi.fn(async () => ({
+      accountId: ACCOUNT_ID,
+      snapshotId: SNAPSHOT_ID,
+      financialStateVersion: '1',
+      replayed: false,
+    })),
+    listFinancialAccounts: vi.fn(async () => ({ items: [] })),
     getCurrentBalance: vi.fn(async () => ({
       accountId: ACCOUNT_ID,
       currency: 'VND',
@@ -465,6 +472,7 @@ describe('KFin API ownership boundary', () => {
     expect(contract.servers).toContainEqual({ url: '/api/v1' });
     expect(paths).toContain('/financial-account');
     expect(paths).toContain('/financial-account/snapshots');
+    expect(paths).toContain('/financial-accounts');
     expect(paths).toContain('/transactions');
     expect(paths).toContain('/transactions/{id}');
     expect(paths).toContain('/transactions/{id}/correction-preview');
