@@ -2,6 +2,7 @@ import { authPolicy, loadApiConfig } from '@kfin/config';
 import {
   PostgresAuthRepository,
   PostgresFinancialRepository,
+  PostgresSavingsGoalRepository,
   PostgresScheduleRepository,
   createDatabaseRuntime,
 } from '@kfin/database';
@@ -20,6 +21,10 @@ const scheduleService = new PostgresScheduleRepository(
   runtime.pool,
   config.idempotencyRetentionMs,
 );
+
+const savingsService = new PostgresSavingsGoalRepository(runtime.pool, {
+  idempotencyRetentionMs: config.idempotencyRetentionMs,
+});
 
 // Same-origin only: no credentialed CORS layer exists, so the browser client
 // must be served from the API host (see `isBrowserSafeRequest`).
@@ -40,6 +45,7 @@ const cookieName = sessionCookieName(transport);
 const app = await buildApp({
   financialService,
   scheduleService,
+  savingsService,
   authService,
   emailDelivery,
   authTransport: transport,

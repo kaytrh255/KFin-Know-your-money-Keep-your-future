@@ -73,6 +73,7 @@ import type {
 } from '@kfin/database';
 import { csrfFailedError, FinancialError, KfinServiceError } from '@kfin/domain';
 import { registerAuthRoutes, type AuthApiService } from './auth-routes.js';
+import { registerSavingsRoutes, type SavingsApiService } from './savings-routes.js';
 import { UnavailableEmailAdapter, type EmailDeliveryAdapter } from './email-delivery.js';
 import {
   isBrowserSafeRequest,
@@ -183,9 +184,13 @@ export interface ScheduleApiService {
   ): Promise<TransitionOccurrenceResult>;
 }
 
+export type { SavingsApiService } from './savings-routes.js';
+
 export interface BuildAppOptions {
   readonly financialService: FinancialApiService;
   readonly scheduleService?: ScheduleApiService;
+  /** Milestone 06 savings goals. Absent means the savings routes stay unregistered. */
+  readonly savingsService?: SavingsApiService;
   readonly authenticate: AuthenticateRequest;
   readonly readinessPool?: Pick<Pool, 'query'>;
   readonly logger?: boolean;
@@ -671,6 +676,16 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     requireUserId(request),
     request.query.month,
   ));
+
+  if (options.savingsService) {
+    registerSavingsRoutes({
+      app,
+      service: options.savingsService,
+      requireAuthentication,
+      requireCsrfProtectedAuthentication,
+      requireUserId,
+    });
+  }
 
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof KfinServiceError) {
