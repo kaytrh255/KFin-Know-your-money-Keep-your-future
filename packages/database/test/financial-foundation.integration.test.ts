@@ -90,7 +90,8 @@ integration('financial foundation on real PostgreSQL', () => {
     expect((await repository.getCurrentBalance(owner.id)).currentBalanceMinor).toBe('750000');
 
     const replayed = await repository.createTransaction(owner.id, transactionInput, key, randomUUID());
-    expect(replayed).toEqual(created);
+    expect(created.replayed).toBe(false);
+    expect(replayed).toEqual({ ...created, replayed: true });
     const receipt = await database.query<{ result: Record<string, unknown> }>(`
       SELECT result FROM idempotency_results
       WHERE user_id = $1 AND operation = 'financial.transaction.create'

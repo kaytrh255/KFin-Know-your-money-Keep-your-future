@@ -6,6 +6,8 @@ import {
   type FinancialApiService,
   type ScheduleApiService,
 } from '../src/app.js';
+import type { AuthApiService } from '../src/auth-routes.js';
+import type { AuthenticatedPrincipal } from '../src/types.js';
 
 const USER_ID = '00000000-0000-4000-8000-000000000001';
 const OTHER_USER_ID = '00000000-0000-4000-8000-000000000002';
@@ -14,6 +16,49 @@ const ACCOUNT_ID = '00000000-0000-4000-8000-000000000004';
 const TRANSACTION_ID = '00000000-0000-4000-8000-000000000005';
 const SCHEDULED_ITEM_ID = '00000000-0000-4000-8000-000000000007';
 const OCCURRENCE_ID = '00000000-0000-4000-8000-000000000008';
+const SESSION_ID = '00000000-0000-4000-8000-000000000006';
+const CSRF_TOKEN = 'csrf-token-value-0123456789';
+const CSRF_DIGEST = 'bound-csrf-digest';
+const BROWSER = { host: 'api.kfin.test', origin: 'https://api.kfin.test' };
+const PROTECTED = { ...BROWSER, 'x-kfin-csrf': CSRF_TOKEN };
+const CREATE_TRANSACTION_BODY = {
+  kind: 'expense' as const,
+  amountMinor: '1000',
+  occurredOn: '2026-10-08',
+  categoryCode: 'food',
+  expenseClass: 'daily' as const,
+  isUnexpected: false,
+  expectedFinancialStateVersion: '1',
+  reviewedLatestSnapshotId: SNAPSHOT_ID,
+};
+
+function csrfVerifier(): AuthApiService {
+  return {
+    verifyCsrfToken: vi.fn((presented: string | null | undefined, digest: string) => (
+      presented === CSRF_TOKEN && digest === CSRF_DIGEST
+    )),
+  } as unknown as AuthApiService;
+}
+
+/** Milestone 07: app wired like production for the one-time transaction write. */
+async function buildProtectedTransactionApp(options: {
+  financialService: FinancialApiService;
+  principal?: AuthenticatedPrincipal | null;
+  authVerifier?: AuthApiService | null;
+}): Promise<FastifyInstance> {
+  const principal = options.principal === undefined
+    ? { userId: USER_ID, sessionId: SESSION_ID, csrfDigest: CSRF_DIGEST }
+    : options.principal;
+  const app = await buildApp({
+    financialService: options.financialService,
+    ...(options.authVerifier === null
+      ? {}
+      : { authService: options.authVerifier ?? csrfVerifier() }),
+    authenticate: async () => principal,
+  });
+  apps.push(app);
+  return app;
+}
 
 const transaction = {
   id: TRANSACTION_ID,
@@ -136,6 +181,7 @@ function service(): FinancialApiService {
     createTransaction: vi.fn(async () => ({
       transactionId: TRANSACTION_ID,
       financialStateVersion: '2',
+      replayed: false,
     })),
     getTransaction: vi.fn(async () => transaction),
     getTransactionCorrectionHistory: vi.fn(async () => ({ items: [transaction], nextCursor: null })),
@@ -277,28 +323,19 @@ describe('KFin API ownership boundary', () => {
 
   it('derives owner scope from authentication and never from request data', async () => {
     const financialService = service();
-    const app = await buildApp({
-      financialService,
-      authenticate: async () => ({ userId: USER_ID }),
-    });
-    apps.push(app);
+    const app = await buildProtectedTransactionApp({ financialService });
 
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/transactions',
-      headers: { 'idempotency-key': 'client-key-1' },
-      payload: {
-        kind: 'expense',
-        amountMinor: '1000',
-        occurredOn: '2026-10-08',
-        categoryCode: 'food',
-        expenseClass: 'daily',
-        isUnexpected: false,
-        expectedFinancialStateVersion: '1',
-        reviewedLatestSnapshotId: SNAPSHOT_ID,
-      },
+      headers: { ...PROTECTED, 'idempotency-key': 'client-key-1' },
+      payload: CREATE_TRANSACTION_BODY,
     });
     expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({
+      transactionId: TRANSACTION_ID,
+      financialStateVersion: '2',
+    });
     expect(financialService.createTransaction).toHaveBeenCalledWith(
       USER_ID,
       expect.objectContaining({ amountMinor: '1000' }),
@@ -306,31 +343,18 @@ describe('KFin API ownership boundary', () => {
       expect.any(String),
     );
     expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.headers['idempotency-replayed']).toBeUndefined();
   });
 
   it('rejects client-supplied userId instead of allowing mass assignment', async () => {
     const financialService = service();
-    const app = await buildApp({
-      financialService,
-      authenticate: async () => ({ userId: USER_ID }),
-    });
-    apps.push(app);
+    const app = await buildProtectedTransactionApp({ financialService });
 
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/transactions',
-      headers: { 'idempotency-key': 'client-key-2' },
-      payload: {
-        userId: OTHER_USER_ID,
-        kind: 'expense',
-        amountMinor: '1000',
-        occurredOn: '2026-10-08',
-        categoryCode: 'food',
-        expenseClass: 'daily',
-        isUnexpected: false,
-        expectedFinancialStateVersion: '1',
-        reviewedLatestSnapshotId: SNAPSHOT_ID,
-      },
+      headers: { ...PROTECTED, 'idempotency-key': 'client-key-2' },
+      payload: { userId: OTHER_USER_ID, ...CREATE_TRANSACTION_BODY },
     });
     expect(response.statusCode).toBe(400);
     expect(response.json().error.code).toBe('REQUEST_VALIDATION_FAILED');
@@ -617,5 +641,126 @@ describe('one-off schedule occurrence API', () => {
     expect(paths).toContain('/schedule/occurrences/{id}/confirm');
     expect(paths).toContain('/schedule/occurrences/{id}/skip');
     expect(paths).toContain('/schedule/occurrences/{id}/cancel');
+  });
+});
+
+describe('Milestone 07 — one-time transaction write defense (PRD-INC-01, SEC-APP browser state changes)', () => {
+  it('rejects unauthenticated requests with 401 before reaching the service', async () => {
+    const financialService = service();
+    const app = await buildProtectedTransactionApp({ financialService, principal: null });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers: { ...PROTECTED, 'idempotency-key': 'm07-unauthenticated' },
+      payload: CREATE_TRANSACTION_BODY,
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe('AUTHENTICATION_REQUIRED');
+    expect(financialService.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing CSRF header', { ...BROWSER, 'idempotency-key': 'm07' }],
+    ['wrong CSRF token', { ...BROWSER, 'x-kfin-csrf': 'wrong-token-value-000000', 'idempotency-key': 'm07' }],
+    ['foreign Origin', { host: 'api.kfin.test', origin: 'https://evil.example', 'x-kfin-csrf': CSRF_TOKEN, 'idempotency-key': 'm07' }],
+    ['scheme-less lookalike Origin', { host: 'api.kfin.test', origin: 'https://api.kfin.test.evil.example', 'x-kfin-csrf': CSRF_TOKEN, 'idempotency-key': 'm07' }],
+    ['cross-site Fetch Metadata', { host: 'api.kfin.test', 'sec-fetch-site': 'cross-site', 'x-kfin-csrf': CSRF_TOKEN, 'idempotency-key': 'm07' }],
+    ['no Origin and no Fetch Metadata', { host: 'api.kfin.test', 'x-kfin-csrf': CSRF_TOKEN, 'idempotency-key': 'm07' }],
+  ])('rejects %s with 403 AUTH_CSRF_FAILED before the service', async (_label, headers) => {
+    const financialService = service();
+    const app = await buildProtectedTransactionApp({ financialService });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers,
+      payload: CREATE_TRANSACTION_BODY,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('AUTH_CSRF_FAILED');
+    expect(financialService.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects a cross-site text/plain POST with 403 before body parsing', async () => {
+    const financialService = service();
+    const app = await buildProtectedTransactionApp({ financialService });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers: {
+        host: 'api.kfin.test',
+        origin: 'https://evil.example',
+        'x-kfin-csrf': CSRF_TOKEN,
+        'content-type': 'text/plain',
+      },
+      payload: 'kind=expense&amountMinor=1',
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('AUTH_CSRF_FAILED');
+    expect(financialService.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the principal has no session-bound CSRF digest', async () => {
+    const financialService = service();
+    const app = await buildProtectedTransactionApp({
+      financialService,
+      principal: { userId: USER_ID },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers: { ...PROTECTED, 'idempotency-key': 'm07-no-digest' },
+      payload: CREATE_TRANSACTION_BODY,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('AUTH_CSRF_FAILED');
+    expect(financialService.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when no CSRF verifier (auth service) is configured', async () => {
+    const financialService = service();
+    const app = await buildProtectedTransactionApp({ financialService, authVerifier: null });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers: { ...PROTECTED, 'idempotency-key': 'm07-no-verifier' },
+      payload: CREATE_TRANSACTION_BODY,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('AUTH_CSRF_FAILED');
+    expect(financialService.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it('marks an idempotent replay, and only a replay, at the transport level', async () => {
+    const financialService = service();
+    const app = await buildProtectedTransactionApp({ financialService });
+
+    vi.mocked(financialService.createTransaction).mockResolvedValueOnce({
+      transactionId: TRANSACTION_ID,
+      financialStateVersion: '2',
+      replayed: true,
+    });
+    const replay = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers: { ...PROTECTED, 'idempotency-key': 'm07-replay' },
+      payload: CREATE_TRANSACTION_BODY,
+    });
+    expect(replay.statusCode).toBe(201);
+    expect(replay.headers['idempotency-replayed']).toBe('true');
+    expect(replay.json()).toEqual({ transactionId: TRANSACTION_ID, financialStateVersion: '2' });
+
+    const original = await app.inject({
+      method: 'POST',
+      url: '/api/v1/transactions',
+      headers: { ...PROTECTED, 'idempotency-key': 'm07-original' },
+      payload: CREATE_TRANSACTION_BODY,
+    });
+    expect(original.statusCode).toBe(201);
+    expect(original.headers['idempotency-replayed']).toBeUndefined();
   });
 });

@@ -371,8 +371,12 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.code(201).send(result);
   });
 
+  // Milestone 07: the one-time transaction write uses the Milestone 04 browser
+  // state-change defense at `onRequest` (before content-type parsing), the same
+  // convention Milestones 05/06 apply to their mutations, and reports an
+  // idempotent replay at the transport level like every newer financial write.
   app.post('/api/v1/transactions', {
-    preHandler: requireAuthentication,
+    onRequest: requireCsrfProtectedAuthentication,
     schema: {
       tags: ['financial-foundation'],
       headers: idempotencyHeadersSchema,
@@ -381,6 +385,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         201: createTransactionResponseSchema,
         400: errorResponseSchema,
         401: errorResponseSchema,
+        403: errorResponseSchema,
         404: errorResponseSchema,
         409: errorResponseSchema,
         422: errorResponseSchema,
@@ -409,7 +414,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       request.headers['idempotency-key'],
       request.id,
     );
-    return reply.code(201).send(result);
+    if (result.replayed) reply.header('Idempotency-Replayed', 'true');
+    return reply.code(201).send({
+      transactionId: result.transactionId,
+      financialStateVersion: result.financialStateVersion,
+    });
   });
 
   app.get('/api/v1/transactions', {

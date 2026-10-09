@@ -125,6 +125,7 @@ export interface TransactionView {
 export interface CreateTransactionResult {
   readonly transactionId: string;
   readonly financialStateVersion: string;
+  readonly replayed: boolean;
 }
 
 export interface TransactionPage {
@@ -468,6 +469,7 @@ export class PostgresFinancialRepository {
     return {
       transactionId: String(result.value.transactionId),
       financialStateVersion: result.financialStateVersion.toString(),
+      replayed: result.replayed,
     };
   }
 
