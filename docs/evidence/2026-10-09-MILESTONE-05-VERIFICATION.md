@@ -65,3 +65,33 @@ The smoke schema and harness were removed afterwards.
 ## Not claimed
 
 No browser/PWA validation, Supabase or production database, load or concurrency benchmark, penetration test, or approval of any open item (`SPEC-AUTH-*`, `SPEC-SEC-*`, ADR acceptance, release gates).
+
+## Independent QA addendum (2026-10-09)
+
+The QA was run on PR head `b95b71a42fa2d1a74a611cad58a016d218587991`. One M05-scoped finding was fixed: a cross-site POST with a form, multipart, or malformed-JSON body returned `500` instead of `403`. The guard was moved to `onRequest`. See the [milestone trace](../implementation/MILESTONE-05-FINANCIAL-ACCOUNT-ONBOARDING.md#independent-qa-fix-2026-10-09).
+
+Re-run after the fix, on local PostgreSQL 17.6:
+
+- `evidence:check` passed;
+- `evidence:test`: 16/16;
+- typecheck: clean;
+- `test:unit`: **213 passed** (209 plus 4 new regression cases);
+- full `vitest run` with the database: **258 passed**.
+
+An adversarial live probe with real auth on real PostgreSQL observed:
+
+- 10 concurrent HTTP onboardings (5 distinct keys and 5 with a shared key) produced exactly 1 account, 1 snapshot, 1 receipt, and 1 audit row, and nine `409` responses;
+- an M01 transaction posted against an M05-created account succeeded, and the listed balance updated;
+- a cross-site form POST returned `403`.
+
+Mutation checks run against the shared bootstrap and the new code all made the suite fail:
+
+- removing the transaction;
+- removing `FOR UPDATE` (failed 6 of 6 repeated runs);
+- disabling the replay lookup;
+- ignoring the request digest;
+- dropping the verified-email check;
+- removing the future-time check;
+- removing the range check;
+- listing the snapshot amount instead of the view balance;
+- dropping the replay flag.

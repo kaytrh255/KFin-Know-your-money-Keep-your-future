@@ -219,6 +219,35 @@ describe('POST /api/v1/financial-account (onboarding)', () => {
     expect(service.openFinancialAccount).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['HTML form (urlencoded)', 'application/x-www-form-urlencoded', 'openingBalanceMinor=1&effectiveAt=2026-10-08T00%3A00%3A00Z'],
+    ['multipart form', 'multipart/form-data; boundary=x', '--x\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--x--\r\n'],
+    ['malformed JSON', 'application/json', '{"openingBalanceMinor":'],
+  ])('rejects a cross-site %s POST with 403 before body parsing', async (_label, contentType, payload) => {
+    const { app, service } = await build();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/financial-account',
+      headers: { host: 'api.kfin.test', origin: 'https://evil.example', 'content-type': contentType },
+      payload,
+    });
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe('AUTH_CSRF_FAILED');
+    expect(service.openFinancialAccount).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unauthenticated form POST with 401 before body parsing', async () => {
+    const { app, service } = await build({ principal: null });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/financial-account',
+      headers: { host: 'api.kfin.test', 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'openingBalanceMinor=1',
+    });
+    expect(response.statusCode).toBe(401);
+    expect(service.openFinancialAccount).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the principal has no session-bound CSRF digest', async () => {
     const { app, service } = await build({ principal: { userId: USER_ID } });
     const response = await app.inject({

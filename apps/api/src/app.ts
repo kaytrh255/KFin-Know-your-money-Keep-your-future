@@ -240,9 +240,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   /**
    * Authentication plus the Milestone 04 browser state-change defense:
    * same-origin (or same-site Fetch Metadata) and the session-bound
-   * double-submit CSRF token. Runs at `preValidation`, so a cross-site or
-   * token-less request is rejected before its body is interpreted. Fails
-   * closed when no session-backed CSRF binding or verifier is available.
+   * double-submit CSRF token. Runs at `onRequest` (before content-type
+   * parsing), so a cross-site or token-less request — including an HTML form
+   * or malformed body — is rejected with 401/403 before its body is parsed or
+   * validated. Fails closed when no session-backed CSRF binding or verifier is
+   * available.
    */
   const requireCsrfProtectedAuthentication = async (request: FastifyRequest): Promise<void> => {
     await requireAuthentication(request);
@@ -280,7 +282,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   }
 
   app.post('/api/v1/financial-account', {
-    preValidation: requireCsrfProtectedAuthentication,
+    onRequest: requireCsrfProtectedAuthentication,
     schema: {
       tags: ['financial-accounts'],
       headers: idempotencyHeadersSchema,

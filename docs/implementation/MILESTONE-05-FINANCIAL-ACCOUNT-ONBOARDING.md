@@ -16,13 +16,18 @@ This milestone adds the onboarding and listing routes for the authenticated user
   - **Replay.** A request with the same `Idempotency-Key` and the same payload returns the stored result with `201` and an `Idempotency-Replayed: true` header. The body is unchanged and no rows are written. The same key with a different payload returns `409 IDEMPOTENCY_KEY_REUSED`.
   - **Duplicate account.** A new key for an owner who already has an account returns `409 FIN_ACCOUNT_ALREADY_EXISTS`.
   - **Owner unavailable.** An owner that does not exist, is not `active`, or has no verified email returns `404 FINANCIAL_RESOURCE_UNAVAILABLE`.
-  - **Invalid opening balance.** Any of the following returns `422 FIN_OPENING_BALANCE_INVALID`, and the check runs before any database checkout:
-    - an opening balance that is not a canonical signed integer minor-unit string;
+  - **Invalid opening balance.** For a contract-valid request, any of the following returns `422 FIN_OPENING_BALANCE_INVALID`, and the check runs before any database checkout:
+    - an opening balance string (up to 64 characters) that is not a canonical signed integer minor-unit string;
     - an amount outside the PostgreSQL `bigint` range;
-    - an unparseable instant;
-    - an instant in the future.
-  - **Contract failures.** A JSON number, an unknown field, or a missing `Idempotency-Key` returns `400 REQUEST_VALIDATION_FAILED`.
-  - **CSRF.** Before the body is validated, the route requires the Milestone 04 browser defense: a same-origin `Origin`, or `Sec-Fetch-Site: same-origin|none`, plus the session-bound double-submit token in `x-kfin-csrf`. A failure returns `403 AUTH_CSRF_FAILED`. The check fails closed when the principal has no CSRF digest or no verifier is configured.
+    - an `effectiveAt` instant in the future.
+
+    The repository additionally rejects an unparseable instant with `422`. Over HTTP, however, a malformed `effectiveAt` fails the contract first.
+  - **Contract failures.** These return `400 REQUEST_VALIDATION_FAILED`:
+    - an opening balance that is not a string (a JSON number or `null`) or is longer than 64 characters;
+    - an `effectiveAt` that is not an ISO-8601 instant with an offset;
+    - an unknown field;
+    - a missing or empty `Idempotency-Key`.
+  - **CSRF.** At `onRequest`, before the body is parsed or validated, the route requires the Milestone 04 browser defense: a same-origin `Origin`, or `Sec-Fetch-Site: same-origin|none`, plus the session-bound double-submit token in `x-kfin-csrf`. A failure returns `403 AUTH_CSRF_FAILED`, and that includes cross-site HTML-form, multipart, or malformed-JSON bodies. The check fails closed when the principal has no CSRF digest or no verifier is configured.
 - **`GET /api/v1/financial-accounts`** lists only the authenticated owner's accounts (at most 100). It returns name, type, currency, financial-state version, the latest snapshot, current-segment income and expense, and the current balance. Balances come from the authoritative `financial_current_balances` view, so each list item matches `GET /api/v1/financial-account`. An owner without an account receives `{ "items": [] }`.
 - **Ownership.** The owner is always `request.principal.userId` from the authenticated session. The strict body contract rejects `ownerId`, `userId`, `accountId`, `currency`, and version fields. Query-string and header ownership hints are ignored.
 
@@ -42,7 +47,7 @@ Request body: `{ "openingBalanceMinor": "<signed integer string>", "effectiveAt"
 | `packages/contracts` | `openFinancialAccountBodySchema`, `openFinancialAccountResponseSchema`, `financialAccountSummarySchema`, `financialAccountListResponseSchema` |
 | `packages/domain` | New error code `FIN_OPENING_BALANCE_INVALID` |
 | `packages/database` | `PostgresFinancialRepository.openFinancialAccount` reuses `FinancialAccountBootstrapService`; `listFinancialAccounts` reads `financial_current_balances`; `parseOpeningBalance`; shared `mapBalance` |
-| `apps/api` | Two routes; `requireCsrfProtectedAuthentication` at `preValidation`; `readCsrfHeader` helper in `session-transport.ts` (`auth-routes.ts` unchanged) |
+| `apps/api` | Two routes; `requireCsrfProtectedAuthentication` at `onRequest`; `readCsrfHeader` helper in `session-transport.ts` (`auth-routes.ts` unchanged) |
 
 No migration was required. `financial_accounts_user_uq`, the bootstrap idempotency operation, and the view already existed.
 
@@ -76,3 +81,16 @@ Each of the following deliberate mutations was confirmed to fail the suite:
 ## Verification record
 
 See [Milestone 05 — verification record](../evidence/2026-10-09-MILESTONE-05-VERIFICATION.md).
+
+## Independent QA fix (2026-10-09)
+
+**Finding:** a cross-site POST with a non-JSON body (an HTML form or multipart) or with malformed JSON returned `500 INTERNAL_ERROR` instead of `403 AUTH_CSRF_FAILED`. An unauthenticated request of the same kind returned `500` instead of `401`. No state changed, because the handler never ran.
+
+**Cause:** the guard ran at `preValidation`, which comes after Fastify's content-type parsing. The parser error reached the generic error handler first.
+
+**Fix:** the guard now runs at `onRequest`, for this route only.
+
+**Regression:** four new cases in `apps/api/test/financial-accounts.test.ts`. They failed with `500` before the fix.
+
+**Pre-existing and out of scope:** the generic error handler still maps Fastify content-type and JSON-parse errors to `500` on every route, including Milestone 01–04 routes on `main`. For this route, that now applies only to a same-origin request that carries a valid CSRF token.
+
