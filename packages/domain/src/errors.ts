@@ -26,7 +26,19 @@ export interface FinancialErrorOptions {
   readonly cause?: unknown;
 }
 
-export class FinancialError extends Error {
+/**
+ * Common shape for every safe, bounded API failure. The API error handler maps
+ * any subclass to one stable envelope; nothing outside this hierarchy may reach
+ * a client with a code and status.
+ */
+export abstract class KfinServiceError extends Error {
+  abstract readonly code: string;
+  abstract readonly statusCode: number;
+  abstract readonly safeMessage: string;
+  abstract readonly retryAfterSeconds: number | undefined;
+}
+
+export class FinancialError extends KfinServiceError {
   readonly code: FinancialErrorCode;
   readonly statusCode: number;
   readonly safeMessage: string;

@@ -4,6 +4,7 @@ import {
   boolean,
   char,
   check,
+  customType,
   date,
   foreignKey,
   index,
@@ -313,3 +314,123 @@ export const schema = {
   idempotencyResults,
   auditEvents,
 };
+
+// Trusted Private Beta access tables (migration 0004). Bytea columns hold
+// keyed digests only; no plaintext secret is ever persisted.
+const digest = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
+
+export const betaInvitations = pgTable('beta_invitations', {
+  id: uuid('id').primaryKey(),
+  codeDigest: digest('code_digest').notNull(),
+  invitedEmailNormalized: text('invited_email_normalized'),
+  status: text('status').notNull().default('active'),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true, mode: 'date' }),
+  consumedByUserId: uuid('consumed_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdByOperatorId: uuid('created_by_operator_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+}, (table) => [
+  unique('beta_invitations_code_digest_uq').on(table.codeDigest),
+]);
+
+export const passwordCredentials = pgTable('password_credentials', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  passwordHash: text('password_hash').notNull(),
+  passwordChangedAt: timestamp('password_changed_at', { withTimezone: true, mode: 'date' })
+    .notNull()
+    .defaultNow(),
+  hashPolicyVersion: smallint('hash_policy_version').notNull().default(1),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+});
+
+export const authChallenges = pgTable('auth_challenges', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  purpose: text('purpose').notNull(),
+  targetDigest: digest('target_digest').notNull(),
+  secretDigest: digest('secret_digest').notNull(),
+  issuedAt: timestamp('issued_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  consumedAt: timestamp('consumed_at', { withTimezone: true, mode: 'date' }),
+  supersededAt: timestamp('superseded_at', { withTimezone: true, mode: 'date' }),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  maxAttempts: smallint('max_attempts').notNull().default(5),
+  requestContextDigest: digest('request_context_digest'),
+  deliveryStatus: text('delivery_status').notNull().default('pending'),
+  lastDeliveryAttemptAt: timestamp('last_delivery_attempt_at', { withTimezone: true, mode: 'date' }),
+  lastDeliveryStatus: text('last_delivery_status'),
+  correlationId: text('correlation_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+}, (table) => [
+  unique('auth_challenges_secret_digest_uq').on(table.secretDigest),
+  index('auth_challenges_target_idx').on(table.purpose, table.targetDigest, table.issuedAt),
+  index('auth_challenges_user_idx').on(table.userId, table.purpose, table.issuedAt),
+]);
+
+export const sessions = pgTable('sessions', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  familyId: uuid('family_id').notNull(),
+  clientType: text('client_type').notNull().default('web'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  lastSeenAt: timestamp('last_seen_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  idleExpiresAt: timestamp('idle_expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  absoluteExpiresAt: timestamp('absolute_expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+  revocationReason: text('revocation_reason'),
+  deviceLabel: text('device_label'),
+  ipPrefixDigest: digest('ip_prefix_digest'),
+  csrfDigest: digest('csrf_digest').notNull(),
+  version: integer('version').notNull().default(1),
+}, (table) => [
+  index('sessions_user_active_idx').on(table.userId),
+  index('sessions_user_last_seen_idx').on(table.userId, table.lastSeenAt),
+  index('sessions_family_idx').on(table.familyId),
+]);
+
+export const sessionTokens = pgTable('session_tokens', {
+  id: uuid('id').primaryKey(),
+  sessionId: uuid('session_id').notNull().references(() => sessions.id, { onDelete: 'cascade' }),
+  tokenDigest: digest('token_digest').notNull(),
+  generation: integer('generation').notNull(),
+  issuedAt: timestamp('issued_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+  retiredAt: timestamp('retired_at', { withTimezone: true, mode: 'date' }),
+  graceExpiresAt: timestamp('grace_expires_at', { withTimezone: true, mode: 'date' }),
+  replayedAt: timestamp('replayed_at', { withTimezone: true, mode: 'date' }),
+}, (table) => [
+  unique('session_tokens_digest_uq').on(table.tokenDigest),
+  unique('session_tokens_generation_uq').on(table.sessionId, table.generation),
+]);
+
+export const securityEvents = pgTable('security_events', {
+  id: uuid('id').primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+  eventType: text('event_type').notNull(),
+  outcome: text('outcome').notNull(),
+  visibility: text('visibility').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  sessionId: uuid('session_id').references(() => sessions.id, { onDelete: 'set null' }),
+  correlationId: text('correlation_id').notNull(),
+  targetDigest: digest('target_digest'),
+  ipPrefixDigest: digest('ip_prefix_digest'),
+  metadata: jsonb('metadata').notNull().default({}),
+}, (table) => [
+  index('security_events_user_idx').on(table.userId, table.occurredAt, table.id),
+  index('security_events_target_idx').on(table.targetDigest, table.occurredAt),
+]);
+
+export const authAttemptCounters = pgTable('auth_attempt_counters', {
+  scopeKind: text('scope_kind').notNull(),
+  scopeDigest: digest('scope_digest').notNull(),
+  windowStart: timestamp('window_start', { withTimezone: true, mode: 'date' }).notNull(),
+  count: integer('count').notNull().default(1),
+  firstAt: timestamp('first_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  lastAt: timestamp('last_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+}, (table) => [
+  unique('auth_attempt_counters_pkey').on(table.scopeKind, table.scopeDigest, table.windowStart),
+  index('auth_attempt_counters_window_idx').on(table.windowStart),
+]);

@@ -65,7 +65,10 @@ import type {
   TransitionOccurrenceInput,
   TransitionOccurrenceResult,
 } from '@kfin/database';
-import { FinancialError } from '@kfin/domain';
+import { FinancialError, KfinServiceError } from '@kfin/domain';
+import { registerAuthRoutes, type AuthApiService } from './auth-routes.js';
+import { UnavailableEmailAdapter, type EmailDeliveryAdapter } from './email-delivery.js';
+import type { SessionTransportOptions } from './session-transport.js';
 import type { AuthenticateRequest } from './types.js';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -168,6 +171,11 @@ export interface BuildAppOptions {
   readonly authenticate: AuthenticateRequest;
   readonly readinessPool?: Pick<Pool, 'query'>;
   readonly logger?: boolean;
+  /** Trusted Private Beta access. Absent means every auth route stays unregistered. */
+  readonly authService?: AuthApiService;
+  readonly emailDelivery?: EmailDeliveryAdapter;
+  readonly authTransport?: SessionTransportOptions;
+  readonly authAbsoluteLifetimeSeconds?: number;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -222,6 +230,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
   });
   app.get('/openapi.json', { schema: { hide: true } }, async () => app.swagger());
+
+  if (options.authService) {
+    await registerAuthRoutes({
+      app,
+      authenticate: options.authenticate,
+      authService: options.authService,
+      emailDelivery: options.emailDelivery ?? new UnavailableEmailAdapter(),
+      transport: options.authTransport ?? {
+        secure: true,
+        prefixHost: true,
+      },
+      absoluteLifetimeSeconds: options.authAbsoluteLifetimeSeconds ?? 90 * 24 * 60 * 60,
+    });
+  }
 
   app.get('/api/v1/financial-account', {
     preHandler: requireAuthentication,
@@ -572,7 +594,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   ));
 
   app.setErrorHandler((error, request, reply) => {
-    if (error instanceof FinancialError) {
+    if (error instanceof KfinServiceError) {
       if (error.retryAfterSeconds !== undefined) {
         reply.header('Retry-After', String(error.retryAfterSeconds));
       }

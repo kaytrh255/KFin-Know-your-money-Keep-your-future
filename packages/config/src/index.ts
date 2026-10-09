@@ -15,6 +15,64 @@ export const financialPolicy = Object.freeze({
   retryableSqlstates: Object.freeze(['55P03', '40P01', '40001'] as const),
 });
 
+/**
+ * Candidate Trusted Private Beta access bounds.
+ *
+ * Every value below is an *unapproved candidate* recorded for implementation and
+ * test determinism only. `SPEC-AUTH-02` (Security + Product) must approve each
+ * invitation/password/OTP/reset/login-abuse/lifetime/rotation value before any of
+ * them is treated as policy. No framework default is hidden here.
+ */
+export const authPolicy = Object.freeze({
+  id: 'trusted_beta_access.v1',
+  password: Object.freeze({
+    minimumLength: 12,
+    maximumLength: 128,
+    hashPolicyVersion: 1,
+    argon2: Object.freeze({
+      algorithm: 'argon2id',
+      memoryCost: 19_456,
+      timeCost: 2,
+      parallelism: 1,
+    }),
+  }),
+  invitation: Object.freeze({
+    codeEntropyBytes: 20,
+    codeGroupLength: 8,
+    defaultLifetimeMs: 14 * 24 * 60 * 60 * 1_000,
+  }),
+  challenge: Object.freeze({
+    otpDigits: 6,
+    otpLifetimeMs: 10 * 60 * 1_000,
+    maximumAttempts: 5,
+    resendCooldownMs: 60 * 1_000,
+    resetSecretEntropyBytes: 32,
+    resetLifetimeMs: 30 * 60 * 1_000,
+    hourlyIssuanceCap: 5,
+    dailyIssuanceCap: 12,
+  }),
+  session: Object.freeze({
+    tokenEntropyBytes: 32,
+    csrfEntropyBytes: 32,
+    idleLifetimeMs: 30 * 24 * 60 * 60 * 1_000,
+    absoluteLifetimeMs: 90 * 24 * 60 * 60 * 1_000,
+    rotationGraceMs: 30 * 1_000,
+    lastSeenThrottleMs: 60 * 1_000,
+    cookieName: 'kfin_session',
+    cookiePrefixHost: true,
+  }),
+  abuse: Object.freeze({
+    windowMs: 15 * 60 * 1_000,
+    loginMaximumFailures: 10,
+    verificationMaximumAttempts: 20,
+    resetMaximumRequests: 10,
+    registrationMaximumPerWindow: 20,
+    retentionWindows: 8,
+  }),
+});
+
+export type AuthPolicy = typeof authPolicy;
+
 const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().trim().min(1).default('0.0.0.0'),
@@ -28,6 +86,43 @@ const environmentSchema = z.object({
   FINANCIAL_PREVIEW_SIGNING_KEY: z.string().regex(/^[a-fA-F0-9]{64}$/, {
     message: 'must be exactly 32 bytes encoded as 64 hexadecimal characters',
   }),
+  // Server secret for keyed auth digests (invitation codes, OTP/reset secrets,
+  // session tokens, CSRF tokens, abuse counters). Never shares the financial
+  // preview key and never becomes a client-visible value.
+  AUTH_SECRET: z.string().regex(/^[a-fA-F0-9]{64}$/, {
+    message: 'must be exactly 32 bytes encoded as 64 hexadecimal characters',
+  }),
+  // UNSUPPORTED: cross-origin credentialed browser access is not implemented.
+  // No CORS layer exists and no `Access-Control-Allow-Credentials` response is
+  // ever emitted, so an allowlisted origin would widen the CSRF origin check
+  // without a browser being able to complete the request. The variable is kept
+  // only to fail fast on a deployment that still sets it.
+  AUTH_ALLOWED_ORIGINS: z
+    .string()
+    .default('')
+    .refine((value) => value.trim().length === 0, {
+      message: 'is unsupported: no credentialed CORS layer exists, so the browser client must be served same-origin; remove every configured origin',
+    }),
+  // Production deployments MUST keep this enabled. Local HTTP development may
+  // disable it explicitly; the cookie then loses the `__Host-` prefix.
+  AUTH_COOKIE_SECURE: z
+    .string()
+    .default('true')
+    .transform((value) => value === 'true')
+    .pipe(z.boolean()),
+  // Provider selection remains Phase 6 (OQ-17). Only vendor-neutral adapters exist.
+  EMAIL_DELIVERY_ADAPTER: z.enum(['memory', 'none']).default('none'),
+}).superRefine((value, ctx) => {
+  // A clear-cookie session flag in production would put the bearer token on the
+  // network in plaintext; refuse to boot instead of degrading silently
+  // (SEC-SES-01/02).
+  if (value.NODE_ENV === 'production' && value.AUTH_COOKIE_SECURE !== true) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['AUTH_COOKIE_SECURE'],
+      message: 'must be "true" when NODE_ENV=production: session cookies may not be sent over plaintext HTTP',
+    });
+  }
 });
 
 export interface ApiConfig {
@@ -41,6 +136,9 @@ export interface ApiConfig {
   };
   readonly idempotencyRetentionMs: number;
   readonly financialPreviewSigningKey: string;
+  readonly authSecret: string;
+  readonly authCookieSecure: boolean;
+  readonly emailDeliveryAdapter: 'memory' | 'none';
 }
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -63,6 +161,9 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): Api
     }),
     idempotencyRetentionMs: parsed.data.IDEMPOTENCY_RETENTION_HOURS * 60 * 60 * 1_000,
     financialPreviewSigningKey: parsed.data.FINANCIAL_PREVIEW_SIGNING_KEY,
+    authSecret: parsed.data.AUTH_SECRET,
+    authCookieSecure: parsed.data.AUTH_COOKIE_SECURE,
+    emailDeliveryAdapter: parsed.data.EMAIL_DELIVERY_ADAPTER,
   });
 }
 
