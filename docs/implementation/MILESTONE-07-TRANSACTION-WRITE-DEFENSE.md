@@ -7,6 +7,8 @@
 **Production readiness:** Not claimed
 
 > **Erratum added by Milestone 08 (2026-10-10):** the "Explicit non-goals" section below misnames the snapshot route as `POST /api/v1/snapshots`, misattributes it to Milestone 05 (it shipped in Milestone 01), and the introduction's claim that `POST /api/v1/transactions` was the *only* mutation left on plain `requireAuthentication` is false — eight others were. Corrections and proof are in `docs/evidence/2026-10-09-MILESTONE-07-VERIFICATION.md` § Erratum (E-1…E-4). The original text is kept unchanged for auditability.
+>
+> **E-4 closed by Milestone 09 (2026-10-10):** the seven correction, void and schedule mutation registrations flagged by E-4 now run `onRequest: requireCsrfProtectedAuthentication` with `403` in their published contract. See `docs/implementation/MILESTONE-09-CORRECTION-SCHEDULE-WRITE-DEFENSE.md` and `docs/evidence/2026-10-10-MILESTONE-09-VERIFICATION.md`. The erratum text above is unchanged.
 
 Milestone 01 shipped the transaction domain, repository method, and the `POST /api/v1/transactions` route; Milestone 02 added corrections and re-verified the create path end-to-end. When Milestone 04 introduced the browser-write defense (same-origin check plus double-submit CSRF at `onRequest`, before body parsing) and Milestones 05–06 applied it to every new mutation, `POST /api/v1/transactions` was left as the only authenticated mutation still running plain `requireAuthentication` at `preHandler`. This milestone closes that gap and surfaces the idempotency replay marker that the persistence layer already computed. It does **not** modify any specification, SDD, ADR, test-strategy, or governance document. It adds no migration and changes no persisted schema.
 

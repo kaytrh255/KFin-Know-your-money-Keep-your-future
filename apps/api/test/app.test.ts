@@ -60,6 +60,30 @@ async function buildProtectedTransactionApp(options: {
   return app;
 }
 
+/**
+ * E-4 (Milestone 09): app wired like production for the schedule mutations,
+ * which now take the same browser write defense as every other financial write.
+ */
+async function buildProtectedScheduleApp(options: {
+  scheduleService: ScheduleApiService;
+  principal?: AuthenticatedPrincipal | null;
+  authVerifier?: AuthApiService | null;
+}): Promise<FastifyInstance> {
+  const principal = options.principal === undefined
+    ? { userId: USER_ID, sessionId: SESSION_ID, csrfDigest: CSRF_DIGEST }
+    : options.principal;
+  const app = await buildApp({
+    financialService: service(),
+    scheduleService: options.scheduleService,
+    ...(options.authVerifier === null
+      ? {}
+      : { authService: options.authVerifier ?? csrfVerifier() }),
+    authenticate: async () => principal,
+  });
+  apps.push(app);
+  return app;
+}
+
 const transaction = {
   id: TRANSACTION_ID,
   kind: 'expense' as const,
@@ -379,11 +403,9 @@ describe('KFin API ownership boundary', () => {
 
   it('requires an owner-scoped authoritative preview before correction commit', async () => {
     const financialService = service();
-    const app = await buildApp({
-      financialService,
-      authenticate: async () => ({ userId: USER_ID }),
-    });
-    apps.push(app);
+    // E-4 (Milestone 09): correction preview and commit are browser write
+    // surfaces, so the envelope now sends the headers the guard requires.
+    const app = await buildProtectedTransactionApp({ financialService });
 
     const previewPayload = {
       reason: 'Fix entered amount',
@@ -398,6 +420,7 @@ describe('KFin API ownership boundary', () => {
     const preview = await app.inject({
       method: 'POST',
       url: `/api/v1/transactions/${TRANSACTION_ID}/correction-preview`,
+      headers: PROTECTED,
       payload: previewPayload,
     });
     expect(preview.statusCode).toBe(200);
@@ -411,7 +434,7 @@ describe('KFin API ownership boundary', () => {
     const commit = await app.inject({
       method: 'POST',
       url: `/api/v1/transactions/${TRANSACTION_ID}/corrections`,
-      headers: { 'idempotency-key': 'correction-key' },
+      headers: { ...PROTECTED, 'idempotency-key': 'correction-key' },
       payload: { ...previewPayload, context: preview.json().context },
     });
     expect(commit.statusCode).toBe(201);
@@ -509,17 +532,14 @@ describe('KFin API ownership boundary', () => {
 describe('one-off schedule occurrence API', () => {
   it('owner-scopes one-off creation and explicit confirmation', async () => {
     const schedule = scheduleService();
-    const app = await buildApp({
-      financialService: service(),
-      scheduleService: schedule,
-      authenticate: async () => ({ userId: USER_ID }),
-    });
-    apps.push(app);
+    // E-4 (Milestone 09): schedule creation and confirmation are browser write
+    // surfaces, so the envelope now sends the headers the guard requires.
+    const app = await buildProtectedScheduleApp({ scheduleService: schedule });
 
     const created = await app.inject({
       method: 'POST',
       url: '/api/v1/schedule/one-off',
-      headers: { 'idempotency-key': 'schedule-create-key' },
+      headers: { ...PROTECTED, 'idempotency-key': 'schedule-create-key' },
       payload: {
         title: 'Rent',
         kind: 'expense',
@@ -542,7 +562,7 @@ describe('one-off schedule occurrence API', () => {
     const confirmed = await app.inject({
       method: 'POST',
       url: `/api/v1/schedule/occurrences/${OCCURRENCE_ID}/confirm`,
-      headers: { 'idempotency-key': 'schedule-confirm-key' },
+      headers: { ...PROTECTED, 'idempotency-key': 'schedule-confirm-key' },
       payload: {
         amountMinor: '11900000',
         occurredOn: '2026-10-15',
@@ -567,17 +587,12 @@ describe('one-off schedule occurrence API', () => {
 
   it('rejects recurrence, owner injection, and presentation aliases at the strict boundary', async () => {
     const schedule = scheduleService();
-    const app = await buildApp({
-      financialService: service(),
-      scheduleService: schedule,
-      authenticate: async () => ({ userId: USER_ID }),
-    });
-    apps.push(app);
+    const app = await buildProtectedScheduleApp({ scheduleService: schedule });
 
     const invalidCreate = await app.inject({
       method: 'POST',
       url: '/api/v1/schedule/one-off',
-      headers: { 'idempotency-key': 'schedule-invalid-key' },
+      headers: { ...PROTECTED, 'idempotency-key': 'schedule-invalid-key' },
       payload: {
         userId: OTHER_USER_ID,
         title: 'Rent',
