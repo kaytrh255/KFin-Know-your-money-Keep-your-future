@@ -58,7 +58,9 @@ The guard **fails closed**: when the principal carries no session-bound `csrfDig
 
 - TypeScript typecheck (`pnpm run typecheck`): clean, application **and** tests.
 - Evidence harness (`pnpm run evidence:check` and `pnpm run evidence:test`): 25 modules / 29 harness files checked; 16/16 passing.
-- Unit and API tests (`pnpm run test:unit`): **477 passed, 0 skipped, 0 failed** across 22 files. Baseline before this milestone was 341 passed; the delta is the new 136-test `apps/api/test/correction-schedule-write-defense.test.ts`. The Milestone 07 regression block is untouched at 22/22.
-- Mutation checks A/B/C were all killed (see the verification record).
+- Unit and API tests (`pnpm run test:unit`): **485 passed, 0 skipped, 0 failed** across 22 files. Baseline before this milestone was 341 passed; the delta is the new 144-test `apps/api/test/correction-schedule-write-defense.test.ts`. The Milestone 07 regression block is untouched at 22/22.
+- Mutation checks A/B/C/D/E were all killed (see the verification record).
+
+> **QA correction (2026-10-10).** Independent QA found the owner-derivation test unsound: it injected `userId`/`ownerId` into the request body, and because every body contract in this set is a `z.strictObject`, the request was rejected `400` before the handler ran. The assertion that the owner came from the principal therefore sat behind an unreachable branch and **never executed**. The test was split in two — one that sends a **valid** body and asserts the owner argument the service actually receives is the principal's, and one that sends the **malicious** body and pins the strict-schema `400`. Mutation D proves the correction: with a header-derived owner injected into the implementation, the original test passed **136/136** while the corrected test fails. No implementation defect was found — the fault was in the test only.
 
 The full acceptance-criteria traceability table, commands, and outputs are in `docs/evidence/2026-10-10-MILESTONE-09-VERIFICATION.md`.

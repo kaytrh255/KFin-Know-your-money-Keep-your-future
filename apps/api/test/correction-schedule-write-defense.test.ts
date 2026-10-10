@@ -98,12 +98,20 @@ interface RouteCase {
   readonly successStatus: 200 | 201;
   /** Whether the route declares the idempotency header contract. */
   readonly requiresIdempotencyKey: boolean;
+  /**
+   * The path parameter the handler passes as its **second** service argument,
+   * for routes that have one. Anchors the argument list in the owner assertion
+   * below, so it cannot silently assert against the wrong position. Absent for
+   * `/schedule/one-off`, which takes no resource id.
+   */
+  readonly resourceId?: string;
   readonly spy: (services: Services) => unknown;
 }
 
 const ROUTES: readonly RouteCase[] = [
   {
     label: 'correction preview',
+    resourceId: TRANSACTION_ID,
     url: `/api/v1/transactions/${TRANSACTION_ID}/correction-preview`,
     openapiPath: '/transactions/{id}/correction-preview',
     body: { replacement: REPLACEMENT, reason: 'Fix entered amount' },
@@ -113,6 +121,7 @@ const ROUTES: readonly RouteCase[] = [
   },
   {
     label: 'void preview',
+    resourceId: TRANSACTION_ID,
     url: `/api/v1/transactions/${TRANSACTION_ID}/void-preview`,
     openapiPath: '/transactions/{id}/void-preview',
     body: { reason: 'Entered by mistake' },
@@ -122,6 +131,7 @@ const ROUTES: readonly RouteCase[] = [
   },
   {
     label: 'correction commit',
+    resourceId: TRANSACTION_ID,
     url: `/api/v1/transactions/${TRANSACTION_ID}/corrections`,
     openapiPath: '/transactions/{id}/corrections',
     body: { replacement: REPLACEMENT, reason: 'Fix entered amount', context: REVIEW_CONTEXT },
@@ -131,6 +141,7 @@ const ROUTES: readonly RouteCase[] = [
   },
   {
     label: 'void commit',
+    resourceId: TRANSACTION_ID,
     url: `/api/v1/transactions/${TRANSACTION_ID}/void`,
     openapiPath: '/transactions/{id}/void',
     body: { reason: 'Entered by mistake', context: REVIEW_CONTEXT },
@@ -158,6 +169,7 @@ const ROUTES: readonly RouteCase[] = [
   },
   {
     label: 'occurrence confirmation',
+    resourceId: OCCURRENCE_ID,
     url: `/api/v1/schedule/occurrences/${OCCURRENCE_ID}/confirm`,
     openapiPath: '/schedule/occurrences/{id}/confirm',
     body: {
@@ -176,6 +188,7 @@ const ROUTES: readonly RouteCase[] = [
   },
   {
     label: 'occurrence skip',
+    resourceId: OCCURRENCE_ID,
     url: `/api/v1/schedule/occurrences/${OCCURRENCE_ID}/skip`,
     openapiPath: '/schedule/occurrences/{id}/skip',
     body: TRANSITION_BODY,
@@ -185,6 +198,7 @@ const ROUTES: readonly RouteCase[] = [
   },
   {
     label: 'occurrence cancel',
+    resourceId: OCCURRENCE_ID,
     url: `/api/v1/schedule/occurrences/${OCCURRENCE_ID}/cancel`,
     openapiPath: '/schedule/occurrences/{id}/cancel',
     body: TRANSITION_BODY,
@@ -585,7 +599,37 @@ describe('E-4 — correction, void and schedule mutations (browser write defense
   );
 
   it.each(ROUTES.map((route) => [route.label, route] as const))(
-    'derives the owner on %s from the principal and never from request data',
+    'derives the owner on %s from the authenticated principal on a valid request',
+    async (_label, route) => {
+      const { app, services } = await build();
+      const spy = spyOf(route, services);
+      const response = await app.inject({
+        method: 'POST',
+        url: route.url,
+        // A client-supplied owner header is present on an otherwise valid
+        // request and must be ignored: the owner comes from the principal.
+        headers: { ...PROTECTED_IDEM, 'x-user-id': OTHER_USER_ID },
+        payload: route.body,
+      });
+
+      expect(response.statusCode).toBe(route.successStatus);
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      // Every handler in this set takes the owner as its first service argument
+      // and, where the path carries one, the resource id as its second. The
+      // resource id anchor keeps this assertion pinned to the right positions.
+      const args = spy.mock.calls[0] as unknown[];
+      expect(args[0]).toBe(USER_ID);
+      expect(args[0]).not.toBe(OTHER_USER_ID);
+      if (route.resourceId !== undefined) expect(args[1]).toBe(route.resourceId);
+
+      // The injected owner never reaches the service in any position.
+      expect(args).not.toContain(OTHER_USER_ID);
+    },
+  );
+
+  it.each(ROUTES.map((route) => [route.label, route] as const))(
+    'rejects a client-supplied owner on %s at the strict body boundary',
     async (_label, route) => {
       const { app, services } = await build();
       const spy = spyOf(route, services);
@@ -596,14 +640,12 @@ describe('E-4 — correction, void and schedule mutations (browser write defense
         payload: { userId: OTHER_USER_ID, ownerId: OTHER_USER_ID, ...route.body },
       });
 
-      // Strict body contracts reject the injected owner outright; where the body
-      // is otherwise valid the owner argument still comes from the principal.
-      expect([400, route.successStatus]).toContain(response.statusCode);
-      if (response.statusCode === route.successStatus) {
-        expect(spy).toHaveBeenCalledWith(USER_ID, expect.anything(), expect.anything());
-      } else {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      // Every body contract in this set is a `z.strictObject`, so an injected
+      // owner is rejected by validation: the handler is never reached and no
+      // owner other than the principal's can ever be passed to the service.
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.code).toBe('REQUEST_VALIDATION_FAILED');
+      expect(spy).not.toHaveBeenCalled();
     },
   );
 

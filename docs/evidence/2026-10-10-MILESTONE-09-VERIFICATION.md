@@ -45,7 +45,7 @@ One item, confirmed against `main` before implementation. No feature work beyond
 
 `apps/api/test/app.test.ts` — +36 / −21. Three pre-existing cases that exercise these routes were re-wired to send the browser headers the guard now requires (`buildProtectedTransactionApp` for the correction case; a new `buildProtectedScheduleApp` helper for the two schedule cases). **Their intent and assertions are unchanged** — the same owner-scoping, preview-then-commit and strict-boundary assertions hold. A `PROTECTED` header set was added to the affected requests.
 
-`apps/api/test/correction-schedule-write-defense.test.ts` — **new, 662 lines, 136 tests.**
+`apps/api/test/correction-schedule-write-defense.test.ts` — **new, 704 lines, 144 tests.**
 
 `docs/implementation/MILESTONE-09-CORRECTION-SCHEDULE-WRITE-DEFENSE.md` — new.
 
@@ -75,9 +75,9 @@ The 403 matrix cases are: missing CSRF header; wrong CSRF token; foreign `Origin
 | Typecheck (app **and** tests) | `corepack pnpm run typecheck` | clean, no output |
 | Evidence harness check | `corepack pnpm run evidence:check` | 25 modules, 29 harness files checked |
 | Evidence harness tests | `corepack pnpm run evidence:test` | **16 passed, 0 failed** |
-| Unit + API tests | `corepack pnpm run test:unit` | **477 passed, 0 failed, 0 skipped** (22 files) |
+| Unit + API tests | `corepack pnpm run test:unit` | **485 passed, 0 failed, 0 skipped** (22 files) |
 
-Baseline before this milestone on the same parent commit was **341 passed** across 21 files. The delta is exactly the new 136-test file. The Milestone 07 regression block remains **22/22** and the Milestone 08 snapshot suite **18/18**, both untouched.
+Baseline before this milestone on the same parent commit was **341 passed** across 21 files. The delta is exactly the new 144-test file. The Milestone 07 regression block remains **22/22** and the Milestone 08 snapshot suite **18/18**, both untouched.
 
 ## Mutation checks
 
@@ -88,8 +88,14 @@ Each mutation was applied to `apps/api/src/app.ts`, the suite was run, and the m
 | A | Revert `POST /transactions/:id/corrections` to `preHandler: requireAuthentication` | **Killed** — 11 targeted failures (6-case matrix, 3 cross-site body shapes, 2 fail-closed) |
 | B | Revert the shared `schedule/occurrences/:id/{skip,cancel}` registration to `preHandler: requireAuthentication` | **Killed** — 22 failures, covering both URLs |
 | C | Remove `403: errorResponseSchema` from `correctionResponses()` | **Killed** — 8 failures, one per URL, from the OpenAPI contract assertions |
+| D | Derive the owner on `correction-preview` from the `x-user-id` header instead of the principal (`(request.headers['x-user-id'] as string) ?? requireUserId(request)`) | **Killed** — the valid-request owner test fails |
+| E | Relax `correctionPreviewBodySchema` from `z.strictObject` to `z.object`, so an injected owner passes validation to the handler | **Killed** — the malicious-owner test fails |
 
 Mutation C matters specifically because it proves the published-contract half of the change is independently tested, not merely the runtime behaviour.
+
+**Mutations D and E exist because of a QA finding against this record's own tests.** The original owner-derivation test injected `userId`/`ownerId` into the request body. Since every body contract here is a `z.strictObject`, that request was rejected `400` before the handler ran, so the test always took its `else` branch (`expect(spy).not.toHaveBeenCalled()`) and the `toHaveBeenCalledWith(USER_ID, …)` assertion was **unreachable dead code** — the test never proved owner derivation at all.
+
+This was confirmed empirically rather than assumed: with mutation D applied, the **original** test passed **136/136**, i.e. it did not detect a live owner-injection regression in the implementation. After the split, the corrected test fails under mutation D and the schema test fails under mutation E. **No implementation defect was found** — only the test was at fault.
 
 ## Findings deliberately left open (not fixed here, out of confirmed scope)
 
