@@ -463,16 +463,14 @@ describe('KFin API ownership boundary', () => {
         cause: new Error('sensitive SQL detail'),
       });
     });
-    const app = await buildApp({
-      financialService,
-      authenticate: async () => ({ userId: USER_ID }),
-    });
-    apps.push(app);
+    const app = await buildProtectedTransactionApp({ financialService });
 
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/financial-account/snapshots',
-      headers: { 'idempotency-key': 'snapshot-key' },
+      // Milestone 08: this route is CSRF-protected, so the envelope assertion
+      // now sends the same browser headers the guard requires.
+      headers: { ...PROTECTED, 'idempotency-key': 'snapshot-key' },
       payload: {
         amountMinor: '1000',
         effectiveAt: '2026-10-08T08:00:00.000Z',

@@ -4,6 +4,8 @@
 **Implementation doc:** `docs/implementation/MILESTONE-07-TRANSACTION-WRITE-DEFENSE.md`<br>
 **Working diff:** `apps/api/src/app.ts` (+13/−2), `apps/api/test/app.test.ts` (+186/−34 net), `packages/database/src/financial-repository.ts` (+2), `packages/database/test/financial-foundation.integration.test.ts` (+3/−1), plus this and the implementation doc — 193 insertions, 36 deletions across 4 code/test files.
 
+> **Erratum added by Milestone 08 (2026-10-10):** four factual claims in this record are incorrect, including the security justification used to defer the snapshot route. The original text is preserved unchanged for auditability and is superseded by [Erratum](#erratum--corrected-by-milestone-08-2026-10-10) at the end of this record.
+
 ## Scope statement
 
 Milestones 01–02 already shipped create/list of manual one-time transactions with idempotency, validation, owner scoping, snapshot anchoring, and historical-only invariants. This milestone verified those behaviors against the brief's acceptance criteria (they pass) and closed the single remaining defense gap: `POST /api/v1/transactions` was the one authenticated mutation still on plain `requireAuthentication`, predating the Milestone 04 browser defense that M04/M05/M06 apply to every other mutation. The replay marker computed by the persistence layer is now also exposed to clients as `Idempotency-Replayed: true`.
@@ -43,10 +45,27 @@ The first integration run failed one assertion: `financial-foundation.integratio
 | No float money math, no secrets, no unsafe logging | Pass | amounts stay BIGINT string minor units; commit contains no secrets (routes altered only) |
 | No M04–M06 regression | Pass | full unit gate (286) + integration (59) green, auth/access, account onboarding, savings suites untouched and green |
 
-## Deferred observation (not fixed here, by constraint)
+## Deferred observation (not fixed here, by constraint) — SUPERSEDED, see Erratum E-1/E-2/E-3
 
 `POST /api/v1/snapshots` still runs plain `requireAuthentication` at `preHandler`, without the M04 browser defense. The instruction for this milestone was to harden the transaction write **without changing the Milestone 05 onboarding/snapshot contract**, so the route was left untouched. It accepts no client-controlled financial amounts (it seeds the account at onboarding), but it is a mutation and the inconsistency with the M04–M06 convention is now explicit; raising `onRequest: requireCsrfProtectedAuthentication` there is a one-line change with a ready-made test pattern whenever the M05 contract is allowed to be amended.
 
 ## Not in scope (unchanged)
 
 Corrections/voids/previews (M02), schedule occurrences (M03), recurrence generation, debts, reminders, deletion — all behind their existing milestone scopes or open SPEC blockers.
+
+## Erratum — corrected by Milestone 08 (2026-10-10)
+
+Milestone 08 re-verified this record against `main` at `72340ce4830e037a6c5ec08e780ff24f402f6e62` and against the Milestone 07 commit `8765e6a9525fc612cdd085018a9d1e386c1b71a8`. The four claims below are factually wrong. Nothing else in this record was found to be inaccurate; the gates it reports were not re-executed by Milestone 08 and are not re-asserted here.
+
+| # | Claim as originally written | Verified correction | How it was verified |
+|---|---|---|---|
+| E-1 | `POST /api/v1/snapshots` (in the deferred observation, and repeated under "Explicit non-goals" in the implementation doc) | No such route exists in this repository. The route is `POST /api/v1/financial-account/snapshots`. | `grep -rn "api/v1/snapshots" apps/ packages/` returns no match; the route is declared in `apps/api/src/app.ts`. |
+| E-2 | "It accepts no client-controlled financial amounts (it seeds the account at onboarding)" | False, and it understates the risk. The body is `createSnapshotBodySchema`, whose `amountMinor` is a client-supplied **signed** minor-unit amount — zero, negative and positive values all satisfy the contract — and committing it makes that amount the authoritative current balance. Seeding an account at onboarding is a **different** route, `POST /api/v1/financial-account`, which takes `openingBalanceMinor`. | `packages/contracts/src/financial.ts` (`createSnapshotBodySchema`) and `packages/contracts/src/common.ts` (`signedMinorSchema`); `packages/database/test/financial-foundation.integration.test.ts` asserts that `createSnapshot({ amountMinor: '500000' })` makes `currentBalanceMinor` equal `'500000'`. |
+| E-3 | "That route is the frozen Milestone 05 onboarding contract" | False. The route shipped in **Milestone 01**, not Milestone 05. | It is present in commit `10e0e4e5b2f1258387c9cb44acc3d5efe1d0e68c` ("feat: implement financial foundation milestone", 2026-10-08) and is listed in the `docs/implementation/MILESTONE-01-FINANCIAL-FOUNDATION.md` route table as an idempotent manual known-balance snapshot. Milestone 05 (`b95b71a`) added only `POST /api/v1/financial-account` and `GET /api/v1/financial-accounts`. |
+| E-4 | "`POST /api/v1/transactions` was left as the only authenticated mutation still running plain `requireAuthentication`" | False at the Milestone 07 commit itself. Eight other mutation routes ran plain `requireAuthentication` in `8765e6a`: `financial-account/snapshots`, `transactions/:id/correction-preview`, `transactions/:id/void-preview`, `transactions/:id/corrections`, `transactions/:id/void`, `schedule/one-off`, `schedule/occurrences/:id/confirm`, and `schedule/occurrences/:id/skip` plus `.../cancel`. The same document's "Explicit non-goals" section contradicts the claim by leaving corrections and schedule untouched. | Guard audit of `git show 8765e6a9525fc612cdd085018a9d1e386c1b71a8:apps/api/src/app.ts`. |
+
+**Corrected per-file diff for `8765e6a`** (from `git show --numstat`): `apps/api/src/app.ts` +11/−2 (this record said +13/−2); `apps/api/test/app.test.ts` +178/−33 (said +186/−34); `packages/database/src/financial-repository.ts` +2/−0; `packages/database/test/financial-foundation.integration.test.ts` +2/−1 (said +3/−1). The record's **totals** — 193 insertions and 36 deletions across the four code/test files — are correct.
+
+**Status of the deferred observation.** Closed by Milestone 08, which raises `POST /api/v1/financial-account/snapshots` to `onRequest: requireCsrfProtectedAuthentication` and adds `403` to its response contract. Because of E-2 the route was a materially stronger CSRF exposure than this record described: an unguarded cross-site write could have overwritten the victim's authoritative current balance with an attacker-chosen signed amount.
+
+**E-4 remains open.** The seven correction, void and schedule mutation routes still run plain `requireAuthentication` at `main`. Milestone 08 deliberately did not change them, because its confirmed scope was the snapshot route only. They are recorded here so that independent QA does not read the Milestone 07 wording as evidence that those routes are browser-write protected.
