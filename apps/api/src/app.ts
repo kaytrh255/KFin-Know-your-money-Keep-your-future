@@ -337,8 +337,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     },
   }, async (request) => options.financialService.getCurrentBalance(requireUserId(request)));
 
+  // Milestone 08: a manual balance snapshot is a state-changing browser write
+  // whose client-supplied `amountMinor` becomes the authoritative current
+  // balance, so it takes the Milestone 04 defense at `onRequest` (before
+  // content-type parsing) like every other financial mutation. This closes the
+  // gap Milestone 07 recorded as a deferred observation.
   app.post('/api/v1/financial-account/snapshots', {
-    preHandler: requireAuthentication,
+    onRequest: requireCsrfProtectedAuthentication,
     schema: {
       tags: ['financial-foundation'],
       headers: idempotencyHeadersSchema,
@@ -347,6 +352,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         201: createSnapshotResponseSchema,
         400: errorResponseSchema,
         401: errorResponseSchema,
+        403: errorResponseSchema,
         404: errorResponseSchema,
         409: errorResponseSchema,
         422: errorResponseSchema,

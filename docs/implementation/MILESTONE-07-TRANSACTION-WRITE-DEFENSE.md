@@ -6,6 +6,8 @@
 **Scope:** Verification and defense hardening of the manual one-time transaction write path (`POST /api/v1/transactions`)<br>
 **Production readiness:** Not claimed
 
+> **Erratum added by Milestone 08 (2026-10-10):** the "Explicit non-goals" section below misnames the snapshot route as `POST /api/v1/snapshots`, misattributes it to Milestone 05 (it shipped in Milestone 01), and the introduction's claim that `POST /api/v1/transactions` was the *only* mutation left on plain `requireAuthentication` is false — eight others were. Corrections and proof are in `docs/evidence/2026-10-09-MILESTONE-07-VERIFICATION.md` § Erratum (E-1…E-4). The original text is kept unchanged for auditability.
+
 Milestone 01 shipped the transaction domain, repository method, and the `POST /api/v1/transactions` route; Milestone 02 added corrections and re-verified the create path end-to-end. When Milestone 04 introduced the browser-write defense (same-origin check plus double-submit CSRF at `onRequest`, before body parsing) and Milestones 05–06 applied it to every new mutation, `POST /api/v1/transactions` was left as the only authenticated mutation still running plain `requireAuthentication` at `preHandler`. This milestone closes that gap and surfaces the idempotency replay marker that the persistence layer already computed. It does **not** modify any specification, SDD, ADR, test-strategy, or governance document. It adds no migration and changes no persisted schema.
 
 ## What changed
@@ -23,7 +25,7 @@ Both changes conform to the conventions established in Milestones 04–06; the M
 
 ## Explicit non-goals
 
-- `POST /api/v1/snapshots` still runs plain `requireAuthentication`. That route is the frozen Milestone 05 onboarding contract; this milestone's integration constraint was to harden the transaction path **without** changing the M05 snapshot surface. The gap is recorded as a deferred observation in the verification evidence.
+- `POST /api/v1/snapshots` [sic — actually `POST /api/v1/financial-account/snapshots`, and a Milestone 01 route; see Erratum E-1/E-3] still runs plain `requireAuthentication`. That route is the frozen Milestone 05 onboarding contract; this milestone's integration constraint was to harden the transaction path **without** changing the M05 snapshot surface. The gap is recorded as a deferred observation in the verification evidence.
 - Corrections, voids, and previews (Milestone 02) and schedule occurrences (Milestone 03) are untouched.
 - Recurring definitions, schedule generation, debt payments, and planned-purchase linking remain out of scope behind their open SPEC blockers.
 
