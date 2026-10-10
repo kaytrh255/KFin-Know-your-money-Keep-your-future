@@ -486,8 +486,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       : { limit: request.query.limit, cursor: request.query.cursor },
   ));
 
+  // E-4 (Milestone 09): the correction write surface takes the Milestone 04
+  // browser state-change defense at `onRequest` (before content-type parsing),
+  // the same convention Milestones 05/06/07/08 apply to every other financial
+  // mutation. Preview is a write surface here: it binds the authoritative
+  // review context that the commit route later accepts.
   app.post('/api/v1/transactions/:id/correction-preview', {
-    preHandler: requireAuthentication,
+    onRequest: requireCsrfProtectedAuthentication,
     schema: {
       tags: ['financial-corrections'],
       params: transactionPathSchema,
@@ -500,8 +505,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     correctionPreviewInput(request.body),
   ));
 
+  // E-4 (Milestone 09): as above, the void preview binds the review context
+  // that the void commit route later accepts, so it is guarded as a write.
   app.post('/api/v1/transactions/:id/void-preview', {
-    preHandler: requireAuthentication,
+    onRequest: requireCsrfProtectedAuthentication,
     schema: {
       tags: ['financial-corrections'],
       params: transactionPathSchema,
@@ -514,8 +521,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     { reason: request.body.reason },
   ));
 
+  // E-4 (Milestone 09): the correction commit appends an immutable correcting
+  // entry and can move the authoritative current balance, so it takes the
+  // Milestone 04 defense at `onRequest` like every other financial mutation.
   app.post('/api/v1/transactions/:id/corrections', {
-    preHandler: requireAuthentication,
+    onRequest: requireCsrfProtectedAuthentication,
     schema: {
       tags: ['financial-corrections'],
       params: transactionPathSchema,
@@ -534,8 +544,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.code(201).send(result);
   });
 
+  // E-4 (Milestone 09): the void commit withdraws a posted amount from the
+  // authoritative balance, so it takes the same `onRequest` defense.
   app.post('/api/v1/transactions/:id/void', {
-    preHandler: requireAuthentication,
+    onRequest: requireCsrfProtectedAuthentication,
     schema: {
       tags: ['financial-corrections'],
       params: transactionPathSchema,
@@ -553,8 +565,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
 
   const scheduleService = options.scheduleService;
   if (scheduleService) {
+    // E-4 (Milestone 09): one-off schedule creation writes a new scheduled
+    // item for the victim account, so it takes the Milestone 04 defense at
+    // `onRequest` (before content-type parsing).
     app.post('/api/v1/schedule/one-off', {
-      preHandler: requireAuthentication,
+      onRequest: requireCsrfProtectedAuthentication,
       schema: {
         tags: ['schedule'],
         headers: idempotencyHeadersSchema,
@@ -619,8 +634,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       request.params.id,
     ));
 
+    // E-4 (Milestone 09): confirming an occurrence posts a real transaction
+    // against the balance, so it takes the same `onRequest` defense.
     app.post('/api/v1/schedule/occurrences/:id/confirm', {
-      preHandler: requireAuthentication,
+      onRequest: requireCsrfProtectedAuthentication,
       schema: {
         tags: ['schedule'],
         params: occurrencePathSchema,
@@ -655,8 +672,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     });
 
     for (const target of ['skip', 'cancel'] as const) {
+      // E-4 (Milestone 09): skipping or cancelling an occurrence mutates the
+      // schedule state machine under an optimistic version, so both take the
+      // same `onRequest` defense.
       app.post(`/api/v1/schedule/occurrences/:id/${target}`, {
-        preHandler: requireAuthentication,
+        onRequest: requireCsrfProtectedAuthentication,
         schema: {
           tags: ['schedule'],
           params: occurrencePathSchema,
@@ -776,11 +796,19 @@ function scheduleResponses(successStatus: 200 | 201, successSchema: unknown) {
   return correctionResponses(successStatus, successSchema);
 }
 
+/**
+ * Shared response contract for the correction, void and schedule mutations.
+ *
+ * `403` is part of the contract because every one of these routes now runs the
+ * Milestone 04 browser state-change defense at `onRequest` (E-4 / Milestone 09)
+ * and answers `AUTH_CSRF_FAILED` before the body is parsed.
+ */
 function correctionResponses(successStatus: 200 | 201, successSchema: unknown) {
   return {
     [successStatus]: successSchema,
     400: errorResponseSchema,
     401: errorResponseSchema,
+    403: errorResponseSchema,
     404: errorResponseSchema,
     409: errorResponseSchema,
     422: errorResponseSchema,
