@@ -198,7 +198,20 @@ integration('transaction reads on real PostgreSQL', () => {
       expect(page.items.length).toBeLessThanOrEqual(2);
       walked.push(...page.items.map((item) => item.id));
       cursor = page.nextCursor;
-      if (page.items.length === 2) expect(cursor).not.toBeNull();
+      // A cursor is owed if and only if rows remain. Page fullness alone cannot
+      // decide that: a final page may hold exactly `limit` items and must still
+      // report `nextCursor: null`. So the assertion keys on the number of rows
+      // left to walk rather than on `page.items.length === 2`, which was only
+      // incidentally correct for an odd-sized dataset.
+      const remaining = persisted.length - walked.length;
+      if (remaining > 0) {
+        // Rows remain, so this page must be full and must hand back a cursor.
+        expect(page.items).toHaveLength(2);
+        expect(cursor).not.toBeNull();
+      } else {
+        // Final page — including the exactly-full one.
+        expect(cursor).toBeNull();
+      }
     } while (cursor !== null && pages < 40);
 
     expect(pages).toBe(Math.ceil(persisted.length / 2));
