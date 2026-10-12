@@ -239,8 +239,9 @@ Every data surface must specify these states before implementation:
 - Amounts and dates have screen-reader-friendly accessible labels.
 - Motion respects `prefers-reduced-motion`; no essential information depends on animation.
 - At 200% zoom, controls remain reachable; at narrow reflow, no two-dimensional scrolling is required except truly tabular content.
-- Authentication supports password managers, paste, and platform autofill. OTP fields must not obstruct paste or screen readers.
+- Authentication supports password managers, paste, and platform autofill. The password-reset OTP field must not obstruct paste, autofill (`autocomplete="one-time-code"`), or screen readers, and must announce expiry, remaining attempts, and resend availability.
 - Private Beta registration requires an invitation-code field and valid code state. UI copy MUST NOT imply that an email address or server-side email allowlist can replace the invitation code.
+- MVP has no email-verification screen (OQ-20). Registration success copy MUST NOT claim an email was sent or that the address was verified, and no screen may show an unverified address as verified; where account state is shown, an unverified address MUST be described as unverified.
 - Automated checks are necessary but manual screen-reader, keyboard, zoom, and touch testing are release requirements.
 
 ## 12. Language and content design
@@ -268,7 +269,7 @@ Every data surface must specify these states before implementation:
 
 - Explain manual-data limitations during onboarding and calculation disclosure.
 - Show session/security event details without implying exact geolocation.
-- No communication contains passwords, session tokens, or full financial records. Purpose-bound verification/recovery email may contain only the required short-lived OTP/reset secret and minimum context; ordinary security alerts contain no authentication secret.
+- No communication contains passwords, session tokens, or full financial records. The purpose-bound password-reset email may contain only the short-lived OTP and minimum context; ordinary security alerts contain no authentication secret, and no email is sent at registration.
 - Sensitive pages use `no-store` and are excluded from search indexing.
 - Copy/paste remains allowed for user-owned amounts and notes; do not use hostile anti-user restrictions.
 - Confirmation dialogs do not expose sensitive information to the URL or page title.
@@ -309,7 +310,7 @@ Every row must identify artifact version/location, date, method, participant/rev
 | Expanded visual prototype | Tablet/desktop widths; persistent navigation, lists, detail, dialogs, source drill-down | Same completeness and critical-defect rule; compact/expanded information meaning remains identical | UX/Accessibility / Product | Missing |
 | Vietnamese content | Auth, snapshot/backfill, safe-to-spend, debt unknown/blocked state, recurrence/reminder, security history, deletion and errors | Product/domain/privacy reviewers approve exact copy; no guarantee, inference, shame, enumeration, or false location claim | Product / UX, Security, Financial Integrity, Privacy/Legal | Missing |
 | Critical-state inventory | Loading, empty, incomplete setup, validation, offline, authorization/not-found, server, uncertain/conflict, success, partial background failure | Every critical screen maps every applicable state to an artifact and expected recovery action | UX/Accessibility / Product, QA | Missing |
-| Moderated task plan | §15 tasks plus auth verification outcome, correction blocked states, reminder recovery and deletion comprehension | Participant profile, sample/rationale, task script and success/comprehension thresholds are approved before sessions | UX/Accessibility / Product | Missing |
+| Moderated task plan | §15 tasks plus registration-without-verification and password-reset outcome, correction blocked states, reminder recovery and deletion comprehension | Participant profile, sample/rationale, task script and success/comprehension thresholds are approved before sessions | UX/Accessibility / Product | Missing |
 | Moderated results | Observed completion, errors, time, comprehension, trust and accessibility barriers | Every pre-approved threshold is reported; no unresolved severe task failure or misleading financial/security comprehension remains | UX/Accessibility / Product, domain owners | Missing |
 | Keyboard/focus | All critical flows, dialogs/sheets, errors, session expiry and recovery | Full completion without pointer; logical focus; no trap/loss; visible focus; status/errors announced | UX/Accessibility / QA | Missing |
 | Screen reader | Representative iOS/Android/desktop screen readers on critical flows and dynamic states | Names/roles/states/order/announcements permit completion; amounts/dates/status are unambiguous; no unresolved WCAG A/AA failure | UX/Accessibility / QA | Missing |
@@ -322,8 +323,8 @@ Every row must identify artifact version/location, date, method, participant/rev
 
 Evidence cannot be final for an unresolved policy. Prototypes may compare options, but acceptance must wait for the authorized outcome:
 
-- `SPEC-AUTH-01`: verification result, onboarding transition, session/sign-in copy, retry and multi-tab states;
-- `SPEC-AUTH-02`: visible password/OTP/reset/session guidance and abuse/recovery consequences;
+- `SPEC-AUTH-01`: **superseded by OQ-20 (2026-10-12)** — no verification result exists; the replacement evidence is registration-result copy, the sign-in transition, and the reset→sign-in transition with retry and multi-tab states;
+- `SPEC-AUTH-02`: visible password/reset-OTP/session guidance and abuse/recovery consequences, including the unverified-address presentation and recovery-without-verification support path;
 - `SPEC-FIN-01`: approve and validate `snapshot_correction.v1` correction/void distinction, old/new chain, prior-segment zero-balance disclosure, cross-segment rejection and link handling;
 - `SPEC-FIN-02`: approve/prove `account_financial_serialization.v1` and validate operation-specific stale, bounded-busy/timeout, same-key result-unknown/recovery, no-auto-submit copy and focus/announcement behavior;
 - `SPEC-DEBT-01`: no-inference blocked state and explicit lender-balance path;

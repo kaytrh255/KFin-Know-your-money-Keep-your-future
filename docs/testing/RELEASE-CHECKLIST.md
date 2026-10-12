@@ -8,8 +8,8 @@
 
 Round 3 defined decision/evidence packets but closed no blocker. This checklist cannot be used to manufacture an approval after implementation. Before any implementation phase opens, the controlled [Approval and Evidence Register](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md) and source specifications must show:
 
-- [ ] `SPEC-AUTH-01`: one authorized post-verification outcome, synchronized auth/session/UX contracts, and passing `AUTH-VRF` evidence. Evidence: _missing_
-- [ ] `SPEC-AUTH-02`: every auth/session value and behavior approved, synchronized, and supported by `AUTH-POL` threat/benchmark/provider/usability/replay evidence. Evidence: _missing_
+- [ ] `SPEC-AUTH-01`: **superseded by OQ-20 (2026-10-12)** — the post-verification outcome no longer exists; recorded Product + Security ratification of the retirement replaces branch selection. Evidence: _missing_
+- [ ] `SPEC-AUTH-02`: every auth/session value and behavior — including the OQ-20 reset-OTP expiry/attempt/cumulative-budget/resend/issuance and session-invalidation bounds — approved, synchronized, and supported by `AUTH-POL` threat/benchmark/provider/usability/replay evidence. Evidence: _missing_
 - [ ] `SPEC-FIN-01`: Product + Financial Integrity + Data + Security approve Issue #1 `snapshot_correction.v1`, P1 exclusive-domain-claim matrix, and P2 persisted/presentation terminology; synchronized H–J/`FIN-COR-01`–`10`/`FIN-LINK-01`–`06`/`FIN-OCC-01`–`04` specifications and PR/approval record are linked. Evidence: _missing_
 - [ ] `SPEC-FIN-02`: owners approve exact `account_financial_serialization.v1` and unvalidated candidate bounds; ADR-009 is Accepted only with passing `FIN-RACE-01`–`08` against real PostgreSQL on Supabase, exclusive-claim race proof, idle-confirmed rollback, lock release, deterministic clean reuse, unconfirmed-cleanup eviction/no-retry, query/latency and commit-fault evidence. Evidence: _missing_
 - [ ] `SPEC-DEBT-01`: approved later-event correction policy and exact DCT-08/09/`DEBT-HIST` results preserving no-inference. Evidence: _missing_
@@ -93,12 +93,13 @@ Every row is currently OPEN. Exact criteria are in the [Round 3 remediation repo
 ## 4. Authentication and session security
 
 - [ ] Mandatory single-use invitation-code digest, expiry/revoke/wrong-email/replay/parallel-use, generic errors, and atomic account creation tests pass; registration without a valid code fails even for an email present in operator data, proving no email-allowlist admission path. Evidence: _link_
-- [ ] Registration eligibility, email normalization, and post-verification sign-in/session behavior match approved policy. Evidence: _link_
+- [ ] Registration admission is the invitation code alone: email normalization, immediate credential sign-in, and generic rejection paths match approved policy, and registration creates no challenge row, sends/enqueues no email, and issues no session (`AUTH-REG-01`–`06`). Evidence: _link_
+- [ ] An unverified address is represented and presented as unverified — `email_verified_at` NULL with the explicit unverified state, never shown or treated as verified (`AUTH-UNV-01`–`03`). Evidence: _link_
 - [ ] Argon2id parameters are benchmarked, encoded correctly, and rehash policy is tested. Evidence: _link_
 - [ ] Password policy supports managers/paste and common/compromised-password control is privacy reviewed. Evidence: _link_
-- [ ] OTP expiry, attempt, resend, supersession, keyed-digest storage, replay, concurrency, immediate delivery uncertainty, and ordinary-outbox secret exclusion tests pass. Evidence: _link_
-- [ ] Forgot/reset request is enumeration-resistant; reset secret is single-use, not logged/referrer-exposed, and expires. Evidence: _link_
-- [ ] Password reset revokes all sessions; known-password change applies approved current/other-session policy. Evidence: _link_
+- [ ] Password-reset OTP expiry, per-challenge attempts, cumulative budget across resends, supersession, keyed-digest storage, replay, concurrency, immediate delivery uncertainty, and ordinary-outbox/log exclusion tests pass (`AUTH-RST-01`–`12`). Evidence: _link_
+- [ ] Forgot/reset request is enumeration-resistant — identical answer for existing, non-existing, ineligible and rate-limited addresses — and the reset OTP is single-use, expires, is never logged or placed in a URL/referrer, and is the only OTP any MVP flow sends. Evidence: _link_
+- [ ] Password reset revokes all sessions, invalidates remaining challenges, issues no session, and requires explicit sign-in; known-password change applies approved current/other-session policy. Evidence: _link_
 - [ ] Cookie flags/name/domain/path, idle/absolute expiry, rotation, fixation, tab races, retired-token replay, and current/all logout pass. Evidence: _link_
 - [ ] No password, OTP, reset/invite/session token exists in logs, analytics, URL/history, client storage, cache, build, or error tooling. Evidence: _link_
 - [ ] Recent-auth requirements and security-history events match policy. Evidence: _link_

@@ -2,6 +2,21 @@
 
 This directory is standalone evidence-generation infrastructure for the accepted frozen specification baseline `a48d2c5683550859c1b4e19e9d06750616adc0a2`. It is **not** the KFin application, a production migration, owner approval, ADR acceptance, blocker closure, or permission to open the Implementation Gate.
 
+### Authoritative-document pinning
+
+Five documents are pinned as the reviewed text this candidate depends on
+(`AUTHORITATIVE_DOCS` in `src/runner.mjs`). Two of them are the candidate's own
+documents and are compared byte-for-byte with `FROZEN_SOURCE_COMMIT`. Three are
+shared specification documents — `docs/architecture/DATABASE.md`,
+`docs/testing/TEST-STRATEGY.md`, and `docs/governance/APPROVAL-AND-EVIDENCE-REGISTER.md` —
+that a dated, recorded product decision may legitimately amend; since the
+2026-10-12 authentication revision (OQ-20) amended them, they are pinned to the
+SHA-256 of the reviewed amended content in `AMENDED_AUTHORITATIVE_DOCS`. The
+comparison is still exact: any edit to a pinned document fails until a new dated
+revision records new digests, and the check never compares a document against itself.
+The revision and its synchronized change set are recorded in
+`docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md`.
+
 ## 1. Prerequisites
 
 - Node.js 22 or later with Corepack and the repository-pinned pnpm version.

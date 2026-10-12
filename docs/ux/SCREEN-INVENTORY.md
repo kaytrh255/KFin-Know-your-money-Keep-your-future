@@ -11,9 +11,8 @@
 Public
 ├─ Sign in
 ├─ Register / invite acceptance
-├─ Verify email
 ├─ Forgot password
-└─ Reset password
+└─ Reset password (OTP + new password)
 
 Authenticated
 ├─ Onboarding
@@ -55,9 +54,9 @@ Authenticated
 |---|---|---|---|---|
 | AUTH-01 | `/sign-in` | Sign in | Start/resume secure access | Email/password, password manager, generic error, rate limit, Forgot password, Register |
 | AUTH-02 | `/register` | Accept invite and register | Consume a mandatory valid single-use beta invitation and create an eligible account; no email-allowlist fallback | Invite code; generic behavior for invalid/expired/used/revoked/wrong-email states; email; password policy; terms/privacy acknowledgement; enumeration resistance |
-| AUTH-03 | `/verify-email` | Verify email | Enter/resend OTP | Masked destination, expiry, paste/autofill, attempts, resend cooldown, safe support path for a wrong address; no implicit email-change feature |
+| AUTH-03 | `/verify-email` | ~~Verify email~~ | **Retired in MVP by OQ-20:** no verification step or OTP exists, so the route MUST NOT ship. A future verification flow requires a new approved decision and screen review | Retired; if ever reintroduced it needs the full state set (masked destination, expiry, paste/autofill, attempts, resend cooldown, wrong-address support path) plus an explicit decision |
 | AUTH-04 | `/forgot-password` | Forgot password | Request recovery | Generic response, rate limit, return to sign-in |
-| AUTH-05 | `/reset-password` | Reset password | Validate challenge and set password | Invalid/expired/replayed challenge, policy, success and sign-in |
+| AUTH-05 | `/reset-password` | Reset password | Present the emailed OTP, then set a new password | Masked destination, expiry, remaining attempts, resend cooldown, invalid/expired/replayed/attempt-exhausted OTP with a safe path to request a new code, password policy, success and explicit sign-in; no account-existence or delivery disclosure |
 | AUTH-06 | `/auth/result` | Authentication result | Durable success/failure for sensitive flow | No secret/query leakage, next action, support correlation ID when needed |
 
 A dedicated result screen is used only when a persistent state is clearer than a toast. Deep links must remove reset secrets from URL/history as early as safely possible.
@@ -130,7 +129,7 @@ Savings screens must state that current amount is user-maintained and not a veri
 |---|---|---|---|---|
 | SET-01 | `/settings/profile` | Profile and preferences | Maintain display name, locale, timezone, base currency policy | Timezone/month-boundary warning; currency change blocked if unsupported |
 | SET-04 | `/settings/money` | Money setup and known-balance update | Review latest snapshot and create a new authoritative balance snapshot | Calculated vs actual amount, exact as-of time, new segment disclosure, snapshot-stale refetch/reconfirm, temporary busy/timeout and same-key unknown-result recovery; no bank/account matching or transfer UI |
-| SEC-01 | `/settings/security` | Security overview | Navigate password, sessions, history | Verified email, last password change, concise recommendations |
+| SEC-01 | `/settings/security` | Security overview | Navigate password, sessions, history | Account email with its explicit state — described as unverified unless a verification challenge was consumed (MVP: unverified) — last password change, concise recommendations; never implies a verified address |
 | SEC-02 | `/settings/security/password` | Change password | Reauthenticate and rotate credentials | Current/new password, policy, session consequence, durable success |
 | SEC-03 | `/settings/security/sessions` | Active sessions | Identify and revoke access | Current marker, device/time, revoke one, sign out everywhere |
 | SEC-04 | `/settings/security/history` | Security history | Review only approved user-visible account events | `SPEC-SEC-02` event classification; approved safe type/outcome/time/origin detail; operator-only exclusion; pagination/retention; unavailable until policy approval |
@@ -208,8 +207,8 @@ Completing this list is necessary but does not close `SPEC-UX-01`. The versioned
 
 | Blocker | Screens/surfaces that cannot be accepted yet | Exact UX dependency | Fixed safety boundary | Status |
 |---|---|---|---|---|
-| `SPEC-AUTH-01` | AUTH-03/06, ONB-01 | Verification must end in one approved session or explicit-sign-in outcome, with retry/multi-tab/result copy | No session fixation; only an approved authenticated context enters onboarding | OPEN — decision ready |
-| `SPEC-AUTH-02` | AUTH-01–05, SEC-02/03 | Visible policy, expiry, limits, recovery, rotation/replay and session consequences | Invitation code mandatory; generic errors; password manager/paste support | OPEN — decision ready |
+| `SPEC-AUTH-01` | AUTH-01/02/06, ONB-01 | **Superseded by OQ-20 (2026-10-12):** registration ends in a generic result and explicit sign-in, so no post-verification outcome or AUTH-03 screen remains; AUTH-05 ends in confirmation and explicit sign-in | No session fixation; only an authenticated context enters onboarding; no screen implies a verified address | SUPERSEDED — awaiting Product + Security ratification |
+| `SPEC-AUTH-02` | AUTH-01/02/04/05, SEC-02/03 | Visible policy, reset-OTP expiry/attempts/resend, recovery, rotation/replay and session consequences | Invitation code mandatory; generic errors; password manager/paste support; no verification screen and no verified-address claim | OPEN — decision ready |
 | `SPEC-FIN-01` | ACT-02/03, ADD-01/02, SCH-01/02, DEBT-07, PUR-05 | Validate proposed void + replacement, immutable anchor/effect, cross-segment rejection, exclusive-domain-link matrix, persisted `confirmed` versus Paid/Received presentation, prior-report amendment and stale/idempotent previews | No history erasure, silent segment movement, storage alias, double effect or incompatible owner | OPEN — approval/evidence ready |
 | `SPEC-FIN-02` | ONB-02, SET-04, ADD-01/02, ACT-03, SCH-02, DEBT-07, PUR-05 | Validate proposed stale refetch/review, domain-link conflict, bounded busy/timeout retry, same-key result-unknown/recovery and accessible status behavior while the account-row/version mechanism enforces one winner/compatible claim | No silent re-anchor, auto-submit, duplicate save/owner, false failure or ambiguous success | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | DEBT-03/06/07 | Later-event correction must use approved replay/fresh-balance policy or explicit rejection | Never infer principal, interest, fee or outstanding | OPEN — decision ready |

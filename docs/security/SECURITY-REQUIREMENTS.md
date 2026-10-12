@@ -1,7 +1,7 @@
 # KFin Security Requirements
 
 **Status:** Draft — FIN-01/02 controls proposed; approval/evidence required<br>
-**Version:** 0.6<br>
+**Version:** 0.7 (revised 2026-10-12: OQ-20 — registration admitted by invitation code without email OTP; emailed OTP reserved for password reset)<br>
 **Applies to:** Web/PWA, API, worker, PostgreSQL, edge, CI/CD, providers, operator access<br>
 **Risk posture:** Sensitive personal and financial data; fail closed for identity, authorization, and financial writes
 
@@ -72,22 +72,25 @@ Financial values and note text MUST NOT be sent to session replay, advertising, 
 | SEC-AUTH-01 | Passwords MUST be hashed with Argon2id using unique salts and benchmarked current OWASP-aligned parameters; plaintext/reversible/fast hashes are forbidden. |
 | SEC-AUTH-02 | Password input MUST support paste, managers, and autofill; policy MUST reject common/compromised values through a privacy-reviewed method and MUST NOT force arbitrary periodic changes. |
 | SEC-AUTH-03 | Proposed password bounds are minimum 12 and maximum at least 128 Unicode characters; normalization/truncation behavior MUST be explicit and lossless to the user. Final values require review. |
-| SEC-AUTH-04 | Login/register/recovery responses and timing MUST not reliably reveal whether an email exists, is verified, invited, locked, or disabled. |
-| SEC-AUTH-05 | Email verification OTP MUST be cryptographically random, purpose-bound, single-use, expiring, attempt-limited, supersession-aware, and stored only as a keyed digest/hash. |
-| SEC-AUTH-06 | Password-reset secret MUST have high entropy, be purpose-bound, single-use, short-lived, and digest-only at rest. It MUST be removed from browser URL/history as early as safely possible. |
+| SEC-AUTH-04 | Login/register/recovery responses and timing MUST not reliably reveal whether an email exists, is invited, locked, disabled, or reset-eligible. A password-reset request MUST return the same status, body shape, and bounded timing whether or not the address exists, and MUST NOT disclose whether a message was sent. |
+| SEC-AUTH-05 | The password-reset OTP MUST be cryptographically random, purpose-bound (`password_reset`), single-use, expiring, attempt-limited with a cumulative per-account budget that a resend does not reset, supersession-aware, and stored only as a keyed digest/hash. No MVP flow other than password reset may issue an OTP. |
+| SEC-AUTH-06 | Under OQ-20 the MVP reset challenge is an emailed OTP typed into the application; no reset secret is placed in a URL, referrer, redirect, or browser history, and no reset link containing a secret is issued. The OTP is purpose-bound, single-use, short-lived, and digest-only at rest. Selecting a URL-secret variant instead requires a new approved decision, high entropy, and the removal-from-URL/history rule. |
 | SEC-AUTH-07 | OTP/reset/invite secrets MUST NOT appear in logs, analytics, referrers, error trackers, support tools, or provider callback URLs. |
-| SEC-AUTH-08 | Password reset MUST atomically or fail-safely replace credentials, consume the challenge, revoke all sessions, and create a security event. |
+| SEC-AUTH-08 | Password reset MUST atomically or fail-safely replace credentials, consume the challenge, revoke every session, clear the session cookie, invalidate the account's remaining challenges, issue no authenticated session, and create a security event. |
 | SEC-AUTH-09 | Password change MUST require current-password verification or approved recent step-up, apply abuse controls, revoke other sessions, and rotate/end current session per approved policy. |
 | SEC-AUTH-10 | Authentication success MUST not preserve any pre-authenticated session identifier (session fixation prevention). |
-| SEC-AUTH-11 | Account status and verified-email requirements MUST be checked during session use, not only login. |
+| SEC-AUTH-11 | Account status MUST be checked during session use, not only at login. Email-verified state MUST NOT be an access gate in MVP and MUST NOT be treated as satisfied when `email_verified_at` is NULL (OQ-20). |
 | SEC-AUTH-12 | MFA MUST NOT be improvised into MVP; schema/interfaces MAY preserve an extension point and a future specification MUST threat-model enrollment/recovery. |
-| SEC-AUTH-13 | Plaintext OTP/reset secrets MUST NOT be stored in the ordinary outbox. Under the proposed MVP path they exist only in request-process memory for immediate provider submission after digest-only challenge commit; any asynchronous encrypted-envelope alternative requires a separate key-management review. |
-| SEC-AUTH-14 | Private Beta invitation codes MUST be high-entropy, purpose-bound, expiring, single-use, digest-only at rest, abuse-limited, and atomically consumed with pending-account creation. Invalid/expired/used/wrong-email states MUST remain generic externally. |
+| SEC-AUTH-13 | A plaintext password-reset OTP MUST NOT be stored in the ordinary outbox, logs, analytics, or error payloads. Under the MVP path it exists only in request-process memory for immediate provider submission after digest-only challenge commit; any asynchronous encrypted-envelope alternative requires a separate key-management review. |
+| SEC-AUTH-14 | Private Beta invitation codes MUST be high-entropy, purpose-bound, expiring, single-use, digest-only at rest, abuse-limited, and atomically consumed with account creation. Invalid/expired/used/wrong-email states MUST remain generic externally. |
 | SEC-AUTH-15 | Every Private Beta registration MUST present and consume a valid invitation code. Email binding may restrict a code, but a server-side email allowlist MUST NOT grant admission or bypass code validation. |
-| SEC-AUTH-16 | Successful verification MUST follow exactly one approved `SPEC-AUTH-01` branch: issue a fresh rotated authenticated session or issue no authenticated session and require explicit sign-in. No pre-authenticated identifier may be promoted, and cookies/CSRF/events/multi-tab/uncertain-response behavior MUST be explicit before implementation. |
-| SEC-AUTH-17 | Every `SPEC-AUTH-02` invitation, password, OTP, reset, login-abuse, lifetime, rotation/replay, and known-password-change value/behavior MUST have named Security + Product approval and linked evidence. Proposed examples/framework defaults are not approved policy. |
+| SEC-AUTH-16 | Neither registration nor password reset may issue an authenticated session (OQ-20): registration returns a generic accepted result and directs the user to sign in, and a successful reset revokes every session and requires explicit sign-in. No pre-authenticated identifier may be promoted, and this outcome MUST be identical across flows, ADRs, copy, and tests. |
+| SEC-AUTH-17 | Every `SPEC-AUTH-02` invitation, password, reset-OTP, reset, login-abuse, lifetime, rotation/replay, and known-password-change value/behavior MUST have named Security + Product approval and linked evidence. Proposed examples/framework defaults are not approved policy. |
+| SEC-AUTH-18 | Registration MUST NOT create an authentication challenge and MUST NOT send or enqueue any email. Admission is the consumed invitation code (SEC-AUTH-15); a registration path that emails an OTP or requires OTP verification violates this specification. |
+| SEC-AUTH-19 | An account whose email was never verified MUST be represented explicitly — `email_verified_at` NULL together with an explicit `unverified` verification state. Registration, invitation consumption, login, password reset, password change, and operator support MUST NOT set a verified state, and no API response or screen may present the address as verified. |
+| SEC-AUTH-20 | Password-reset challenges MUST expire after 10 minutes, allow at most five verification attempts each, and be bounded by a cumulative per-account failed-verification budget across superseded challenges, a 60-second resend cooldown, and per-account, per-IP/network, and global issuance/cost caps. Every outcome, including rate limiting, remains generic. |
 
-Proposed OTP baseline—10-minute expiry, five attempts, 60-second resend cooldown, target/IP hourly and daily caps—is pending validation and tuning. Rate-limit messages remain generic. `SPEC-AUTH-01` and `SPEC-AUTH-02` remain **OPEN — decision ready**; Round 3 did not select a verification outcome or approve these baseline values.
+Proposed reset-OTP baseline (candidate values pending validation, tuning, and `SPEC-AUTH-02` approval): numeric six-digit code, 10-minute expiry, five attempts per challenge, a cumulative cap of ten failed verifications per account per hour across challenges, a 60-second resend cooldown, at most three challenge issuances per account per hour and six per account per 24 hours, plus per-IP/network and global email-cost caps. An eight-digit code remains an open alternative recorded for `SPEC-AUTH-02`. Rate-limit messages remain generic. `SPEC-AUTH-02` remains **OPEN — decision ready**, and `SPEC-AUTH-01` is **SUPERSEDED — awaiting Product + Security ratification** because OQ-20 removed the verification step its decision addressed.
 
 ## 7. Session and CSRF requirements
 
@@ -163,7 +166,7 @@ Header values require automated production-response tests and CSP reporting that
 |---|---|
 | SEC-ABUSE-01 | Layer Cloudflare/network limits with application subject-aware limits; one layer failing MUST NOT silently remove all protection. |
 | SEC-ABUSE-02 | Login controls MUST combine IP/network, normalized-account digest, and global safeguards; successful login does not immediately erase all abuse evidence. |
-| SEC-ABUSE-03 | OTP send/verify and password-reset request/consume MUST have separate cooldown, attempt, target, IP/network, and global cost limits. |
+| SEC-ABUSE-03 | Password-reset OTP request/send/verify/consume MUST have separate cooldown, attempt, cumulative-budget, target, IP/network, and global cost limits. No MVP flow other than password reset sends an OTP, and no other flow may reuse these endpoints or counters. |
 | SEC-ABUSE-04 | Expensive endpoints (dashboard ranges, schedule generation, history searches) MUST be bounded, paginated, indexed, and rate controlled. |
 | SEC-ABUSE-05 | API body/header/timeouts and concurrent work MUST be bounded; slow-client and application-layer flooding behavior MUST be tested. |
 | SEC-ABUSE-06 | Database pools, worker concurrency, queue size/age, recurrence horizon, retries, and email sends MUST have hard limits and alerts. |
@@ -209,7 +212,7 @@ Application-level encryption of selected fields may be added only with a complet
 | SEC-LOG-01 | Logs MUST be structured and centrally searchable with environment, release, correlation, route template, safe result code, and timing. |
 | SEC-LOG-02 | Passwords, OTP/reset/invite/session tokens, cookies, authorization headers, secrets, raw request/response bodies, notes, and financial values MUST NOT be logged. |
 | SEC-LOG-03 | Error tracking and product analytics MUST use allowlisted fields and scrubbing tests. Session replay is disabled for authenticated KFin surfaces. |
-| SEC-LOG-04 | Security audit events MUST cover credential/session changes, verification/recovery, access-control denials/signals, operator access, and critical configuration/release actions. |
+| SEC-LOG-04 | Security audit events MUST cover credential/session changes, registration admissions, password-reset issuance/consumption/failure, access-control denials/signals, operator access, and critical configuration/release actions. |
 | SEC-LOG-05 | Audit records MUST be append-oriented, access restricted, time synchronized, retained under policy, and protected from normal application update/delete. |
 | SEC-LOG-06 | Alerts MUST be actionable, routed to named responders, tested, and avoid including private payload. |
 | SEC-LOG-07 | Failed authorization, token replay, unusual auth volume, queue backlog, backup failure, database exhaustion, and deployment health MUST be observable. |
@@ -242,7 +245,7 @@ Application-level encryption of selected fields may be added only with a complet
 
 | ID | Requirement |
 |---|---|
-| SEC-DATA-01 | An account-deletion request MUST require recent authentication/identity verification, enter a 7-day cancellable pending state, and record no reusable authentication secret. |
+| SEC-DATA-01 | An account-deletion request MUST require recent authentication with the live session, enter a 7-day cancellable pending state, and record no reusable authentication secret. Because MVP accounts have an unverified email (OQ-20), email possession MUST NOT be used as identity verification for this request. |
 | SEC-DATA-02 | Post-deadline purge MUST be idempotent, resumable, operator-observable, and driven by an approved first-party/provider deletion map. |
 | SEC-DATA-03 | Maximum baselines are 90 days for encrypted backups, 90 days for application logs, and 24 months for minimized security/audit evidence. Legal review MAY shorten them; any extension requires a dated replacement of OQ-18 plus legal, privacy, product, and security approval before collection under the longer period. |
 | SEC-DATA-04 | Retained security/audit evidence after purge MUST remove direct identity/financial payload where lawful and use minimum pseudonymous correlation under an approved legal basis. |
@@ -311,8 +314,8 @@ Private Beta MUST NOT start unless:
 
 | Blocker | Security approval needed | Accountable / mandatory co-approvers | Required evidence | Security acceptance condition | Status |
 |---|---|---|---|---|---|
-| `SPEC-AUTH-01` | One post-verification outcome and complete cookie/CSRF/event/multi-tab/uncertain-response contract | Product / Security | Branch threat review; fixation, retry and multi-tab tests; content review | No pre-auth identifier survives; one deterministic outcome exists across flows, ADRs and tests | OPEN — decision ready |
-| `SPEC-AUTH-02` | Exact values/behaviors for every auth/session dimension and change authority | Security / Product | Threat/abuse review, Argon2 benchmark, provider assumptions, usability and replay tests | Every proposed value is approved/replaced; boundary/failure expectations are exact and synchronized | OPEN — decision ready |
+| `SPEC-AUTH-01` | **Superseded by OQ-20 (2026-10-12):** the verification step it decides on no longer exists; the replacement outcome (no session from registration or reset, explicit sign-in, reset revokes all sessions) needs ratification rather than a branch selection | Product / Security | Ratification record; fixation/retry/multi-tab tests for register→sign-in and reset→sign-in | No pre-auth identifier survives; one deterministic outcome exists across flows, ADRs and tests | SUPERSEDED — awaiting Product + Security ratification |
+| `SPEC-AUTH-02` | Exact values/behaviors for every auth/session dimension — including the OQ-20 reset-OTP expiry, attempts, cumulative budget, resend/issuance caps and session invalidation — and change authority | Security / Product | Threat/abuse review, Argon2 benchmark, provider assumptions, usability and replay tests | Every proposed value is approved/replaced; boundary/failure expectations are exact and synchronized | OPEN — decision ready |
 | `SPEC-SEC-01` | RLS branch with policies/context/roles, or omitted-RLS branch with compensating controls/risk | Security / Data + Architecture | Table/action matrix, pool leakage, worker/operator, two-user tests; residual-risk record if omitted | Every private path is covered, connection reuse is safe, approvers/evidence are recorded in ADR-003 | OPEN — decision ready |
 | `SPEC-SEC-02` | Event-family visibility classification, safe fields, delivery/display and retention | Product / Security + Privacy/Legal | Event table, threat/privacy/content/accessibility review and API authorization tests | Every event has one class; operator-only fields cannot leak; all source documents agree | OPEN — decision ready |
 | `SPEC-DEL-01` | Complete request/cancel/purge/retention/tombstone/legal-hold/provider contract | Privacy/Legal / Product + Security + Operations | Legal opinion, data map, provider proof, race tests, access/key review, restore drill | Every data category has disposition and restored deleted data cannot activate | OPEN — decision ready |

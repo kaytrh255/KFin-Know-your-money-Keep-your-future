@@ -46,8 +46,8 @@ Exact versions MUST be selected and pinned to then-supported stable/LTS releases
 | API description | REST/JSON under `/api/v1`; OpenAPI generated from authoritative server schemas | Inspectable, testable contract; future native client compatibility |
 | Data access | Drizzle ORM/query builder with reviewed SQL migrations | Typed access while retaining PostgreSQL constraints, transactions, and explainable SQL |
 | Database | Managed PostgreSQL | Transactions, relational integrity, indexing, JSON only where appropriate, mature backup tooling |
-| Background work | Same repository and modules, separate optional worker process; PostgreSQL transactional outbox/job table | In-app reminders and non-secret security email without Redis/broker; secret-bearing OTP/reset delivery follows the explicit request-path exception |
-| Email | Provider adapter selected before Release Candidate under OQ-17 | Required for OTP/recovery/security messages only; payment reminders are in-app |
+| Background work | Same repository and modules, separate optional worker process; PostgreSQL transactional outbox/job table | In-app reminders and non-secret security email without Redis/broker; secret-bearing password-reset OTP delivery follows the explicit request-path exception |
+| Email | Provider adapter selected before Release Candidate under OQ-17 | Required for password-reset OTP and approved security messages only (OQ-20); registration sends no email and payment reminders are in-app |
 | Tests | Vitest, Testing Library, Fastify injection/integration tests, Playwright, axe-core; containerized PostgreSQL in CI | Covers domain, API, browser, accessibility, and real SQL behavior |
 | Delivery | Docker/OCI image, GitHub Actions, Cloudflare, managed compute and managed PostgreSQL | Reproducible release, TLS/WAF/rate controls, low-operations deployment |
 | Observability | Pino-compatible structured logs, provider metrics, error tracking with strict scrubbing; OpenTelemetry only where it adds evidence | Useful diagnostics without building an observability platform |
@@ -118,7 +118,7 @@ For the smallest deployment, the API may also serve the built web assets, but br
 | Module | Responsibilities | Must not own |
 |---|---|---|
 | Identity | User/profile/status, mandatory single-use invitation-code state, locale/timezone/base currency, deletion lifecycle and restore-exclusion intent | Password hashing/session token logic; any registration path that bypasses invitation-code validation |
-| Authentication | Registration, verification, login, password recovery/change | Financial data |
+| Authentication | Registration (invitation-admitted, no email OTP), login, password recovery/change, password-reset OTP challenges | Financial data |
 | Sessions | Create/validate/rotate/revoke sessions, active-session view | User-controlled authorization decisions |
 | Accounts | One aggregate account, immutable balance snapshots, current-balance segments, manual known-balance updates | Bank/account-statement reconciliation, schedule, or debt policy |
 | Transactions | Posted current-impact/historical-only inflow/outflow, classifications, correction/void semantics, monthly actual aggregates | Auto-posting scheduled money or silently crossing snapshot anchors |
@@ -178,6 +178,8 @@ Object-not-found and object-not-owned responses should be indistinguishable to p
 - All collection endpoints use bounded cursor/keyset pagination and deterministic ordering.
 - Mutation endpoints that can create duplicate financial effects accept a client-generated idempotency key scoped to user + operation.
 - Responses use a consistent error envelope with stable code, safe message, field errors when applicable, and correlation ID.
+- The MVP authentication surface is exactly: register, login, logout, logout-all, session list/revoke, password reset request, password reset completion, password change, current-session/profile read, and security-event read. Registration creates no challenge and no email; no MVP endpoint accepts or issues an email-verification OTP, and an endpoint that would (`/auth/verify-email`, `/auth/verification/resend`) MUST NOT be part of the MVP OpenAPI contract.
+- Password-reset request and verification MUST return one generic outcome per case so the contract cannot be used as an existence oracle, and MUST NOT echo the submitted address, the OTP, or the challenge identifier.
 - Never return stack traces, SQL details, password/OTP/token state, internal IDs that are unnecessary, or another user’s existence.
 - Updates use explicit fields and optimistic version/ETag semantics where concurrent edits matter; no blind mass assignment.
 - API OpenAPI contract is generated and tested against handlers.
@@ -264,7 +266,7 @@ Due/overdue derives from persisted `scheduled` + due date + user timezone; it ne
 
 The following operations must be atomic:
 
-- invitation consumption + pending user/password credential creation;
+- invitation consumption + active user/password credential creation (no challenge row, no email, no session);
 - aggregate account + initial balance snapshot creation;
 - create/confirm posted transaction + balance-effect/snapshot anchor + optional schedule occurrence link + idempotency result;
 - supported transaction correction/void + source/replacement chain + permitted link pointer + audit/idempotency result, or no state at all;
@@ -272,7 +274,7 @@ The following operations must be atomic:
 - debt payment + posted outflow + occurrence link + any optional user-explicit principal or lender-reported outstanding effect;
 - savings current-amount update + old/new audit metadata;
 - planned-purchase completion + posted expense + optional linked-goal scalar deduction/audit + purchase status;
-- password reset + credential replacement + all-session revocation + challenge consumption;
+- password reset + credential replacement + all-session revocation + reset-challenge consumption + remaining-challenge invalidation (no session issued);
 - account-deletion state transition/purge checkpoint + required audit/tombstone metadata;
 - security-sensitive state change + required audit event;
 - domain state change + transactional outbox entry when external delivery is required.
@@ -313,15 +315,15 @@ Detailed decisions are in [ADR-002](ADR/ADR-002-authentication-strategy.md), [AD
 
 Proposed design:
 
-- Email/password identity with verified email and a mandatory single-use, expiring beta invitation code; invite consumption and pending-account creation are atomic. Email match may constrain a code but never grants admission without one.
+- Email/password identity admitted by a mandatory single-use, expiring beta invitation code (OQ-20): invite consumption and active-account creation are atomic, registration sends no OTP and creates no challenge, and the account is usable immediately by signing in. Email match may constrain a code but never grants admission without one. Email addresses are explicitly unverified unless a consumed verification challenge says otherwise, and no MVP flow verifies them.
 - Passwords hashed with Argon2id using parameters benchmarked against current OWASP guidance on production-class hardware.
-- OTP/reset challenges are purpose-bound, single-use, short-lived, attempt-limited, stored only as keyed digest/hash, and superseded on controlled resend.
-- Because a digest cannot be used to reconstruct an emailed secret, the proposed MVP sends secret-bearing OTP/reset mail immediately after committing the challenge while plaintext exists only in process memory. Provider failure produces a controlled resend path. Such secrets are never put in the ordinary outbox; a future asynchronous encrypted-envelope design needs its own review.
+- Password-reset OTP challenges are purpose-bound (`password_reset` is the only MVP purpose), single-use, short-lived, attempt-limited with a cumulative per-account budget that resend does not reset, stored only as a keyed digest/hash, and superseded on controlled resend.
+- Because a digest cannot be used to reconstruct an emailed secret, the proposed MVP sends the secret-bearing reset OTP immediately after committing the challenge while plaintext exists only in process memory. Provider failure produces a controlled resend path. Such secrets are never put in the ordinary outbox; a future asynchronous encrypted-envelope design needs its own review. Registration never reaches this path because it creates no challenge.
 - Browser receives a cryptographically random opaque token in a host-only `HttpOnly`, `Secure`, `SameSite=Lax` cookie.
 - PostgreSQL stores session metadata and only token digest(s). Session has idle and absolute expiry, revocation, token generation, and device/security metadata.
 - Rotate after authentication/privilege changes and periodically under a race-safe policy. Detect replay of retired generations where feasible.
 - Web state-changing requests require same-origin validation plus a CSRF token strategy; SameSite alone is not the only control.
-- Logout current revokes current session; logout-all revokes all atomically. Password reset revokes all; password change revokes others and rotates current under the proposed policy.
+- Logout current revokes current session; logout-all revokes all atomically. Password reset revokes all and issues none, so the user signs in again; password change revokes others and rotates current under the proposed policy.
 - JWTs, localStorage bearer tokens, and permanent non-revocable tokens are not proposed.
 - Future Capacitor clients require a reviewed native secure-storage transport rather than copying browser-cookie assumptions.
 
@@ -410,7 +412,7 @@ At 50 users, one small application instance plus one worker process and managed 
 | Failure | Required behavior |
 |---|---|
 | Database unavailable | Fail closed; no fake save; readiness fails; bounded retry only where safe |
-| Email provider unavailable | Retry outbox-eligible non-secret mail; for OTP/reset, retain digest-only challenge state and offer controlled resend under the explicit immediate-delivery flow; do not expose provider/account details |
+| Email provider unavailable | Retry outbox-eligible non-secret mail; for the password-reset OTP, retain digest-only challenge state and offer controlled resend under the explicit immediate-delivery flow; do not expose provider/account details. Registration is unaffected because it sends no email |
 | Worker stopped | API remains available; lag alert fires; due state derives correctly; reminders resume idempotently |
 | Duplicate request | Return original compatible result or deterministic conflict; no duplicate financial effect |
 | API timeout after commit | Idempotency lookup allows safe result recovery |
@@ -448,8 +450,8 @@ Release Candidate additionally requires selected providers/domain/region/budget,
 
 | Blocker | Architecture approval boundary | Required technical evidence | Architecture acceptance condition | Status |
 |---|---|---|---|---|
-| `SPEC-AUTH-01` | If verification creates a session, define a fresh post-verification credential boundary, cookie/CSRF issuance and replay/uncertain-result behavior; otherwise prove no authenticated session is issued | Threat/session-fixation review and multi-tab/timeout tests on the intended same-origin path | Product and Security select one outcome; ADR-002/004, flows and tests contain no alternative behavior | OPEN — decision ready |
-| `SPEC-AUTH-02` | Define every auth/session value plus rotation, grace, replay containment, revocation and provider-failure semantics | Argon2/runtime benchmark, provider quota assumptions, concurrency/replay and abuse tests | Security/Product approval with exact configurable bounds and change authority | OPEN — decision ready |
+| `SPEC-AUTH-01` | **Superseded by OQ-20 (2026-10-12):** no flow verifies an email address, so no post-verification credential boundary exists. What must hold instead: registration and reset both issue no session, and a consumed reset challenge invalidates every existing session | Threat/session-fixation review and multi-tab/timeout tests on register→sign-in and reset→sign-in paths | Product and Security ratify the retirement; ADR-002/004, flows and tests contain no alternative behavior | SUPERSEDED — awaiting Product + Security ratification |
+| `SPEC-AUTH-02` | Define every auth/session value — including the OQ-20 reset-OTP expiry/attempt/cumulative-budget/resend/issuance and session-invalidation bounds — plus rotation, grace, replay containment, revocation and provider-failure semantics | Argon2/runtime benchmark, provider quota assumptions, concurrency/replay and abuse tests | Security/Product approval with exact configurable bounds and change authority | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve `snapshot_correction.v1`, P1 exclusive-domain-claim matrix, and P2 persisted/presentation terminology | Issue #1 review; H–J, `FIN-COR-01`–`10`, `FIN-LINK-01`–`06`, and `FIN-OCC-01`–`04` walkthrough; threat/UX/data-enforcement review | Product + Financial Integrity + Data + Security approve the exact version; Architecture approves enforcement division; all source documents agree | OPEN — approval/evidence ready |
 | `SPEC-FIN-02` | Approve `account_financial_serialization.v1`: account-row lock/version/order/complete claim check, explicit rollback before release/result/fresh retry, exact unvalidated candidate transient-retry and uncertain-commit bounds | ADR-009; real PostgreSQL on Supabase for `FIN-RACE-01`–`08`/`FIN-LINK-01`–`06`; idle-confirmed rollback/lock-release/clean-or-evicted pool handling, query/lock and proxy-fault evidence | Owners approve exact policy/bounds; ADR-009 Accepted only with evidence; every path proves one winner/stale loser/compatible claim and clean transaction reuse | OPEN — approval/evidence ready |
 | `SPEC-SEC-01` | Select RLS policy/context/roles or approve complete compensating controls and residual risk; application authorization remains mandatory either way | Table/action matrix, pool-context leakage, two-user, worker/operator/migration tests | ADR-003 records one posture, exhaustive scope, named approvers and evidence | OPEN — decision ready |

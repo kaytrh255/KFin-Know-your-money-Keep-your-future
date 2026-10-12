@@ -1,8 +1,8 @@
 # Approval and Evidence Register
 
 **Status:** Controlled template; FIN-01/02 candidates recorded, approvals/evidence incomplete<br>
-**Version:** 0.4<br>
-**Last reviewed:** 2026-10-08<br>
+**Version:** 0.5<br>
+**Last reviewed:** 2026-10-12 (authentication-policy revision OQ-20 recorded; approval rows remain OPEN)<br>
 **Implementation Gate:** CLOSED
 
 ## 1. Purpose
@@ -65,8 +65,8 @@ These rules are unapproved and remain part of `SPEC-GOV-01`.
 
 | Blocker | Accountable owner | Mandatory co-approvers | Required decision/evidence record | Current record | Status |
 |---|---|---|---|---|---|
-| `SPEC-AUTH-01` | Product Owner | Security Owner | Post-verification outcome and threat/flow/test evidence | Missing | OPEN |
-| `SPEC-AUTH-02` | Security Owner | Product Owner | Complete auth/session policy values and benchmark/threat/usability evidence | Missing | OPEN |
+| `SPEC-AUTH-01` | Product Owner | Security Owner | **Superseded by OQ-20 (2026-10-12):** the post-verification outcome no longer exists. What this row now needs is the Product + Security ratification of the retirement, plus register→sign-in and reset→sign-in threat/flow/test evidence | OQ-20 decision recorded in the Product Decision Log; ratification missing | SUPERSEDED — awaiting ratification |
+| `SPEC-AUTH-02` | Security Owner | Product Owner | Complete auth/session policy values — including the OQ-20 reset-OTP expiry/attempt/cumulative-budget/resend/issuance and session-invalidation bounds — and benchmark/threat/usability evidence | Values specified as labelled candidates; approval missing | OPEN |
 | `SPEC-FIN-01` | Product Owner | Financial Integrity, Data, Security Owners; Architecture for cross-table enforcement | Approve Issue #1 `snapshot_correction.v1`; H–J/`FIN-COR-01`–`10`; `FIN-LINK-01`–`06` exclusive-claim matrix; `FIN-OCC-01`–`04` persisted/presentation occurrence terminology; linked-domain/threat/UX review | Decision candidate documented; P1/P2 clarified; approvers/PR approval and executable link evidence missing | OPEN — approval/evidence ready |
 | `SPEC-FIN-02` | Data Owner | Architecture, Security, Financial Integrity Owners | Approve Issue #3 policy/ADR-009 and candidate bounds; execute `FIN-RACE-01`–`08` with exclusive-claim race, idle-confirmed rollback, lock-release, clean reuse, unconfirmed-cleanup eviction/no-retry, query/latency and commit-fault evidence | Cleanup and P1 concurrency contracts documented; approvers/Supabase PostgreSQL evidence missing | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Product Owner | Financial Integrity, Data Owners | Historical correction policy and DCT evidence | Missing | OPEN |
@@ -98,7 +98,7 @@ Values below must not be guessed from framework defaults. Each final limit requi
 | Free text | Display name, category/name, notes, cancellation/correction reason, security-event safe detail | Product Owner | Security, Privacy/Legal, UX Owners | Unset | Missing | OPEN |
 | Pagination | Default/max page size, cursor lifetime, stable ordering, bounded in-scope history/report range | Architecture Owner | Product, Data, QA Owners | Unset | Missing | OPEN |
 | Schedule | Interval maximum, end/duration maximum, active series/user, generation horizon, per-run batch | Product Owner | Architecture, Data, Operations Owners | Unset | Missing | OPEN |
-| Authentication | Password, OTP, invitation, session, login and reset rate/attempt/time bounds | Security Owner | Product, Architecture, Operations Owners | Unset | Missing | OPEN |
+| Authentication | Password, invitation, session, login bounds, and the password-reset OTP lifetime/attempts/cumulative budget/resend/issuance/session-invalidation bounds | Security Owner | Product, Architecture, Operations Owners | Candidate: 10-min reset-OTP expiry, 5 attempts per challenge, cumulative 10 failed verifications/account/hour, 60-s resend cooldown, 3 issuances/account/hour, 6/24 h (all pending approval) | Missing | OPEN — approval/evidence ready |
 | Reminder worker | Claim batch, retry/backoff, catch-up recovery window, stale-lock timeout, concurrency | Operations Owner | Product, Architecture, QA Owners | Unset | Missing | OPEN |
 | Audit/retention | Event display window, security retention, operational logs, tombstone/restore exclusion, provider records | Privacy/Legal Owner | Security, Operations, Data Owners | Unset | Missing | OPEN |
 
@@ -106,8 +106,8 @@ Values below must not be guessed from framework defaults. Each final limit requi
 
 | Evidence ID | Evidence class | Minimum coverage | Named reviewer | Artifact/version | Result | Status |
 |---|---|---|---|---|---|---|
-| `EVID-AUTH-POLICY` | Auth/session decision evidence | All `SPEC-AUTH-01`/`02` dimensions | Unassigned | Missing | Not evaluated | OPEN |
-| `EVID-AUTH-THREAT` | Threat and abuse review | Registration, verification, login, reset, session replay/revocation | Unassigned | Missing | Not evaluated | OPEN |
+| `EVID-AUTH-POLICY` | Auth/session decision evidence | All `SPEC-AUTH-02` dimensions plus the `SPEC-AUTH-01` retirement ratification under OQ-20 | Unassigned | Missing | Not evaluated | OPEN |
+| `EVID-AUTH-THREAT` | Threat and abuse review | Invitation-admitted registration (no OTP, no email, no session), password-reset request/OTP/consume, login, session replay/revocation | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-AUTH-BENCH` | Runtime benchmark | Argon2id and selected request/session limits on intended runtime | Unassigned | Missing | Not evaluated | OPEN |
 | `EVID-FIN-CORRECTION` | Financial correction decision evidence | Issue #1 policy review; snapshot H–J; `FIN-COR-01`–`10`; `FIN-LINK-01`–`06`; `FIN-OCC-01`–`04`; exclusive linked domains, occurrence terminology, reports, idempotency/stale outcomes | Unassigned | Specification exists; P1/P2 clarified; PR/approval and executable evidence missing | Not evaluated | OPEN |
 | `EVID-FIN-CONCURRENCY` | PostgreSQL concurrency decision/runtime evidence | Issue #3/ADR-009; `FIN-RACE-01`–`08`; forced orders; exclusive-claim race; version/idempotency; exact SQLSTATE bounds; idle-confirmed rollback before response/check-in/fresh retry; lock release; deterministic clean reuse; unconfirmed-cleanup eviction/no-retry; commit cut points; scope/bypass/latency | Unassigned | Contract candidate hardened; dedicated Supabase PostgreSQL execution/approval artifacts missing | Not evaluated | OPEN |

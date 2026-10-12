@@ -17,7 +17,7 @@ Make the responsive web client an **installable PWA with a deliberately restrict
 - Provide a validated web manifest, icons, standalone display metadata, theme/background colors, and stable start URL.
 - Cache only hashed/versioned public static build assets and a minimal non-sensitive offline shell.
 - Use network-only/no-store behavior for authenticated API calls, private HTML/data, auth endpoints, and security-sensitive resources.
-- Do not persist financial responses, tokens, OTP/reset information, or rendered private payloads in Cache Storage/IndexedDB for offline use.
+- Do not persist financial responses, tokens, password-reset OTP or any reset secret, or rendered private payloads in Cache Storage/IndexedDB for offline use.
 - Do not queue financial mutations in Background Sync in MVP.
 - When offline, show explicit status and disable/retain a pending form locally in memory where safe; never claim it is saved or secretly queue it.
 - Coordinate service-worker update activation so an in-progress form is not discarded. Prompt/reload only at a safe point.

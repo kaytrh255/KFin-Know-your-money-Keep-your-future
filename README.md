@@ -27,13 +27,22 @@ Start with the [KFin Specification Foundation](docs/README.md), [Milestone 01 tr
 - append-only correction chains, standalone voids, owner-scoped history, stable stale receipts, and no silent re-anchoring;
 - owner-scoped monthly actuals that exclude voided facts and identify amended groups;
 - one-off scheduled income/essential-expense occurrences with exact persisted states, derived due/Paid/Received presentation, explicit confirmation, and skip/cancel;
-- Trusted Private Beta access: digest-only single-use invitations, Argon2id registration, generic OTP verification with a fresh rotated session, opaque rotating sessions with CSRF/origin defense, session list/revocation, known-password change, password reset that revokes every session, and sanitized security history;
+- Trusted Private Beta access: digest-only single-use invitations, Argon2id registration with invitation admission and OTP email-verification, opaque rotating sessions with CSRF/origin defense, session list/revocation, known-password change, password reset that revokes every session, and sanitized security history;
 - authenticated financial-account onboarding (`POST /api/v1/financial-account`: atomic account + opening snapshot + idempotency receipt, replay, duplicate-account `409`, CSRF-protected) and owner-scoped listing from `financial_current_balances` (`GET /api/v1/financial-accounts`);
 - savings goals (`/api/v1/savings-goals`): create, list by status, plan edits, absolute current-amount updates with immutable old/new history, optimistic versions, idempotent CSRF-protected mutations, and terminal archive; a goal is a declared reserve and never changes the account balance or monthly actuals;
 - schedule-linked correction pointer transfer and linked standalone-void rejection;
 - unit/API/static-contract tests plus guarded real-PostgreSQL foundation, correction, schedule, access, onboarding, and savings-goal integration suites.
 
 Access secrets are never persisted in plaintext: invitation codes, OTP/reset secrets, session tokens, and CSRF tokens are stored only as purpose-separated keyed digests. Unauthenticated outcomes stay generic so a missing account, a consumed invitation, an expired code, and a wrong password are indistinguishable. Invitation provisioning has no HTTP route; it remains an audited operator procedure.
+
+> **Specification revision 2026-10-12 (OQ-20), not yet implemented.** The authentication
+> specification now admits registration by the invitation code alone — no email OTP, no email
+> enqueued, no session from registration — and reserves the emailed OTP for password reset, with
+> unverified addresses represented explicitly rather than marked verified. The code in this
+> repository still implements the earlier flow (a registration OTP plus
+> `/api/v1/auth/verify-email`), so the implementation currently deviates from the specification
+> and needs a follow-up change with its migration and OpenAPI update. See
+> [`docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md`](docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md).
 
 ## Workspace commands
 
@@ -65,7 +74,7 @@ Never commit connection strings or populated `.env` files. The checked-in [`.env
 
 ### Running it locally
 
-[`docs/development/LOCAL-DEVELOPMENT.md`](docs/development/LOCAL-DEVELOPMENT.md) is the single runbook: environment names, migrations, how to make registration/recovery completable on a local machine without a provider, and how to mint the first invitation.
+[`docs/development/LOCAL-DEVELOPMENT.md`](docs/development/LOCAL-DEVELOPMENT.md) is the single runbook: environment names, migrations, how to complete the email flows on a local machine without a provider, and how to mint the first invitation. It documents the **current implementation**, which the 2026-10-12 specification revision changes for registration.
 
 ```bash
 cp .env.example .env            # fill in locally; never commit it

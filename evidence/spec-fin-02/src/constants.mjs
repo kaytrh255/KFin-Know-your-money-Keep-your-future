@@ -1,4 +1,24 @@
 export const FROZEN_SOURCE_COMMIT = 'a48d2c5683550859c1b4e19e9d06750616adc0a2';
+
+// Authoritative-document pinning. The five documents listed in AUTHORITATIVE_DOCS are the
+// reviewed text the SPEC-FIN-02 candidate depends on. Three of them are shared specification
+// documents that a dated, recorded product decision may legitimately amend; those are pinned
+// to the SHA-256 of their reviewed amended content, because they can no longer equal the frozen
+// candidate text. Any later edit fails exactly as a frozen-commit comparison would, so the
+// control is unchanged in strength — it just names the revision it was reviewed against.
+// The SPEC-FIN-02 candidate documents stay compared byte-for-byte with FROZEN_SOURCE_COMMIT.
+export const AMENDED_AUTHORITATIVE_DOCS = Object.freeze({
+  revision: Object.freeze({
+    id: 'OQ-20',
+    date: '2026-10-12',
+    record: 'docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md',
+  }),
+  sha256: Object.freeze({
+    'docs/architecture/DATABASE.md': '28edd67d4a5d2278222fe4ccc64be2262f6e9c412831f7c23e70ff230bad93eb',
+    'docs/testing/TEST-STRATEGY.md': 'f94b9e01e76323bdd0a0c2354f997e4cd6d7af88b4dab2eb777654b931e718fc',
+    'docs/governance/APPROVAL-AND-EVIDENCE-REGISTER.md': '1344761833a009f157a6b92abfe24c46427dfd04e6aa15e86bad2b131de86c9a',
+  }),
+});
 export const POLICY_ID = 'account_financial_serialization.v1';
 export const SCHEMA_VERSION = '001';
 

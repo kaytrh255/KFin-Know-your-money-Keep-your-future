@@ -1,10 +1,21 @@
 # KFin Specification Remediation Round 3 Report
 
 **Status:** Documentation remediation complete; owner decisions and evidence remain open<br>
-**Date:** 2026-10-07<br>
+**Date:** 2026-10-07 (revision note added 2026-10-12)<br>
 **Role:** Specification Architect / Documenter<br>
 **Scope:** Pre-implementation specification blockers only<br>
 **Implementation Gate:** CLOSED
+
+> **2026-10-12 revision note — AUTH packets only.** Product decision OQ-20 changed the
+> authentication policy: registration is admitted by the invitation code without an email OTP,
+> the account is usable immediately by signing in, emailed OTP is reserved for password reset,
+> and an account whose email was never verified is represented explicitly as unverified. The
+> Round 3 text below is retained unedited as history. It is superseded for `SPEC-AUTH-01`
+> (the post-verification outcome no longer has a subject; the replacement is no session from
+> registration or reset, with a reset revoking every session) and its `SPEC-AUTH-02` dimension
+> list (reset OTP replaces verification OTP). Every other packet in this report is unaffected.
+> The synchronized source documents are listed in
+> [2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md](../evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md).
 
 ## 1. Round 3 outcome
 
@@ -37,8 +48,8 @@ Writing a decision packet, selecting a preferred option in implementation, or pr
 
 | Priority | Blocker | Before Round 3 | Round 3 result | Decisions already fixed | After Round 3 |
 |---|---|---|---|---|---|
-| AUTH | `SPEC-AUTH-01` | One binary post-verification question without a closure contract | Two permissible outcomes and shared safety obligations are specified; owner/evidence/criteria are explicit | OTP is single-use; verification is atomic; no pre-auth session identifier survives | OPEN — decision ready |
-| AUTH | `SPEC-AUTH-02` | Multiple auth values bundled into one broad approval statement | Policy dimensions, required inputs, and evidence are enumerated | Invitation-code mechanism, Argon2id, generic errors, digest-only secrets, reset-all-session revocation | OPEN — decision ready |
+| AUTH | `SPEC-AUTH-01` | One binary post-verification question without a closure contract | Two permissible outcomes and shared safety obligations are specified; owner/evidence/criteria are explicit | OTP is single-use; verification is atomic; no pre-auth session identifier survives | **SUPERSEDED 2026-10-12 (OQ-20)** — no verification step exists in MVP; retirement awaits Product + Security ratification |
+| AUTH | `SPEC-AUTH-02` | Multiple auth values bundled into one broad approval statement | Policy dimensions, required inputs, and evidence are enumerated (OQ-20: reset OTP replaces verification OTP) | Invitation-code mechanism, Argon2id, generic errors, digest-only secrets, reset-all-session revocation | OPEN — decision ready |
 | FIN | `SPEC-FIN-01` | Correction/void behavior was blocked in scenarios H–J without a complete decision checklist | Round 3 enumerated the dimensions; Issue #1 now proposes `snapshot_correction.v1` with append-only replacement, immutable anchor/effect, cross-segment rejection, exclusive link/report and stale/idempotent outcomes; P2 separates persisted `confirmed` from Paid/Received wording | No history erasure, no double effect/owner, closed history cannot rewrite current balance | OPEN — approval/evidence ready |
 | FIN | `SPEC-FIN-02` | Linearizable outcome required, serialization and conflict contract unspecified | Issue #3 now proposes `account_financial_serialization.v1`: `READ COMMITTED` account-row lock, monotonic version, account-first order, exclusive-domain-claim check, bounded SQLSTATE retry and same-key uncertain-commit recovery | Exactly one latest segment/compatible claim; no silent re-anchor; deterministic current balance | OPEN — approval/evidence ready |
 | DEBT | `SPEC-DEBT-01` | Later-event correction offered two broad alternatives | Explicit-fact replay and mandatory fresh lender-balance options now have safety/evidence criteria | No inferred principal, interest, fee, amortization, payoff, or outstanding | OPEN — decision ready |
@@ -75,7 +86,7 @@ Paths in this matrix are relative to `docs/` unless shown as root `README.md`. A
 
 ## 4. AUTH decision packets
 
-### 4.1 `SPEC-AUTH-01` — Post-verification outcome
+### 4.1 `SPEC-AUTH-01` — Post-verification outcome — **SUPERSEDED 2026-10-12 by OQ-20 (history retained below)**
 
 **Before:** The flow allowed either an authenticated session or a return to sign-in, but did not define the complete decision record required to choose one.
 
@@ -115,7 +126,8 @@ The decision must also specify result-screen copy, onboarding transition, cookie
 |---|---|
 | Invitation | Expiry, email binding rule, issuance authority, provisioning/audit procedure, revocation, replacement, and operator access |
 | Password | Minimum/maximum, Unicode normalization/truncation behavior, compromised-password method/privacy contract, and rehash trigger |
-| Verification OTP | Lifetime, attempts, resend cooldown, target/IP/global caps, supersession, and provider-uncertainty behavior |
+| Verification OTP | *(superseded by OQ-20 — MVP issues no verification OTP)* |
+| Password-reset OTP (OQ-20) | Lifetime, attempts per challenge, cumulative budget across superseded challenges, resend cooldown, target/IP/global issuance and cost caps, supersession, session-invalidation on consume, and provider-uncertainty behavior |
 | Password reset | Secret lifetime, request/consume limits, resend/replacement behavior, and failure handling |
 | Login abuse | Account/IP/network/global thresholds, backoff/lock behavior, recovery, monitoring, and tuning authority |
 | Session lifetime | Idle, absolute, recent-auth window, last-seen write policy, and disabled/deletion-pending enforcement |
@@ -321,7 +333,7 @@ Round 3 does not select `latest`, `earliest`, `most severe`, `none`, or any othe
 
 - successful and failed sign-in/risk events;
 - session creation, rotation/replay response, and revocation;
-- password change/reset and verification changes;
+- password change/reset changes (and any future verification change, since MVP has none after OQ-20);
 - invitation/account activation events;
 - account lock/disable and deletion request/cancellation;
 - profile/email/timezone/base-currency security-relevant changes;

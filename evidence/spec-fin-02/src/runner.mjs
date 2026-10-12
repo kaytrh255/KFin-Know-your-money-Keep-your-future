@@ -1,6 +1,12 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { CASE_IDS, FROZEN_SOURCE_COMMIT, RESULT_STATUS } from './constants.mjs';
+import {
+  AMENDED_AUTHORITATIVE_DOCS,
+  CASE_IDS,
+  FROZEN_SOURCE_COMMIT,
+  RESULT_STATUS,
+} from './constants.mjs';
 import { PG_DRIVER_VERSION, TracedPool } from './db.mjs';
 import { EvidenceRecorder } from './evidence.mjs';
 import { FinancialProtocol } from './protocol.mjs';
@@ -21,7 +27,7 @@ import { runFinRace06 } from './cases/fin-race-06.mjs';
 import { runFinRace07 } from './cases/fin-race-07.mjs';
 import { runFinRace08 } from './cases/fin-race-08.mjs';
 
-const AUTHORITATIVE_DOCS = [
+export const AUTHORITATIVE_DOCS = [
   'docs/architecture/SPEC-FIN-02-SNAPSHOT-CONCURRENCY.md',
   'docs/architecture/DATABASE.md',
   'docs/testing/TEST-STRATEGY.md',
@@ -166,8 +172,20 @@ export async function removeEvidenceSchema(config) {
 
 export function verifyFrozenAuthoritativeDocs() {
   for (const file of AUTHORITATIVE_DOCS) {
-    const frozen = execFileSync('git', ['show', `${FROZEN_SOURCE_COMMIT}:${file}`]);
     const current = fs.readFileSync(file);
+    const pinnedRevisionDigest = AMENDED_AUTHORITATIVE_DOCS.sha256[file];
+    if (pinnedRevisionDigest) {
+      const digest = createHash('sha256').update(current).digest('hex');
+      if (digest !== pinnedRevisionDigest) {
+        throw new Error(
+          `Authoritative document differs from the reviewed ${AMENDED_AUTHORITATIVE_DOCS.revision.id} `
+          + `(${AMENDED_AUTHORITATIVE_DOCS.revision.date}) revision recorded in `
+          + `${AMENDED_AUTHORITATIVE_DOCS.revision.record}: ${file}`,
+        );
+      }
+      continue;
+    }
+    const frozen = execFileSync('git', ['show', `${FROZEN_SOURCE_COMMIT}:${file}`]);
     if (!frozen.equals(current)) {
       throw new Error(`Authoritative document differs from frozen commit: ${file}`);
     }

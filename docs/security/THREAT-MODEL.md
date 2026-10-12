@@ -21,7 +21,7 @@ No mitigation is currently implemented or tested. Risk ratings are design-time e
 | ID | Asset | Impact if compromised |
 |---|---|---|
 | A-01 | Password hashes and credential policy | Offline cracking, credential reuse, account takeover |
-| A-02 | OTP/reset/invite/session bearer secrets | Immediate verification/recovery/session hijack |
+| A-02 | Password-reset OTP, invite and session bearer secrets | Immediate recovery/session hijack, and (for the invite code) admission bypass |
 | A-03 | User identity/profile/email/timezone | Privacy harm, phishing, account targeting |
 | A-04 | Financial accounts, balances, transactions, notes | Severe privacy harm, manipulation, loss of trust |
 | A-05 | Debts, obligations, savings goals, planned purchases | Sensitive inference, coercion/phishing, bad decisions |
@@ -39,7 +39,7 @@ No mitigation is currently implemented or tested. Risk ratings are design-time e
 - Internet attacker with no account.
 - Malicious or curious authenticated beta user.
 - Credential-stuffing/brute-force automation.
-- Abusive email/OTP cost attacker.
+- Abusive password-reset email/OTP cost attacker (registration sends no email, so it offers no cost surface).
 - Malware, browser extension, XSS payload, or stolen device acting with a user.
 - Compromised dependency, CI runner, deployment artifact, or provider.
 - Malicious/negligent operator or support person.
@@ -55,7 +55,7 @@ flowchart LR
     API -->|3 scoped SQL/TLS| DB[(PostgreSQL)]
     WORKER[Worker] -->|4 scoped SQL/TLS| DB
     API -->|5 durable non-secret outbox intent| DB
-    API -->|6a ephemeral OTP/reset submission over TLS| EMAIL[Email provider]
+    API -->|6a ephemeral password-reset OTP submission over TLS| EMAIL[Email provider]
     WORKER -->|6b minimum non-secret email payload/TLS| EMAIL
     API -->|7 redacted telemetry| OBS[Logs/error/metrics]
     WORKER -->|7 redacted telemetry| OBS
@@ -104,13 +104,13 @@ Any changed assumption requires threat-model review.
 |---|---|---|---|---|---|
 | TM-01 | Credential stuffing or beta-admission bypass with reused credentials/email targeting | High/Critical | Mandatory single-use expiring invitation-code consumption with no email-allowlist bypass; edge + IP/account/global throttles; generic errors; Argon2id; compromised-password screening; session/security events; future MFA seam | Invitation bypass/replay/parallel-use tests; automated distributed-pattern tests; manual enumeration review; alerts/tabletop | Medium/High without MFA |
 | TM-02 | Brute-force password guessing against one/many accounts | High/High | Layered adaptive delays/limits; strong password policy; bounded worker/DB cost; generic response; alerting | Rate-limit/concurrency/load tests; bypass/header-spoof tests | Medium |
-| TM-03 | Account enumeration through register/login/reset/OTP content, status, timing, or rate-limit differences | High/High | Generic content/status; normalized flow; bounded timing differences; same unavailable behavior; privacy-safe counters | Differential automated assertions and statistical timing review | Low/Medium |
-| TM-04 | OTP guessing, resend abuse, email bombing, cost exhaustion, or queued-secret leakage | High/High | Cryptographic code; keyed digest; short expiry; five-attempt proposal; cooldown/target/IP/global caps; supersession; immediate ephemeral provider submission; no plaintext secret in ordinary outbox; minimum provider payload | Guess/resend/concurrency/replay/cost tests; outbox/log inspection; provider metrics | Medium |
+| TM-03 | Account enumeration through register/login/reset-request/reset-verify content, status, timing, or rate-limit differences | High/High | Generic content/status; normalized flow; bounded timing differences; same unavailable behavior; privacy-safe counters; reset request answers identically for existing, non-existing, ineligible and rate-limited addresses | Differential automated assertions and statistical timing review | Low/Medium |
+| TM-04 | Password-reset OTP guessing, resend abuse, email bombing, cost exhaustion, or queued-secret leakage — now the only OTP flow (OQ-20) | High/High | Cryptographic code; keyed digest; short expiry; five-attempt proposal plus a cumulative budget across superseded challenges that a resend cannot reset; cooldown/target/IP/global issuance and cost caps; supersession; immediate ephemeral provider submission; no plaintext secret in ordinary outbox; minimum provider payload | Guess/resend/budget/concurrency/replay/cost tests; outbox/log inspection; provider metrics | Medium |
 | TM-05 | Password reset link theft, replay, substitution, host-header poisoning, or reset abuse | Medium/Critical | High-entropy single-use digest; short expiry; generic request; trusted canonical URL; no referrer/log; all-session revoke; security notification | Replay/race/open-redirect/host-header/log tests | Low/Medium |
 | TM-06 | Weak/stolen password-hash database cracked offline | Medium/Critical | Argon2id benchmark; unique salt; common-password rejection; DB/private backup controls; rapid incident reset plan | Parameter benchmark; storage inspection; backup/IAM review | Medium |
 | TM-07 | Session theft via XSS, logs, URL, JS storage, network, shared cache, or stolen device | High/Critical | HttpOnly Secure host-only cookie; TLS/HSTS; no local token/cache/log; CSP/XSS controls; idle/absolute expiry; session UI/revoke; no-store | Cookie/cache/client-storage/CSP/XSS tests; device-loss tabletop | Medium |
 | TM-08 | Token replay or rotation race retains access | Medium/Critical | Digest-only token generations; atomic rotation; bounded grace; replay detection/revoke; session family; credential-change invalidation | Parallel-tab, retired-token, timeout-after-rotation, logout replay tests | Low/Medium |
-| TM-09 | Session fixation or privilege/account switch confusion | Medium/High | New token after authentication and after verification only if the approved flow establishes a session; never accept client session ID; clear/revoke on transitions; same-user draft retry only | Fixation/auth-switch E2E tests for the selected post-verification policy | Low |
+| TM-09 | Session fixation or privilege/account switch confusion | Medium/High | New token after authentication and after reset; registration and reset issue no session at all (OQ-20), so no pre-auth identifier can be promoted from either; never accept client session ID; clear/revoke on transitions; same-user draft retry only | Fixation/auth-switch E2E tests for register→sign-in and reset→sign-in, including the all-session revocation a reset performs | Low |
 | TM-10 | CSRF performs financial/security mutation | High/Critical | SameSite cookie plus strict Origin/Fetch Metadata and unpredictable CSRF token; same-origin CORS; explicit content type | Cross-site form/fetch, missing/invalid token, allowed-origin test suite | Low |
 
 ### Authorization, application, and financial-integrity threats
@@ -138,7 +138,7 @@ Any changed assumption requires threat-model review.
 |---|---|---|---|---|---|
 | TM-22 | Sensitive data leaks through errors, source maps, analytics, session replay, logs, traces, URLs, page title, or referrer | High/Critical | Safe errors/correlation; allowlist telemetry; no bodies/amounts/notes; session replay off; restricted source maps; no-referrer; no secrets in URL | Canary-secret/log scan; error/analytics/source-map review | Low/Medium |
 | TM-23 | Browser/service worker/shared CDN caches authenticated financial data after logout/device sharing | Medium/Critical | API/private no-store; service-worker static allowlist; Cloudflare bypass; no offline private persistence; logout tests | Cache inspection and shared-cache tests across login/logout/update | Low |
-| TM-24 | Authentication/security email exposes OTP/account context on a shared inbox/lock screen or provider logs | Medium/High | No payment-reminder/financial amount email; minimal subject/preview; short-lived secrets; provider retention review; no notes | Template/privacy review; provider log inspection | Low/Medium |
+| TM-24 | Authentication/security email exposes OTP/account context on a shared inbox/lock screen or provider logs | Medium/High | No payment-reminder/financial amount email; minimal subject/preview; short-lived secrets; provider retention review; no notes; only the password-reset OTP is emailed and registration sends nothing | Template/privacy review; provider log inspection | Low/Medium |
 | TM-25 | Operator/support/insider accesses or alters user data outside need | Medium/Critical | Least privilege; separate MFA identities; no shared account; audited access; approval/break-glass; app role restrictions; data minimization | IAM/access review; audit tests; insider tabletop | Medium |
 | TM-26 | Cross-environment copy or debug tooling exposes production data | Medium/Critical | No prod data below prod; synthetic fixtures; environment credentials; restricted exports/debug; redaction | Pipeline/config review; DLP/manual checks | Low |
 | TM-27 | Deletion/purge fails, backup restore resurrects data, or extended retention exposes unexpected data | Medium/Critical | 7-day state machine; identity verification; idempotent deletion map; independently protected restore-exclusion register; 90d backup/log and 24mo minimized security maxima; provider/legal review | Race-safe cancellation/purge, provider deletion, retention expiry, restore-with-current-tombstone tests | Medium pending legal/provider validation |
@@ -150,7 +150,7 @@ Any changed assumption requires threat-model review.
 | TM-28 | Volumetric DDoS saturates public origin/network | Medium/High | Cloudflare DDoS/WAF; hidden/restricted origin; provider capacity; static edge delivery; runbook | Origin-bypass test; controlled provider exercise/tabletop | Medium/provider-dependent |
 | TM-29 | Application-layer flooding of login, dashboard, search, recurrence, or history exhausts CPU/DB | High/High | Edge + app limits; body/time/range/pagination caps; indexed queries; pool/concurrency limits; caching only safe public assets; alerts | k6/abuse tests, slow-query plans, limit-bypass tests | Medium |
 | TM-30 | Database connection/storage/table/index exhaustion from traffic, counters, logs, jobs, or unbounded records | Medium/Critical | Small pool/timeouts; bounded retention/pagination/generation; job/counter pruning; storage/pool alerts; quotas/limits | Soak/exhaustion tests; retention job tests; fail-closed behavior | Low/Medium |
-| TM-31 | Email/provider outage or deliberate bounce abuse blocks verification/recovery/security email | Medium/High | Immediate secret-delivery policy, bounded resend/limits, non-secret outbox retries, health metrics, support fallback policy; in-app payment reminders remain independent | Provider fault injection, uncertainty, resend, and retry/dedup tests | Medium |
+| TM-31 | Email/provider outage or deliberate bounce abuse blocks password-reset/security email | Medium/High | Immediate secret-delivery policy, bounded resend/limits, non-secret outbox retries, health metrics, support fallback policy; registration and in-app payment reminders are independent of the provider | Provider fault injection, uncertainty, resend, and retry/dedup tests; registration with a failing provider | Medium |
 | TM-32 | Worker crash/duplicate execution loses or repeats reminders/occurrences | Medium/High | Lease/reclaim; unique dedup keys; idempotent handlers; backlog alert; bounded generation | Kill-at-each-step tests, concurrent worker tests | Low |
 | TM-33 | Expensive password hashing is weaponized for CPU denial | Medium/High | Edge/app login limits, global concurrency/semaphore, benchmarked cost, generic failure, capacity monitoring | Auth load/abuse test without weakening hash | Medium |
 
@@ -179,7 +179,7 @@ Attacker/tampered client sends `paid` as if it were a persisted occurrence state
 
 ### AC-03 — Attacker abuses account lifecycle
 
-Automation cycles register → resend OTP → reset → login across target/IP variation to enumerate, impose email cost, or seize an account. **Required outcome:** generic behavior, multi-dimensional cost controls, bounded provider/database work, alerts without locking legitimate users permanently.
+Automation cycles register (invitation code only, no email) → reset request → reset OTP verify → resend → login across target/IP variation to enumerate, impose email cost, or seize an account. **Required outcome:** generic behavior, multi-dimensional cost controls, bounded provider/database work, alerts without locking legitimate users permanently.
 
 ### AC-04 — Stolen session remains useful after security action
 
@@ -198,7 +198,7 @@ Attacker sends slow/large/parallel login hashes, month-range reports, occurrence
 - RQ-TM-01: Complete owner-scope and cross-user tests before any financial endpoint is called complete.
 - RQ-TM-02: Treat schedules/notifications as intent only; posted transactions are the sole MVP cash movement truth.
 - RQ-TM-03: Implement idempotency and atomic link constraints before enabling retry-prone financial confirmation.
-- RQ-TM-04: Keep session/challenge bearer material digest-only and absent from all telemetry/client persistence.
+- RQ-TM-04: Keep session/reset-challenge bearer material digest-only and absent from all telemetry/client persistence, and never present an unverified address as verified (OQ-20).
 - RQ-TM-05: Use same-origin + explicit CSRF defense and restrictive browser headers.
 - RQ-TM-06: Bound every user-controlled collection, range, body, recurrence, retry, and worker claim.
 - RQ-TM-07: Validate no-store/service-worker/Cloudflare cache configuration in deployed staging, not only unit tests.
@@ -260,7 +260,7 @@ Round 3 documents the required review; no threat review has occurred and no resi
 
 | Blocker | Threat decision/review required | Fixed safety boundary | Required evidence and closure condition | Status |
 |---|---|---|---|---|
-| `SPEC-AUTH-01` | Compare fresh-session and explicit-sign-in branches for fixation, CSRF, account switch, replay, timeout-after-consume and multi-tab confusion | Atomic single-use verification; no pre-auth identifier survives | Product + Security select one branch; `AUTH-VRF` evidence passes and TM-09 residual is re-evaluated | OPEN — decision ready |
+| `SPEC-AUTH-01` | **Superseded by OQ-20 (2026-10-12):** there is no verification flow to branch on. What requires threat review instead: no session from registration or reset, the reset's all-session revocation, and reset-request enumeration/oracle behavior | Reset OTP remains atomic/single-use; no pre-auth identifier survives; a reset proves mailbox access at one instant, not identity | Product + Security ratify the retirement; `AUTH-REG`/`AUTH-RST` evidence passes and TM-09 residual is re-evaluated | SUPERSEDED — awaiting Product + Security ratification |
 | `SPEC-AUTH-02` | Assess all values against guessing, enumeration, email cost, hash DoS, provider failure, stolen token and concurrent replay | Invitation code only, Argon2id, digest-only secrets, generic errors, reset-all revocation | Security + Product approve every dimension; `AUTH-POL` evidence passes; TM-01–08/31/33 residuals are owned | OPEN — decision ready |
 | `SPEC-FIN-01` | Review Issue #1 `snapshot_correction.v1` against malicious field/anchor/effect tampering, linked-domain misuse, stale/idempotent replay and audit erasure | No history erasure/double effect/current-balance rewrite from closed history; no incompatible domain claims | Mandatory owners approve; H–J/`FIN-COR-01`–`10`/`FIN-LINK-01`–`06`/`FIN-OCC-01`–`04` cover TM-15/16/17/18/42/44 with no alternate behavior | OPEN — approval/evidence ready |
 | `SPEC-FIN-02` | Review proposed `account_financial_serialization.v1`: owner-scoped row lock/version, account-first order and complete claim check, lock/pool abuse, one bounded retry, worker/operator bypass and same-key uncertain-commit recovery | One latest segment/compatible claim; one version-incrementing winner/stale loser; no silent re-anchor, duplicate owner/effect, third retry or leaked diagnostics | Mandatory owners approve; executed `FIN-RACE-01`–`08`/`FIN-LINK-01`–`06` covers TM-15/18/42/43/44 with lock/query/fault evidence | OPEN — approval/evidence ready |

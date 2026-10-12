@@ -17,40 +17,37 @@
 
 ```text
 Receive single-use invitation code
-  → Register with invite + email + password
-  → Generic verification instruction
-  → Verify email OTP
-  → Sign in (or establish verified session under approved policy)
+  → Register with invite + email + password (no OTP, no email sent)
+  → Generic accepted result
+  → Sign in with the chosen credentials
   → Set display name, timezone, and one base currency
   → Create aggregate account and initial balance snapshot
   → Dashboard setup state
   → Add first current transaction or historical backfill
 ```
 
-The policy for automatically signing in after verification is not yet approved. Whatever is selected must rotate credentials/session identifiers and produce one unambiguous result.
+Registration creates no authenticated session and no email OTP (OQ-20): the account is immediately usable and the user signs in explicitly. An account whose email was never verified stays explicitly unverified — `email_verified_at` remains NULL, the verification state records `unverified`, and no flow or screen may present the address as verified.
 
 ## 3. Authentication and security flows
 
-### UF-AUTH-01 — Register and verify email
+### UF-AUTH-01 — Register with an invitation code (no email verification)
 
 **Precondition:** User has an unexpired, unused Private Beta invitation code. Presence on any operator-side email list is insufficient without the code.
 
 1. User enters invitation code, email, and a password meeting the visible policy.
 2. Client submits over TLS without logging credentials or invite material.
 3. Server digests/validates the invitation, normalizes email, applies IP/email/invite abuse controls, and returns a generic response.
-4. If permitted, server atomically consumes the invitation and creates the pending account with an Argon2id password hash, then sends a single-use OTP.
-5. User enters the OTP on a screen that shows a masked destination and expiry/resend guidance.
-6. Server validates purpose, digest, attempts, expiry, and consumed state.
-7. On success, email becomes verified and a security event is recorded.
-8. User continues to onboarding under the approved post-verification session policy.
+4. If permitted, server atomically consumes the invitation and creates an **active** account with an Argon2id password hash. It creates no authentication challenge and sends or enqueues no email, and it issues no authenticated session.
+5. The result screen states that the account was created, does not claim an email was sent, does not claim the address was verified, and directs the user to sign in.
+6. The user signs in with the credentials just chosen (`UF-AUTH-02`) and continues to onboarding.
 
 **Failure/recovery**
 
 - Existing email, invalid/expired/consumed/revoked/wrong-email invitation, and non-existing email states must not create an enumeration oracle.
 - An unusable invitation gets generic guidance; only the audited operator procedure may issue a replacement invitation.
-- Incorrect OTP shows remaining-safe guidance, not secret comparison details.
-- OTP resend invalidates or supersedes prior active verification challenges according to the approved challenge policy.
+- A submission rejected because the address may already be registered gives generic sign-in/recovery guidance, never a confirmation that the address exists.
 - Rate-limit responses are calm and do not reveal account or invitation state.
+- If the user mistyped the email address, the account still exists and only the audited operator/support procedure can recover it: no verification step exists that would prove or repair the address.
 
 ### UF-AUTH-02 — Sign in and resume session
 
@@ -67,14 +64,20 @@ The policy for automatically signing in after verification is not yet approved. 
 - **All:** User confirms Sign out everywhere → server revokes all user sessions atomically → clears current cookie → records event → returns to sign-in.
 - A failed revocation cannot be presented as successful.
 
-### UF-AUTH-04 — Forgot and reset password
+### UF-AUTH-04 — Forgot and reset password (emailed OTP)
 
-1. User submits email; response is identical regardless of account existence.
-2. Eligible verified account receives a time-limited, single-use reset link/challenge.
-3. User submits a new password; server validates challenge and password policy.
-4. Server changes the password hash and revokes all sessions in one transaction or fail-safe sequence.
-5. User sees confirmation and signs in again.
-6. Replayed, expired, or replaced challenges fail generically.
+1. User submits email; the status, body, and bounded timing of the response are identical regardless of whether the address exists, is eligible, or is rate-limited.
+2. An eligible account receives a short-lived single-use OTP by email. An account that does not exist, is not eligible, or is rate-limited receives nothing, and the external response is unchanged.
+3. The user enters the OTP on the reset screen, which shows a masked destination, the expiry, remaining attempts, and resend guidance.
+4. Server validates purpose, digest, expiry, attempt budget, and consumed/superseded state before accepting any new password, then validates the new password against the visible policy.
+5. On success the server consumes the challenge, replaces the credential, revokes every session, clears the session cookie, invalidates the account's other outstanding challenges, and records a security event — atomically or fail-safely.
+6. The user sees a confirmation that does not reveal account state, and signs in explicitly with the new password. No session is issued by the reset itself.
+7. Replayed, expired, superseded, attempt-exhausted, or wrong OTP values fail generically and offer a safe path to request a new code.
+
+**Failure/recovery**
+
+- Resending supersedes the previous challenge and MUST NOT reset the account's cumulative failed-verification budget.
+- A provider failure leaves the digest-only challenge state intact and offers the generic resend path; the plaintext is never queued in the ordinary outbox.
 
 ### UF-AUTH-05 — Change known password
 
@@ -337,7 +340,8 @@ When setup is incomplete, the dashboard explains which missing data prevents a t
 Before approval, product/UX review must walk through at minimum:
 
 - mandatory invitation-code expiry/wrong-email/parallel use, one atomic account creation, and no email-only admission bypass;
-- post-verification session behavior under the selected policy;
+- invitation-admitted registration that creates no challenge row, sends no email, issues no session, and yields an immediately usable account, with the address left explicitly unverified (OQ-20);
+- password-reset request/OTP/expiry/attempt/resend/session-invalidation behavior, including identical responses for existing and non-existing addresses;
 - deletion request/cancellation race, purge, and restore-exclusion behavior;
 - fixed salary plus two daily income records in one month;
 - insufficient current funds for rent due in three days;
@@ -359,8 +363,8 @@ Round 3 does not choose any unresolved branch. It defines what flow evidence mus
 
 | Blocker | Affected flows | Exact unresolved flow decision | Fixed flow boundary | Required flow evidence | Status |
 |---|---|---|---|---|---|
-| `SPEC-AUTH-01` | First-use map, `UF-AUTH-01`/`02` | Fresh rotated session after verification or explicit sign-in; result, onboarding redirect, cookie/CSRF, event, multi-tab, and uncertain-response result | OTP use is atomic/single-use; no pre-auth identifier survives | Compact/expanded walkthrough, threat/session-fixation review, retry/multi-tab tests, approved Vietnamese copy | OPEN — decision ready |
-| `SPEC-AUTH-02` | `UF-AUTH-01`–`06`, session-expiry exception | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and failure path | Invitation code only; generic responses; Argon2id; digest-only secrets; reset revokes all sessions | Boundary, expiry, replay, concurrent-tab, provider-failure, benchmark and usability evidence | OPEN — decision ready |
+| `SPEC-AUTH-01` | First-use map, `UF-AUTH-01`/`02` | **Superseded by OQ-20 (2026-10-12):** no verification step exists, so no post-verification outcome remains; registration and reset both issue no session, and reset revokes all sessions | No pre-auth identifier survives; no session-fixation path | Ratification record; threat/session-fixation review of the register→sign-in and reset→sign-in paths; approved Vietnamese copy | SUPERSEDED — awaiting Product + Security ratification |
+| `SPEC-AUTH-02` | `UF-AUTH-01`–`06`, session-expiry exception | Every invitation/password/reset-OTP/abuse/session/rotation/password-change value and failure path, including the OQ-20 reset-OTP expiry, attempt, cumulative-budget, resend and issuance bounds | Invitation code only; generic responses; Argon2id; digest-only secrets; reset revokes all sessions; registration sends no email | Boundary, expiry, replay, concurrent-tab, provider-failure, benchmark and usability evidence | OPEN — decision ready |
 | `SPEC-FIN-01` | `UF-FIN-02`/`03`/`06` and linked schedule/debt/purchase flows | Approve proposed `snapshot_correction.v1`, exclusive-domain-claim matrix, and persisted `confirmed` versus Paid/Received presentation terminology | Append-only evidence; no silent cross-segment move, history erasure, double effect/owner, or storage alias | Issue #1 PR review, snapshot H–J, `FIN-COR-01`–`10`, `FIN-LINK-01`–`06`, and `FIN-OCC-01`–`04` walkthroughs | OPEN — approval/evidence ready |
 | `SPEC-FIN-02` | `UF-FIN-01`–`06` and owning-domain writers | Approve/prove `account_financial_serialization.v1`: account-row lock, monotonic version, account-first complete claim check, one bounded retry, same-key uncertain-commit recovery and safe errors | Exactly one latest segment/compatible claim and defined winner/stale-loser result; no silent re-anchor, duplicate or unbounded retry | ADR-009 review and executed `FIN-RACE-01`–`08`/`FIN-LINK-01`–`06` with lock/query/fault evidence | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | `UF-DEBT-03` | Explicit-fact replay or fresh lender-reported balance when later events exist | No inferred debt component or outstanding; unsafe path unavailable | DCT-08/09 and later-event/date-reorder/missing-state walkthroughs | OPEN — decision ready |

@@ -147,6 +147,15 @@ stale snapshot version.
 
 ## 4. Completing the email flows locally
 
+> **Specification note (2026-10-12, OQ-20).** The authentication specification no longer
+> verifies email at registration: registration is admitted by the invitation code and creates no
+> challenge and no email, and the emailed OTP is reserved for password reset, which must not
+> reveal whether an address exists. The implementation in this repository still issues a
+> registration OTP and still exposes `/api/v1/auth/verify-email` and
+> `/api/v1/auth/verification/resend`; this section describes that current behavior and will be
+> updated by the implementation change. See
+> [`docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md`](../evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md).
+
 Registration issues a six-digit code and password recovery issues a reset secret.
 Neither is returned in an API response, and the default adapter (`none`) reports
 delivery failure, so a browser flow cannot be completed on the default settings —
@@ -195,8 +204,8 @@ A write with a code that does not exist for that direction is refused with
 
 ## 6. What is testable from the client today
 
-Sign in, register (invitation), verify email, forgot/reset password, change
-password, session list/revocation, opening the financial account, posting a
+Sign in, register (invitation), verify email *(pre-revision flow; see the §4 note)*,
+forgot/reset password, change password, session list/revocation, opening the financial account, posting a
 snapshot under optimistic concurrency, reading the authoritative balance, monthly
 actuals, transaction list/detail/create/void preview/void/history, savings goals
 (create, list, update amount, archive, amount history), and one-off schedule
