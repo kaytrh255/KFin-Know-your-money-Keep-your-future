@@ -15,7 +15,7 @@
 **Date prepared:** 2026-10-12
 **Prepared by:** implementation review session (Arena agent), acting for — not as — the owners
 **Prepared after:** [`docs/reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md`](../reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md) (findings F-1, F-3, F-8)
-**Implementation under review:** `4866d13` on branch `arena/bfaf5019-kfin-know-your-money-keep-your` (PR #10, unmerged)
+**Implementation under review:** branch `arena/bfaf5019-kfin-know-your-money-keep-your` (PR #10, unmerged; head at the time of writing `4866d13`)
 **Frozen SDD baseline:** `a48d2c5683550859c1b4e19e9d06750616adc0a2` (untouched)
 
 ## 1. What is being asked
@@ -137,6 +137,29 @@ current text — but it is unquantified, and one sample is not a measurement.
 | **M2 — latency floor** | Bring the non-issuing path up to a fixed floor (e.g. ≥ 15 ms) | 3-line change, adds ~10 ms to every reset request; masks rather than equalises | Security + Product (UX) |
 | **M3 — equalise the work** | Perform the same challenge/event writes for ineligible targets and discard | Rejected: creates challenge rows and burns counters for addresses that have nothing to do with the request | — |
 | **M4 — accept as bounded timing** | Record the measured numbers as residual risk under D-3/D-1 | Legitimate only with the numbers in hand, i.e. after M1 | Security |
+
+### 3.1 Status update after this request was written (2026-10-12)
+
+Nothing below changes an option or an approval field; it records what has been measured since, so that a
+reader is not working from the unquantified numbers above.
+
+- **M1 is done.** F-8 was measured properly — 40 samples per case across five cases, interleaved, plus an
+  HTTP-boundary cross-check — and the detail lives in
+  [`2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md)
+  Part B. Result: **the endpoint is not timing-equivalent** (issuing median 4.74 ms vs unknown 2.11 ms,
+  essentially disjoint ranges; HTTP cross-check 8.24 ms vs 4.06 ms). The decision the owners still owe is
+  **M2 (latency floor) or M4 (informed acceptance with the table attached)**; M3 stays rejected.
+- **F-3 is unchanged and still open.** The same record's Part A restates the mechanism, re-measures
+  `400 ×10` → `429` against an address that has no account at all, and costs options R1–R6, rejecting R4
+  and R6 on the anti-enumeration argument stated in §2 of this request. **No limit, key, window, or spend
+  point was changed.** R1 + R5 remain the recommended minimum; R2 remains the durable fix and will need
+  the `SPEC-AUTH-02` approval it implies.
+- **D5 now has a dated record with a proposed accountable owner** —
+  [`2026-10-12-D5-UNVERIFIED-EMAIL-BETA-RISK.md`](2026-10-12-D5-UNVERIFIED-EMAIL-BETA-RISK.md) — which
+  proposes **Product Owner** as accountable risk owner with **Security Owner** as co-approver, and leaves
+  its acceptance block empty. Proposing a role is not a signature.
+- **Every approval field in this file is still empty**, `EVID-AUTH-POLICY` is still
+  `Missing / Not evaluated`, and none of D-1, D-2, D-3, D-4 or D-5 has been decided.
 
 ## 4. Approval fields — deliberately empty
 

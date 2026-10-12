@@ -385,7 +385,7 @@ changeset did about each item; nothing above is rewritten, so the original revie
 | F-1 (D5 unrecorded) | **Prepared, still open — owner signature required** | [`docs/evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](../evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md) §1.1 and the empty approval block D-1; no name, date or signature entered |
 | F-2 (false claim about the two documents) | **Closed** | `MILESTONE-11` §8 now states that `ARCHITECTURE.md` and `SCREEN-INVENTORY.md` were already synchronized by `9456067`, and records that the earlier claim was wrong |
 | F-3 (reset availability) | **Open and blocking — no longer an unquantified worry** | Analysis and costed options R1–R5 in the request record §2; measured again as `400 ×10` then `429`, with the counter reaching 10 for an address that has no account. **No rate-limit value, key, window or spend point was changed**: that is a policy decision this changeset may not take, and a risk note does not close the finding |
-| F-4 (PR description) | **Addressed outside the repository** | PR #10 title and body rewritten to describe the actual 87-file scope; see the PR for the text |
+| F-4 (PR description) | **Addressed outside the repository** | PR #10 title and body rewritten to describe the actual scope (`gh api -X PATCH`); the count quoted there is corrected in §11.2, where the scope is re-measured |
 | F-5 (§9 listed D5 as implemented) | **Closed** | `MILESTONE-11` §9 now lists D2/D3/D4/D7/D8 as implemented in code and D5 as a *request*, with no signature |
 | F-6 (§5.2 before §5.1) | **Closed** | Reordered in the revision record, with an editorial note recording the move and its reason |
 | F-7 (stale text in `outbox.ts`) | **Closed** | Panel comment, `onUseCode` docstring and the empty-state copy now describe the reset-only flow |
@@ -413,4 +413,31 @@ question — but the conditions that remain are decisions, not edits:
 2. **D5, `SPEC-AUTH-01` and `SPEC-AUTH-02` still need signatures.** The product is shipping a
    specification whose authentication branch is unratified and whose values are candidate values.
 3. **Nothing here merges or deploys anything**, and no approval was written on the owners' behalf.
+
+### 11.2 Finalization pass (2026-10-12, head `953c7b3`)
+
+The §11 rows above were written by the follow-up changeset. This pass re-checked them against the tree
+instead of trusting them, then dealt with the three items that were still stated as open. Two new dated
+evidence records carry the detail; nothing in §7 was rewritten.
+
+| Finding | State after the finalization pass | Evidence |
+|---|---|---|
+| F-1 (D5 unrecorded) | **Recorded, acceptance still unsigned — owner signature required** | [`docs/evidence/2026-10-12-D5-UNVERIFIED-EMAIL-BETA-RISK.md`](../evidence/2026-10-12-D5-UNVERIFIED-EMAIL-BETA-RISK.md): dated, with the residual exposure, the implemented compensating controls, a **proposed accountable risk owner** (Product Owner, co-approver Security Owner — proposed, not signed) and an empty acceptance block. No name, date or signature was invented |
+| F-3 (reset availability) | **Open and blocking — measured, costed, unchanged in behaviour** | [`docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](../evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md) Part A: mechanism, re-measured `400 ×10` → `429` against an address with no account, impact table, options R1–R6 with a stated anti-enumeration implication, and R4/R6 rejected. **No rate-limit value, key, window or spend point was changed**; F-3 closes only when an authorised option ships |
+| F-8 (timing) | **Confirmed — measured, not equivalent; mitigation or informed acceptance required** | Same record, Part B: in-process (40 samples/case, 5 cases, interleaved) medians A 4.74 / B 2.11 / C 2.84 / D 2.09 / E 1.91 ms, A−B ≈ 2.6 ms with essentially disjoint ranges, plus an HTTP-boundary cross-check (issuing 8.24 ms vs unknown 4.06 ms, disjoint ranges). Conclusion: identical bodies, distinguishable latency; options M1–M4 with M3 rejected |
+
+**Verification of the earlier closure claims (re-inspected, not assumed):** `MILESTONE-11` §8/§9 and the
+revision record's §5.1-before-§5.2 order are present as claimed; `ARCHITECTURE.md` §9 and
+`SCREEN-INVENTORY.md` AUTH-03/AUTH-05 references are *not* stale — both already reflect OQ-20, so the
+earlier F-2 label stands as a wording error, not a factual error in those documents; `outbox.ts`
+describes the reset-only flow; `runner.mjs` and `constants.mjs` are byte-identical to the baseline.
+
+**Scope correction (F-4):** at `953c7b3`, `git diff --name-only $(git merge-base HEAD origin/main) HEAD`
+reports **89 files, +8 551 / −958 across 9 commits**, and `gh pr view 10 --json files` agrees (89). The
+PR body originally said 88; §3's 87-file figure was the snapshot at the time that section was written and
+is left untouched for auditability. The PR body carries the corrected count.
+
+**Verdict:** unchanged — **NOT READY FOR MERGE**, for the three decision-type conditions in §11.1: F-3
+has no authorised fix, F-8 has no chosen mitigation, and D5 / `SPEC-AUTH-01` / `SPEC-AUTH-02` still carry
+empty signature blocks.
 
