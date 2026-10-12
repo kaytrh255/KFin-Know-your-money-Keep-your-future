@@ -171,6 +171,13 @@ export interface RegisterAuthRoutesOptions {
   readonly absoluteLifetimeSeconds: number;
 }
 
+/**
+ * Milestone 10 (E-5) — the methods that carry no state change: RFC 9110 §9.2.1,
+ * and exactly the set `isBrowserSafeRequest` short-circuits on. A read stays
+ * session-only; the browser state-change defense applies to every other method.
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Promise<void> {
   const { app, authService, emailDelivery, transport, absoluteLifetimeSeconds, authenticate } = options;
 
@@ -185,11 +192,40 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
         safeMessage: 'Authentication is required.',
       });
     }
-    if (request.method.toUpperCase() === 'GET') return principal;
+    if (SAFE_METHODS.has(request.method.toUpperCase())) return principal;
     if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     if (typeof principal.csrfDigest !== 'string') throw csrfFailedError();
     if (!authService.verifyCsrfToken(csrfHeaderOf(request), principal.csrfDigest)) {
       throw csrfFailedError();
+    }
+    return principal;
+  };
+
+  /**
+   * Milestone 10 (E-5): the same-origin / Fetch Metadata half of the Milestone 04
+   * defense, for the pre-session write routes. No session exists yet, so the
+   * session-bound double-submit token cannot apply. It runs at `onRequest` —
+   * before content-type parsing and body validation — like every other mutation
+   * in the API, so a cross-site request is rejected `403` without its body ever
+   * being parsed or validated.
+   */
+  const requireBrowserSafeWrite = async (request: FastifyRequest): Promise<void> => {
+    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
+  };
+
+  /**
+   * Milestone 10 (E-5): the session-bound write routes now resolve the principal
+   * in their `onRequest` guard, so the handler only narrows what that guard
+   * already stored. It cannot return `null`: the guard throws first.
+   */
+  const requirePrincipal = (request: FastifyRequest): AccessPrincipal & { userId: string } => {
+    const principal = request.principal as (AccessPrincipal & { userId: string }) | null;
+    if (!principal?.userId) {
+      throw new AuthError({
+        code: 'AUTHENTICATION_REQUIRED',
+        statusCode: 401,
+        safeMessage: 'Authentication is required.',
+      });
     }
     return principal;
   };
@@ -250,13 +286,13 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   };
 
   app.post('/api/v1/auth/register', {
+    onRequest: requireBrowserSafeWrite,
     schema: {
       tags: ['trusted-beta-access'],
       body: registerBodySchema,
       response: authResponses(202, registerResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.register({
       email: body.email,
@@ -280,13 +316,13 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.post('/api/v1/auth/verification/resend', {
+    onRequest: requireBrowserSafeWrite,
     schema: {
       tags: ['trusted-beta-access'],
       body: resendVerificationBodySchema,
       response: authResponses(200, resendVerificationResponseSchema),
     },
   }, async (request) => {
-    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.resendVerification({
       email: body.email,
@@ -304,13 +340,13 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.post('/api/v1/auth/verify-email', {
+    onRequest: requireBrowserSafeWrite,
     schema: {
       tags: ['trusted-beta-access'],
       body: verifyEmailBodySchema,
       response: authResponses(200, verifyEmailResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.verifyEmail({
       email: body.email,
@@ -327,13 +363,13 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.post('/api/v1/auth/login', {
+    onRequest: requireBrowserSafeWrite,
     schema: {
       tags: ['trusted-beta-access'],
       body: loginBodySchema,
       response: authResponses(200, loginResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.login({
       email: body.email,
@@ -349,24 +385,26 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.post('/api/v1/auth/logout', {
+    onRequest: requireAccess,
     schema: {
       tags: ['trusted-beta-access'],
       response: authResponses(200, logoutResponseSchema),
     },
   }, async (request, reply) => {
-    const principal = await requireAccess(request);
+    const principal = requirePrincipal(request);
     const revoked = await authService.logout(principal.sessionId, requestContext(request));
     clearSessionCookies(reply);
     return { revoked: revoked as true };
   });
 
   app.post('/api/v1/auth/logout-all', {
+    onRequest: requireAccess,
     schema: {
       tags: ['trusted-beta-access'],
       response: authResponses(200, logoutAllResponseSchema),
     },
   }, async (request, reply) => {
-    const principal = await requireAccess(request);
+    const principal = requirePrincipal(request);
     // Every session is revoked, the requesting one included; the cookies are
     // cleared so the browser cannot keep presenting a dead token.
     const revokedSessions = await authService.logoutAll(
@@ -393,13 +431,14 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.delete('/api/v1/auth/sessions/:id', {
+    onRequest: requireAccess,
     schema: {
       tags: ['trusted-beta-access'],
       params: sessionPathSchema,
       response: authResponses(200, revokeSessionResponseSchema),
     },
   }, async (request) => {
-    const principal = await requireAccess(request);
+    const principal = requirePrincipal(request);
     const revoked = await authService.revokeSession(
       principal.userId,
       request.params.id,
@@ -416,13 +455,14 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.post('/api/v1/auth/password/change', {
+    onRequest: requireAccess,
     schema: {
       tags: ['trusted-beta-access'],
       body: changePasswordBodySchema,
       response: authResponses(200, changePasswordResponseSchema),
     },
   }, async (request, reply) => {
-    const principal = await requireAccess(request);
+    const principal = requirePrincipal(request);
     const body = request.body;
     const result = await authService.changePassword({
       userId: principal.userId,
@@ -442,13 +482,13 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.post('/api/v1/auth/password/reset-request', {
+    onRequest: requireBrowserSafeWrite,
     schema: {
       tags: ['trusted-beta-access'],
       body: passwordResetRequestBodySchema,
       response: authResponses(200, passwordResetRequestResponseSchema),
     },
   }, async (request) => {
-    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.requestPasswordReset({
       email: body.email,
@@ -466,13 +506,13 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
   });
 
   app.post('/api/v1/auth/password/reset', {
+    onRequest: requireBrowserSafeWrite,
     schema: {
       tags: ['trusted-beta-access'],
       body: passwordResetBodySchema,
       response: authResponses(200, passwordResetResponseSchema),
     },
   }, async (request, reply) => {
-    if (!isBrowserSafeRequest(request)) throw csrfFailedError();
     const body = request.body;
     const result = await authService.resetPassword({
       email: body.email,
