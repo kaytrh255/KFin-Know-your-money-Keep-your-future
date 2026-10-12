@@ -1,11 +1,28 @@
 name: Financial foundation CI
 
+# The product quality gate. Everything here is derived from the committed package scripts; the workflow
+# adds only safety rails, never a different set of checks:
+#
+#   * the PostgreSQL integration suite is destructive, so it is fenced by a pre-flight guard that
+#     refuses any target that is not the disposable service container (loopback, `kfin_test`,
+#     `KFIN_INTEGRATION_TARGET=non-production`);
+#   * a skipped integration test must never read as success, so the run is re-checked against its
+#     machine-readable report and the job fails on skips, todos, failures, or a silently shrunken suite.
+#
+# No secrets are referenced. The database credential below belongs to the throwaway container created
+# for this job and exists nowhere else.
 on:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: quality-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
@@ -28,6 +45,8 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_test
       KFIN_INTEGRATION_TARGET: non-production
+      # Never let Corepack block on an interactive download prompt inside a non-interactive runner.
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -49,5 +68,13 @@ jobs:
         run: corepack pnpm run typecheck
       - name: Run credential-free unit and API tests
         run: corepack pnpm run test:unit
+      - name: Assert the integration target is disposable
+        run: node .github/scripts/assert-disposable-target.mjs
       - name: Run isolated real-PostgreSQL integration test
-        run: corepack pnpm run test:integration
+        run: |
+          corepack pnpm run test:integration \
+            --reporter=default \
+            --reporter=json \
+            --outputFile="$RUNNER_TEMP/kfin-integration.json"
+      - name: Assert the integration suite actually executed
+        run: node .github/scripts/assert-integration-ran.mjs "$RUNNER_TEMP/kfin-integration.json"
