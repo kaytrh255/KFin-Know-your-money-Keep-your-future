@@ -33,7 +33,7 @@ Proposed initial policy values (not accepted until security/UX review):
 
 - minimum 12 characters, maximum at least 128 characters;
 - reset-OTP lifetime 10 minutes, at most 5 verification attempts per challenge, and a cumulative cap of 10 failed verifications per account per hour across superseded challenges;
-- resend cooldown 60 seconds, at most 3 challenge issuances per account per hour and 6 per 24 hours, plus per-IP/network and global email-cost caps;
+- reset-OTP resend cooldown 60 seconds, at most 3 reset-challenge issuances per account per hour and 6 per 24 hours, plus per-IP/network and global email-cost caps;
 - reset completion revokes every session, invalidates the account's other challenges, and issues no session, so the user signs in explicitly;
 - no security-question recovery, and no reset secret in a URL.
 
@@ -101,7 +101,7 @@ Rejected categorically: compromise would expose credentials and violates securit
 ### Required controls
 
 - Vetted crypto libraries only; no custom cryptography.
-- Security test matrix for timing/content enumeration, brute force, replay, resend, expiry, concurrency, and session invalidation.
+- Security test matrix for timing/content enumeration, brute force, replay, reset-OTP resend, expiry, concurrency, and session invalidation.
 - Credential secrets never logged/analysed.
 - Email templates never include passwords/OTPs in observability payloads.
 - Incident and compromised-account recovery procedure before beta.
