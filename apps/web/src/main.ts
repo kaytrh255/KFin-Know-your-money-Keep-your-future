@@ -22,6 +22,7 @@ import {
 } from './views/auth.js';
 import { moneyView } from './views/money.js';
 import { savingsView } from './views/savings.js';
+import { selfCheckView } from './views/self-check.js';
 import { scheduleView } from './views/schedule.js';
 
 interface SessionState {
@@ -44,6 +45,7 @@ const NAV: ReadonlyArray<{ readonly route: string; readonly label: string; reado
   { route: '#/savings', label: 'Savings', needsSession: true },
   { route: '#/schedule', label: 'Schedule', needsSession: true },
   { route: '#/session', label: 'Session', needsSession: true },
+  { route: '#/self-check', label: 'Self-check', needsSession: false },
   { route: '#/sign-in', label: 'Sign in', needsSession: false },
   { route: '#/register', label: 'Register', needsSession: false },
   { route: '#/forgot', label: 'Recover', needsSession: false },
@@ -139,6 +141,9 @@ async function render(): Promise<void> {
   }
 
   switch (path) {
+    case '/self-check':
+      app.replaceChildren(selfCheckView());
+      return;
     case '/sign-in':
       app.replaceChildren(signInView(authContext));
       return;

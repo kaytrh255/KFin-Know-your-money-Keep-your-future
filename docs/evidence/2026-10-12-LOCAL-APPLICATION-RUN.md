@@ -58,8 +58,8 @@ proxied to the API on loopback. No value is simulated.
 | logout → `GET /auth/me` | `200 {revoked:true}` → `401 AUTHENTICATION_REQUIRED` |
 
 Gate results on the same tree: `evidence:check` 25 modules / 29 harness files; `evidence:test`
-16 pass / 0 fail / 0 skipped; `typecheck` exit 0; `test:unit` **674 passed / 29 files**
-(baseline `33357ea`: 626 / 24; the client adds 35 tests across four files, the email sink 9,
+16 pass / 0 fail / 0 skipped; `typecheck` exit 0; `test:unit` **679 passed / 29 files**
+(baseline `33357ea`: 626 / 24; the client adds 40 tests across four files, the email sink 9,
 and the extended config suite 4); `test:integration` **64 passed / 7 files** on PostgreSQL 17.6.
 
 ## 4. Defects the run itself found (all fixed, each with a regression test)
@@ -81,6 +81,34 @@ They are listed because a client that only "looks right" would have shipped all 
 4. **`voidCommitBodySchema` requires the reviewed `context`** returned by the preview, including
    `reviewedPreviewDigest`. Sending only `reason` was refused. The client now commits only after a
    preview and echoes the API's own context verbatim.
+
+## 4.1 Arena preview access (added after the first run)
+
+The client is reachable without a terminal through the platform's preview proxy at
+`https://<port>-<sandboxId>.e2b.app` (`E2B_SANDBOX_ID` supplies the id; port 5173
+is the dev server). Because a preview proxy may rewrite the `Host` header while the
+API compares `Origin` against `Host`, the dev server now resolves the
+browser-facing host from `X-Forwarded-Host` → browser-attested `Origin` → `Host`,
+and refuses cross-site or header-less state-changing requests itself with
+`403 LOCAL_PROXY_ORIGIN_REJECTED` rather than forwarding them. `GET /__dev__/request-context`
+and the client's `#/self-check` screen report which case applied.
+
+Measured through a preview-shaped origin (`Host: 5173-<sandboxId>.e2b.app`,
+`Origin: https://5173-<sandboxId>.e2b.app`), on the local API and database:
+
+| Request | Result |
+|---|---|
+| `POST /api/v1/auth/login` | `200` |
+| `GET /api/v1/auth/me` (session cookie) | `200` |
+| `POST /api/v1/financial-account/snapshots` with a deliberately stale version, CSRF header present | `409 FIN_SNAPSHOT_STALE_STATE` — a business-rule answer, so origin + CSRF + session all passed |
+| `POST /api/v1/auth/login` with an unregistered probe address | `401` (evaluated, not refused by origin) |
+| the same write with a cross-site `Origin` | `403` from the API, and `403` from the proxy when it reaches the proxy first |
+
+**Not verified:** the preview URL cannot be fetched from inside this sandbox (egress
+is restricted and the TLS handshake to `*.e2b.app` is refused), so no claim is made
+about the platform proxy's own header behaviour; both plausible behaviours are
+handled and tested, and the self-check screen reports which one is in effect in the
+user's browser.
 
 ## 5. Open findings (recorded, not hidden)
 

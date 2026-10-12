@@ -91,6 +91,34 @@ async function startDevServer(environment: Record<string, string>): Promise<numb
   return port;
 }
 
+interface RawResponse {
+  readonly status: number;
+  readonly body: string;
+}
+
+/**
+ * `fetch` cannot set `Host` (it is a forbidden header), and the whole point of
+ * these cases is what a proxy does to `Host`, so they go over raw sockets.
+ */
+function rawRequest(port: number, options: { method: string; path: string; headers: Record<string, string>; body?: string }): Promise<RawResponse> {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: '127.0.0.1',
+      port,
+      method: options.method,
+      path: options.path,
+      headers: options.headers,
+    }, (response) => {
+      let body = '';
+      response.on('data', (chunk: Buffer) => { body += chunk.toString('utf8'); });
+      response.on('end', () => resolve({ status: response.statusCode ?? 0, body }));
+    });
+    request.on('error', reject);
+    if (options.body) request.write(options.body);
+    request.end();
+  });
+}
+
 async function outboxDirectory(): Promise<string> {
   const directory = await mkdtemp(path.join(tmpdir(), 'kfin-dev-outbox-'));
   directories.push(directory);
@@ -145,6 +173,116 @@ describe('local testing client dev server', () => {
     expect(readiness.status).toBe(200);
     expect(upstream.requests[1]?.url).toBe('/health/ready');
 
+    await upstream.close();
+  }, 20_000);
+
+  it('keeps the Host/Origin pair consistent when the preview proxy rewrites Host but forwards X-Forwarded-Host', async () => {
+    const upstream = await startUpstream();
+    const port = await startDevServer({ KFIN_API_ORIGIN: upstream.origin, KFIN_WEB_SKIP_BUILD: '1' });
+
+    const response = await rawRequest(port, {
+      method: 'POST',
+      path: '/api/v1/auth/login',
+      headers: {
+        'content-type': 'application/json',
+        host: `localhost:${port}`,
+        'x-forwarded-host': '5173-preview.e2b.app',
+        'x-forwarded-proto': 'https',
+        origin: 'https://5173-preview.e2b.app',
+        'sec-fetch-site': 'same-origin',
+      },
+      body: '{"email":"a@example.invalid","password":"x"}',
+    });
+
+    expect(response.status).toBe(200);
+    expect(upstream.requests[0]?.headers.host).toBe('5173-preview.e2b.app');
+    expect(upstream.requests[0]?.headers.origin).toBe('https://5173-preview.e2b.app');
+    await upstream.close();
+  }, 20_000);
+
+  it('reconstructs the browser-facing host from the browser Origin when the proxy rewrote Host and forwards nothing else', async () => {
+    const upstream = await startUpstream();
+    const port = await startDevServer({ KFIN_API_ORIGIN: upstream.origin, KFIN_WEB_SKIP_BUILD: '1' });
+
+    const response = await rawRequest(port, {
+      method: 'POST',
+      path: '/api/v1/auth/login',
+      headers: {
+        'content-type': 'application/json',
+        host: `localhost:${port}`,
+        origin: 'https://5173-preview.e2b.app',
+        'sec-fetch-site': 'same-origin',
+      },
+      body: '{"email":"a@example.invalid","password":"x"}',
+    });
+
+    expect(response.status).toBe(200);
+    // The API compares Origin with Host, so the proxy must present the host the
+    // browser used; otherwise every write is refused with 403.
+    expect(upstream.requests[0]?.headers.host).toBe('5173-preview.e2b.app');
+    await upstream.close();
+  }, 20_000);
+
+  it('refuses a cross-site write itself, without forwarding it to the API', async () => {
+    const upstream = await startUpstream();
+    const port = await startDevServer({ KFIN_API_ORIGIN: upstream.origin, KFIN_WEB_SKIP_BUILD: '1' });
+
+    const response = await rawRequest(port, {
+      method: 'POST',
+      path: '/api/v1/auth/login',
+      headers: {
+        'content-type': 'application/json',
+        host: '5173-preview.e2b.app',
+        origin: 'https://evil.invalid',
+        'sec-fetch-site': 'cross-site',
+      },
+      body: '{"email":"a@example.invalid","password":"x"}',
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toContain('LOCAL_PROXY_ORIGIN_REJECTED');
+    expect(upstream.requests).toHaveLength(0);
+    await upstream.close();
+  }, 20_000);
+
+  it('refuses a state-changing request that carries neither Origin nor Sec-Fetch-Site', async () => {
+    const upstream = await startUpstream();
+    const port = await startDevServer({ KFIN_API_ORIGIN: upstream.origin, KFIN_WEB_SKIP_BUILD: '1' });
+
+    const response = await rawRequest(port, {
+      method: 'POST',
+      path: '/api/v1/auth/login',
+      headers: { 'content-type': 'application/json', host: `localhost:${port}` },
+      body: '{"email":"a@example.invalid","password":"x"}',
+    });
+
+    expect(response.status).toBe(403);
+    expect(upstream.requests).toHaveLength(0);
+    await upstream.close();
+  }, 20_000);
+
+  it('reports the request context without ever echoing a cookie', async () => {
+    const upstream = await startUpstream();
+    const port = await startDevServer({ KFIN_API_ORIGIN: upstream.origin, KFIN_WEB_SKIP_BUILD: '1' });
+
+    const response = await rawRequest(port, {
+      method: 'GET',
+      path: '/__dev__/request-context',
+      headers: {
+        host: '5173-preview.e2b.app',
+        origin: 'https://5173-preview.e2b.app',
+        'sec-fetch-site': 'same-origin',
+        cookie: 'kfin_session=super-secret-session-value; kfin_csrf=csrf-value',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const context = JSON.parse(response.body) as Record<string, unknown>;
+    expect(context.host).toBe('5173-preview.e2b.app');
+    expect(context.forwardingHost).toBe('5173-preview.e2b.app');
+    expect(context.writeWouldBeForwarded).toBe(true);
+    expect(response.body).not.toContain('super-secret-session-value');
+    expect(response.body).not.toContain('csrf-value');
     await upstream.close();
   }, 20_000);
 

@@ -158,14 +158,89 @@ async function outboxPayload() {
   return { items, directoryConfigured: true };
 }
 
-/** Minimal forward proxy: same path, same method, same body, no header rewriting. */
-function proxy(request, response, rawBody) {
+/**
+ * Resolves the host the *browser* used to reach this server.
+ *
+ * The API's same-origin defense compares the request's `Origin` with the `Host`
+ * it receives, so the pair this proxy forwards has to agree or every browser
+ * write is refused with 403. A preview proxy may or may not preserve `Host`, so
+ * the host is taken from the strongest available evidence:
+ *
+ *   1. `X-Forwarded-Host` — a proxy that rewrote `Host` normally sets this;
+ *   2. `Origin` when the browser also attests `Sec-Fetch-Site: same-origin|none`
+ *      — both headers are set by the browser itself and cannot be produced by a
+ *      cross-site page (a page cannot choose its `Origin`, and `Sec-Fetch-Site`
+ *      is computed from the real relationship), so a mismatch with `Host` means
+ *      the proxy rewrote `Host`, not that the request is cross-site;
+ *   3. `Host` — correct whenever the proxy passes it through (including a plain
+ *      local `http://localhost:5173` session).
+ */
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return typeof value === 'string' ? value.split(',')[0].trim() : null;
+}
+
+function hostFromOrigin(origin) {
+  try {
+    return new URL(origin).host || null;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHost(host) {
+  return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(host ?? '');
+}
+
+function requestContext(request) {
+  const host = firstHeaderValue(request.headers.host);
+  const origin = firstHeaderValue(request.headers.origin);
+  const forwardedHost = firstHeaderValue(request.headers['x-forwarded-host']);
+  const forwardedProto = firstHeaderValue(request.headers['x-forwarded-proto']);
+  const secFetchSite = firstHeaderValue(request.headers['sec-fetch-site']);
+  const originHost = origin ? hostFromOrigin(origin) : null;
+  const sameOriginByBrowser = secFetchSite === 'same-origin' || secFetchSite === 'none';
+  const originMatchesHost = Boolean(originHost && host && (originHost === host || originMatchesHostname(originHost, host)));
+
+  let forwardingHost = host ?? originHost ?? null;
+  if (forwardedHost) {
+    forwardingHost = hostFromOrigin(`http://${forwardedHost}`) ?? forwardedHost;
+  } else if (originHost && sameOriginByBrowser && !originMatchesHost) {
+    // The browser attests same-origin while `Host` disagrees: the proxy rewrote
+    // it, so present the host the browser actually used and keep the pair valid.
+    forwardingHost = originHost;
+  }
+
+  return {
+    host,
+    origin,
+    originHost,
+    forwardedHost,
+    forwardedProto,
+    secFetchSite,
+    sameOriginByBrowser,
+    originMatchesHost,
+    forwardingHost,
+    loopbackHost: isLoopbackHost(host),
+    clientAddress: request.socket?.remoteAddress ?? null,
+  };
+}
+
+/** Unsafe methods must look same-origin; the same rule the API applies. */
+function isSafeRequest(context, method) {
+  const upper = (method ?? 'GET').toUpperCase();
+  if (upper === 'GET' || upper === 'HEAD' || upper === 'OPTIONS') return true;
+  if (!context.origin && !context.secFetchSite) return false;
+  return context.originMatchesHost || context.sameOriginByBrowser;
+}
+
+/** Forward proxy: same path, same method, same body, and a consistent Host/Origin pair. */
+function proxy(request, response, rawBody, context) {
   const target = new URL(request.url ?? '/', API_ORIGIN);
-  // The browser's own `Host` is forwarded unchanged on purpose: the API's
-  // same-origin defense compares `Origin` against `Host`
-  // (`apps/api/src/session-transport.ts`), so rewriting this header to the API's
-  // address would turn every real browser write into a 403.
   const headers = { ...request.headers };
+  if (context.forwardingHost) headers.host = context.forwardingHost;
+  // `content-length` is recomputed by node from the buffered body below.
+  delete headers['content-length'];
   const upstream = http.request({
     protocol: target.protocol,
     hostname: target.hostname,
@@ -184,8 +259,35 @@ function proxy(request, response, rawBody) {
   upstream.end();
 }
 
+function originMatchesHostname(originHost, host) {
+  const [originName, originPort] = originHost.split(':');
+  const [hostName, hostPort] = host.split(':');
+  if (originName !== hostName) return false;
+  // `example.test` and `example.test:443` are the same browser-facing host.
+  return !originPort || !hostPort || originPort === hostPort
+    || (originPort === '443' && hostPort === '443') || (originPort === '80' && hostPort === '80');
+}
+
 const server = http.createServer(async (request, response) => {
   const url = request.url ?? '/';
+  const context = requestContext(request);
+
+  // Diagnostic for exactly one question: which host/origin pair is this proxy
+  // receiving, and would a write be forwarded? Deliberately returns no cookie,
+  // no token, and no client address details beyond the socket address.
+  if (url === '/__dev__/request-context') {
+    if (PRODUCTION) {
+      send(response, 404, 'Not found.');
+      return;
+    }
+    send(response, 200, JSON.stringify({
+      ...context,
+      clientAddress: undefined,
+      writeWouldBeForwarded: isSafeRequest(context, 'POST'),
+      apiOrigin: API_ORIGIN,
+    }, null, 2), 'application/json; charset=utf-8');
+    return;
+  }
 
   if (url === '/__dev__/outbox') {
     if (PRODUCTION) {
@@ -206,7 +308,21 @@ const server = http.createServer(async (request, response) => {
   const rawBody = Buffer.concat(chunks);
 
   if (PROXIED_PREFIXES.some((prefix) => url.startsWith(prefix)) || url === '/openapi.json' || url === '/health/ready' || url === '/health/live') {
-    proxy(request, response, rawBody);
+    // A cross-site write is refused here rather than forwarded, so the failure is
+    // legible instead of arriving as an opaque API 403 - and the API never sees a
+    // request this proxy could not vouch for.
+    if (!isSafeRequest(context, request.method)) {
+      send(response, 403, JSON.stringify({
+        error: {
+          code: 'LOCAL_PROXY_ORIGIN_REJECTED',
+          message: 'This preview refused a state-changing request whose Origin does not match the host it was sent to.',
+          correlationId: `proxy-${Date.now().toString(16)}`,
+        },
+        requestContext: { host: context.host, origin: context.origin, secFetchSite: context.secFetchSite },
+      }), 'application/json; charset=utf-8');
+      return;
+    }
+    proxy(request, response, rawBody, context);
     return;
   }
 

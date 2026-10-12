@@ -79,6 +79,39 @@ Open the dev server origin (`http://localhost:5173` by default). `web:dev` runs
 sources, or run `corepack pnpm run web:build` yourself and start the dev server
 with `KFIN_WEB_SKIP_BUILD=1`.
 
+## 3.1 Opening the client from an Arena preview (no terminal in the session)
+
+When this workspace runs inside an Arena sandbox, a process that listens on
+`0.0.0.0` is reachable from the user's browser through the platform preview proxy:
+
+```
+https://<port>-<sandboxId>.e2b.app
+```
+
+The sandbox id is in `E2B_SANDBOX_ID` (for example
+`https://5173-<sandboxId>.e2b.app` for the default `KFIN_WEB_PORT=5173`). Two
+consequences are built into the dev server rather than left to chance:
+
+- **Binding.** The dev server binds `0.0.0.0` by default so the proxy can reach it;
+  the API deliberately stays on loopback (`HOST=127.0.0.1`) and is reached only
+  through the proxy, so the API port is not separately exposed.
+- **Host/Origin agreement.** The API's same-origin defense compares the request's
+  `Origin` with the `Host` it receives, and a preview proxy may rewrite `Host`
+  (it commonly replaces it with the loopback address and reports the original one
+  in `X-Forwarded-Host`). The dev server therefore resolves the browser-facing host
+  from, in order, `X-Forwarded-Host`, then `Origin` when the browser also attests
+  `Sec-Fetch-Site: same-origin|none`, then `Host`, and hands the API a consistent
+  `Host`/`Origin` pair. It also refuses a cross-site or header-less state-changing
+  request itself (`403 LOCAL_PROXY_ORIGIN_REJECTED`) instead of forwarding it.
+
+`GET /__dev__/request-context` reports exactly what the dev server received
+(`host`, `origin`, `x-forwarded-host`, `sec-fetch-site`, the host it forwards, and
+whether a write would be forwarded) and never echoes a cookie or token. The client
+surfaces it on the **Self-check** screen (`#/self-check`), together with an API
+reachability call and one real state-changing request against a deliberately
+unregistered probe address, so a broken preview can be diagnosed from the browser
+without a shell.
+
 ## 4. Completing the email flows locally
 
 Registration issues a six-digit code and password recovery issues a reset secret.
