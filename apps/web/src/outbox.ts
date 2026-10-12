@@ -7,18 +7,19 @@
  * and the `Local email sink` section of `docs/development/LOCAL-DEVELOPMENT.md`).
  * The API itself still exposes no route that reveals a one-time code.
  *
- * The panel exists because verification and recovery secrets otherwise live only
- * in a request process: with `EMAIL_DELIVERY_ADAPTER=none` (the default) the API
- * reports delivery failure and no local flow can be completed. Rather than fake a
- * verified account in the client, the developer reads the real code the API
- * generated.
+ * The panel exists because a reset secret otherwise lives only in a request
+ * process: with `EMAIL_DELIVERY_ADAPTER=none` (the default) the API reports
+ * delivery failure and a local reset cannot be completed. Rather than fake a
+ * delivered message in the client, the developer reads the real code the API
+ * generated. Since OQ-20 (2026-10-12) the emailed code exists only for password
+ * reset, so this panel is the local stand-in for exactly one message type.
  */
 
 import { el } from './dom.js';
 import { parseOutbox, type OutboxMessage } from './outbox-format.js';
 
 export interface OutboxPanelOptions {
-  /** Fills the six-digit verification field; recovery secrets are copied instead. */
+  /** Fills the six-digit reset-code field; other secrets are copied instead. */
   readonly onUseCode: (code: string) => void;
 }
 
@@ -39,7 +40,7 @@ export function mountOutboxPanel(options: OutboxPanelOptions): void {
       const payload: unknown = await response.json();
       const messages = parseOutbox(payload);
       if (messages.length === 0) {
-        body.replaceChildren(el('p', { class: 'hint', text: 'The outbox directory is empty. Start the API with EMAIL_DELIVERY_ADAPTER=file, then register or request a reset.' }));
+        body.replaceChildren(el('p', { class: 'hint', text: 'The outbox directory is empty. Start the API with EMAIL_DELIVERY_ADAPTER=file, then request a password reset.' }));
         return;
       }
       body.replaceChildren(...messages.slice(0, 10).map((message) => messageCard(message)));

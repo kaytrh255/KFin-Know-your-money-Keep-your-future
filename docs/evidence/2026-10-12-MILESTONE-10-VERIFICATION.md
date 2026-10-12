@@ -233,3 +233,23 @@ Each mutation was applied to `apps/api/src/app.ts`, the new suite was run, and t
 ### Not claimed (E-6)
 
 No owner approval, ADR acceptance, blocker closure, production readiness, Supabase result or `FIN-RACE` PASS is implied. The integration run used the same repackaged PostgreSQL 17.6 described in the environment section above — the version matches the CI service, the distribution does not; CI remains the authority. This addendum closes one error-mapping defect and claims nothing about the correctness of any other error status in the API.
+
+## Milestone-11 supersession note (2026-10-12)
+
+Recorded by the pre-merge review of PR #10
+([`docs/reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md`](../reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md),
+finding F-9). The measurements above are **preserved exactly as taken** — they record what was true on
+the tree that existed at this commit, and rewriting them would destroy the audit trail. Two rows of the
+route-by-route table describe routes that a later, separately recorded decision removed:
+
+| Row in this record | Status after Milestone 11 |
+|---|---|
+| `POST /auth/verification/resend` — defended, `200` | **superseded** — the route was deleted by the OQ-20 implementation; it now answers `404` |
+| `POST /auth/verify-email` — defended, `200` | **superseded** — the route was deleted by the OQ-20 implementation; it now answers `404` |
+
+What this record still establishes, and what a reader should carry forward: the same-origin /
+Fetch-Metadata defense measured here applies to the writes that remain on the access surface
+(`register`, `login`, `password/reset-request`, `password/reset`, and the four session-bound writes),
+still registered at `onRequest`, still covered by `apps/api/test/auth-write-defense.test.ts`. The two
+retired registrations were removed **together with** their routes, not left unguarded. See
+[`docs/implementation/MILESTONE-11-OTP-RESET-ONLY.md`](../implementation/MILESTONE-11-OTP-RESET-ONLY.md).

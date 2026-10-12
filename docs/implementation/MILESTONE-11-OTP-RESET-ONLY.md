@@ -150,12 +150,20 @@ never written to a report, a log, or the repository; the sink directory was dele
   alternative recorded by the revision stays open; the six-digit code is bounded by the caps in §2.
 - **No beta risk acceptance.** D5 (accepting the unverified-email beta risks with an operator process
   and no code) is a recorded decision, not code; it is not evidenced here.
-- **Two normative documents still describe the old flow** and were left untouched because they are
-  outside this milestone's authorized document set: `docs/architecture/ARCHITECTURE.md` (the auth flow
-  diagram) and `docs/ux/SCREEN-INVENTORY.md` (screen AUTH-03, "Verify email"). Historical milestone
-  and verification records are left as written, because they record what was true when they ran.
-  `docs/architecture/DATABASE.md` and `docs/testing/TEST-STRATEGY.md` were already revised by OQ-20
-  and are pinned by digest in the SPEC-FIN-02 harness; this milestone did not edit them.
+- **No normative document was found to still describe the old flow.** `docs/architecture/ARCHITECTURE.md`
+  and `docs/ux/SCREEN-INVENTORY.md` had **already been synchronized** by the OQ-20 revision commit
+  `9456067` (revision record §3 and §4), so this milestone left them untouched because nothing needed
+  changing. An earlier draft of this section claimed both documents still described the old flow; that
+  claim was simply wrong and was corrected on 2026-10-12 after the pre-merge review
+  ([`docs/reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md`](../reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md), finding F-2).
+  The one residual sentence in `SCREEN-INVENTORY.md` that presupposed a URL-borne reset secret was
+  clarified in the same follow-up changeset (P-1 of that review). Historical milestone and verification
+  records are left as written, because they record what was true when they ran; where such a record's
+  subject has since changed, it carries a dated supersession note instead of a rewrite — see
+  [`docs/evidence/2026-10-12-MILESTONE-10-VERIFICATION.md`](../evidence/2026-10-12-MILESTONE-10-VERIFICATION.md)
+  and [`docs/evidence/2026-10-12-LOCAL-APPLICATION-RUN.md`](../evidence/2026-10-12-LOCAL-APPLICATION-RUN.md) §2.1.
+  `docs/architecture/DATABASE.md` and `docs/testing/TEST-STRATEGY.md` were already revised by OQ-20 and
+  are pinned by digest in the SPEC-FIN-02 harness; this milestone did not edit them.
 - **No new email provider.** `EMAIL_DELIVERY_ADAPTER=file` remains a development-only sink.
 
 ## 9. Traceability
@@ -164,5 +172,13 @@ never written to a report, a log, or the repository; the sink directory was dele
   §users and §auth_challenges, `docs/testing/TEST-STRATEGY.md` §3.4.1.
 - Revision record: `docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md` §5 (closed by this
   file) and §5.1 (authoritative-document pinning, unchanged).
-- Decisions implemented: D2, D3, D4, D5, D7, D8 as recorded in the revision task; D1 and D9 remain
-  open owner decisions.
+- Decisions implemented **in code**: D2, D3, D4, D7, D8 as recorded in the revision task.
+- **D5 is not implemented and is not yet accepted in writing.** It is a risk-acceptance decision with
+  no code, and it is one of the owner decisions requested in
+  [`docs/evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](../evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md),
+  which also carries the `SPEC-AUTH-01` ratification request (D1) and the `SPEC-AUTH-02` value approval
+  request (D9). None of the three has a signature.
+- Two findings from the pre-merge review are **open and not closed here**: F-3 (a reset-request
+  availability weakness that is externally reachable) and F-8 (a reset-request timing difference).
+  Both are analysed with options and costings in the same record, and neither may be closed by a risk
+  note alone.

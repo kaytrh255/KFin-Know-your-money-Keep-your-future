@@ -59,7 +59,10 @@ Authenticated
 | AUTH-05 | `/reset-password` | Reset password | Present the emailed OTP, then set a new password | Masked destination, expiry, remaining attempts, resend cooldown, invalid/expired/replayed/attempt-exhausted OTP with a safe path to request a new code, password policy, success and explicit sign-in; no account-existence or delivery disclosure |
 | AUTH-06 | `/auth/result` | Authentication result | Durable success/failure for sensitive flow | No secret/query leakage, next action, support correlation ID when needed |
 
-A dedicated result screen is used only when a persistent state is clearer than a toast. Deep links must remove reset secrets from URL/history as early as safely possible.
+A dedicated result screen is used only when a persistent state is clearer than a toast. No reset
+secret is ever carried in a URL — the emailed OTP is typed into the reset form (OQ-20, 2026-10-12),
+so no link, referrer, redirect, or browser-history entry can hold one. A deep link may therefore carry
+only a non-secret outcome identifier.
 
 ## 3. Onboarding screens
 
