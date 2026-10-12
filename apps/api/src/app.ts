@@ -736,6 +736,24 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         request.id,
       ));
     }
+    // Milestone 10 (E-6): the body/content-type layer rejects a request before any
+    // handler runs, and Fastify already carries the correct client status on those
+    // errors. Without this branch they fell through to the 500 below, so an
+    // unparsable body answered `INTERNAL_ERROR` and the `400` every route
+    // publishes in its contract was never honoured. The framework message is
+    // deliberately not echoed: only a stable code and safe message are returned,
+    // and only the bounded framework code reaches the log.
+    if (isBodyLayerClientError(error)) {
+      request.log.warn(
+        { frameworkCode: error.code, correlationId: request.id },
+        'Rejected a request whose body could not be read',
+      );
+      return reply.code(error.statusCode).send(errorEnvelope(
+        'REQUEST_BODY_UNREADABLE',
+        'The request body could not be read.',
+        request.id,
+      ));
+    }
     request.log.error({
       errorName: error instanceof Error ? error.name : 'UnknownError',
       correlationId: request.id,
@@ -830,4 +848,33 @@ function requireUserId(request: FastifyRequest): string {
 
 function errorEnvelope(code: string, message: string, correlationId: string) {
   return { error: { code, message, correlationId } };
+}
+
+/**
+ * Milestone 10 (E-6) — the family of client errors raised by Fastify's
+ * content-type parsers, i.e. before any route handler or schema validation runs.
+ * Each carries the status the client should have been given all along:
+ *
+ * - `FST_ERR_CTP_INVALID_JSON_BODY` → `400` (malformed JSON, and payloads
+ *   `secure-json-parse` refuses such as a `__proto__` key, per SEC-APP-11);
+ * - `FST_ERR_CTP_EMPTY_JSON_BODY` → `400` (empty body with a JSON content type);
+ * - `FST_ERR_CTP_INVALID_MEDIA_TYPE` → `415` (a content type with no parser);
+ * - `FST_ERR_CTP_BODY_TOO_LARGE` → `413` (over the configured `bodyLimit`).
+ *
+ * The predicate is deliberately narrow. It accepts only the content-type-parser
+ * prefix, and only when the framework supplies a `4xx` status, so it can never
+ * capture a `5xx`, an application error, or Fastify's own validation errors
+ * (`FST_ERR_VALIDATION`), which keep their existing `400
+ * REQUEST_VALIDATION_FAILED` mapping one branch above.
+ */
+const BODY_LAYER_ERROR_PREFIX = 'FST_ERR_CTP_';
+
+function isBodyLayerClientError(error: unknown): error is { code: string; statusCode: number } {
+  if (error === null || typeof error !== 'object') return false;
+  const { code, statusCode } = error as { code?: unknown; statusCode?: unknown };
+  return typeof code === 'string'
+    && code.startsWith(BODY_LAYER_ERROR_PREFIX)
+    && typeof statusCode === 'number'
+    && statusCode >= 400
+    && statusCode < 500;
 }

@@ -94,3 +94,5 @@ See [Milestone 05 — verification record](../evidence/2026-10-09-MILESTONE-05-V
 
 **Pre-existing and out of scope:** the generic error handler still maps Fastify content-type and JSON-parse errors to `500` on every route, including Milestone 01–04 routes on `main`. For this route, that now applies only to a same-origin request that carries a valid CSRF token.
 
+> **CLOSED BY MILESTONE 10 / E-6 (2026-10-12).** The shared error handler now answers the status Fastify's own parsers attach — `400` for a malformed or empty JSON body, `415` for a content type with no parser, `413` for a body over the configured limit — with the stable code `REQUEST_BODY_UNREADABLE` and a fixed safe message, instead of `500`. The original wording above is kept unchanged for auditability. Measured before/after behaviour, the regression suite, the mutation checks and the contract-completeness caveat (`413`/`415` are correct on the wire but are not enumerated in any route's published response list) are in `docs/evidence/2026-10-12-MILESTONE-10-VERIFICATION.md` § *E-6 addendum*; the implementation note is `docs/implementation/MILESTONE-10-BODY-PARSE-ERROR-MAPPING.md`.
+

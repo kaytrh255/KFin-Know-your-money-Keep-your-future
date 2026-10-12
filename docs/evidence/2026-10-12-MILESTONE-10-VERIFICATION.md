@@ -117,6 +117,8 @@ The four unsafe browser contexts are: foreign `Origin`; scheme-less lookalike `O
 
 Baseline before this milestone on the same parent commit `28ee85f` was **485 passed** across 22 files, measured in this sandbox before any edit. The delta is exactly the new 88-test file; the E-4 suite (136 tests), the M08 snapshot suite and the M07 regression block all still pass, untouched.
 
+> **These figures are the E-5 milestone's own, recorded at `de91113` and left unchanged for auditability.** Milestone 10's E-6 addendum, committed on the same branch afterwards, raises the unit total to **626 passed across 24 files** and leaves every other gate as it stands above; see [the E-6 addendum](#e-6-addendum--unreadable-bodies-are-client-errors-2026-10-12) for its own gate table.
+
 ## Mutation checks
 
 Each mutation was applied to the source, the new suite was run, and the mutation was reverted (verified afterwards with `git diff --stat`: only `auth-routes.ts` remains modified). All five were killed.
@@ -133,7 +135,7 @@ Mutation C is the one that pins the finding itself: with the guard back in the h
 
 ## Findings deliberately left open (not fixed here, out of confirmed scope)
 
-- **Malformed JSON from a same-site caller still answers `500`.** Measured identically before and after this milestone: `POST /api/v1/auth/login` with `Content-Type: application/json` and body `{"email":` from a same-origin caller answers `500`, while every route's published contract declares `400`. The error handler maps `validation` errors to `400` but does not classify body-parser/serializer errors. This is a **pre-existing** defect, it is not specific to the access surface, it is not a CSRF issue, and fixing it belongs in the shared error handler rather than in this five-file change set. It is recorded here, with its reproduction, so QA does not read the new `403`-before-parsing behaviour as evidence that malformed bodies are handled correctly in general.
+- ~~**Malformed JSON from a same-site caller still answers `500`.**~~ **CLOSED BY E-6 (2026-10-12), in the same branch and the same PR.** The generic error handler mapped every body-layer client error to `500`; it now answers the `4xx` Fastify's own parsers already attach, with the stable code `REQUEST_BODY_UNREADABLE` and a safe message. See [the E-6 addendum](#e-6-addendum--unreadable-bodies-are-client-errors-2026-10-12). The original wording is kept for auditability. **What remains open from that finding:** `413` and `415` are returned correctly on the wire but are not enumerated in any route's published OpenAPI response list — a contract-completeness gap that predates this work and is recorded in the addendum rather than fixed by editing the specification.
 - **The safe-method set now exists in two places.** `SAFE_METHODS` in `auth-routes.ts` and the short-circuit inside `isBrowserSafeRequest`. Consolidating them would add a sixth file to a change set held to five, so it is disclosed rather than done. The new suite pins the two definitions to agree at `GET`, `HEAD` and `OPTIONS`; a future divergence that breaks the agreement will fail the suite.
 - **A cross-site `HEAD` of a read route answers `200`.** This is intended, and it is the point of the safe-method fix: `HEAD` is a safe method, carries no state change, and its response body — like `GET`'s — is not readable to a cross-origin caller. It now mirrors the `GET` behaviour that already existed. Recorded explicitly so QA does not read it as an oversight.
 - **The integration run used a repackaged PostgreSQL 17.6, not the CI image.** See the environment caveat above. The version matches the CI service; the build does not.
@@ -147,3 +149,87 @@ Mutation C is the one that pins the finding itself: with the guard back in the h
 ## Not claimed
 
 No owner approval, ADR acceptance, blocker closure, production readiness, Supabase result, or `FIN-RACE` PASS is implied. The phantom commit's figures do not exist and appear nowhere in this record as results. This milestone does not claim that the access surface is exhaustively reviewed — it closes the specific finding Milestone 09 raised. The auth routes' rate limiting, abuse limits, generic-outcome properties and session-rotation semantics were not re-audited here and remain as Milestone 04 left them.
+
+---
+
+## E-6 addendum — unreadable bodies are client errors (2026-10-12)
+
+**Committed on:** the same branch `arena/bfaf5019-kfin-know-your-money-keep-your`, as a second commit on PR #10. **Base for this addendum:** `de91113f8991d5f2023e064dfb92fc113866b102`.<br>
+**Production readiness:** Not claimed
+
+### What was closed
+
+The finding recorded above — *malformed JSON from a same-site caller still answers `500`* — was not new to this milestone. The Milestone 05 QA fix recorded it five milestones earlier in the same words (*"Pre-existing and out of scope: the generic error handler still maps Fastify content-type and JSON-parse errors to `500` on every route"*). Both records said the fix belonged in the shared error handler. This addendum makes it there.
+
+**Cause, measured rather than assumed.** Fastify's content-type parsers reject a request before any handler or schema validation, and the error already carries the correct client status. The application's `setErrorHandler` recognised only `KfinServiceError` and `validation` errors, so every body-layer error fell through to its catch-all `500 INTERNAL_ERROR`. The framework codes and their correct statuses, read from the running parser:
+
+| Framework code | Correct status | Meaning |
+|---|---|---|
+| `FST_ERR_CTP_INVALID_JSON_BODY` | `400` | Not valid JSON — also raised for `__proto__` payloads `secure-json-parse` refuses (SEC-APP-11) |
+| `FST_ERR_CTP_EMPTY_JSON_BODY` | `400` | Empty body with a JSON content type |
+| `FST_ERR_CTP_INVALID_MEDIA_TYPE` | `415` | Content type with no registered parser |
+| `FST_ERR_CTP_BODY_TOO_LARGE` | `413` | Over the 64 KiB `bodyLimit` |
+
+**The change:** `apps/api/src/app.ts` **+47 / −0** — one branch in the shared error handler, placed after the validation branch and before the catch-all `500`, plus a narrow predicate `isBodyLayerClientError` that accepts only `FST_ERR_CTP_*` codes carrying a status in `[400, 500)`. It responds with `error.statusCode`, the stable code `REQUEST_BODY_UNREADABLE`, the fixed message `The request body could not be read.`, and the correlation ID. The framework message is never echoed — the client response cannot contain `FST_ERR_*`, the parser wording, or the content type; only the bounded framework code and correlation ID reach the server log, at `warn`. No route, guard, schema, service, migration, dependency or lockfile changed, and **no OpenAPI contract was edited**: `400` was already published everywhere, and this change makes the API honour it.
+
+### Measured before and after
+
+Every row is an executed request against the real route table. "Before" was produced on this branch with the new branch reverted and nothing else changed; "after" with it applied. The last four rows are the precedence evidence — they prove the fix did not trade away the E-5 or E-4 guarantees.
+
+| Same-origin request | Before | After |
+|---|---|---|
+| `POST /auth/login`, malformed JSON | `500 INTERNAL_ERROR` | **`400 REQUEST_BODY_UNREADABLE`** |
+| `POST /auth/login`, truncated JSON | `500 INTERNAL_ERROR` | **`400 REQUEST_BODY_UNREADABLE`** |
+| `POST /auth/login`, empty JSON body | `500 INTERNAL_ERROR` | **`400 REQUEST_BODY_UNREADABLE`** |
+| `POST /auth/login`, `x-www-form-urlencoded` | `500 INTERNAL_ERROR` | **`415 REQUEST_BODY_UNREADABLE`** |
+| `POST /auth/login`, body over 64 KiB | `500 INTERNAL_ERROR` | **`413 REQUEST_BODY_UNREADABLE`** |
+| `POST /auth/login`, `__proto__` payload | `500 INTERNAL_ERROR` | **`400 REQUEST_BODY_UNREADABLE`** |
+| `POST /auth/logout`, malformed JSON | `500 INTERNAL_ERROR` | **`400 REQUEST_BODY_UNREADABLE`** |
+| `POST /transactions`, malformed JSON | `500 INTERNAL_ERROR` | **`400 REQUEST_BODY_UNREADABLE`** |
+| `POST /auth/login`, schema-invalid JSON | `400 REQUEST_VALIDATION_FAILED` | `400 REQUEST_VALIDATION_FAILED` |
+| `POST /auth/login`, `text/plain` body | `400 REQUEST_VALIDATION_FAILED` | `400 REQUEST_VALIDATION_FAILED` |
+| `POST /auth/login`, cross-site, malformed JSON | `403 AUTH_CSRF_FAILED` | `403 AUTH_CSRF_FAILED` |
+| `POST /auth/logout`, unauthenticated, malformed JSON | `401 AUTHENTICATION_REQUIRED` | `401 AUTHENTICATION_REQUIRED` |
+
+### Regression suite
+
+`apps/api/test/request-body-error-mapping.test.ts` — **new, 509 lines, 53 tests**, over four routes chosen so the mapping is proved to be a property of the shared handler rather than of one route family: `POST /auth/login` (pre-session write), `POST /auth/password/change` (session-bound write with a body), `POST /auth/logout` (session-bound write with **no** body contract), and `POST /transactions` (financial mutation). It covers the four parser rejections, the `__proto__` payload, a *never 500* sweep, envelope shape and non-leakage, `400` presence in each route's published contract, and the precedence cases above.
+
+One assumption of the suite was corrected by its own first run and is recorded rather than quietly changed: `POST /auth/logout` declares no body contract, so a body that *parses* is ignored and the request is served (`200`), while a body that cannot be parsed is still `400`. Two assertions were therefore scoped to the routes that actually declare a body contract, and the asymmetry is now pinned by its own test.
+
+### Gates re-executed for E-6
+
+| Gate | Command | Result |
+|---|---|---|
+| Typecheck (app **and** tests) | `corepack pnpm run typecheck` | clean, no output |
+| Evidence harness check | `corepack pnpm run evidence:check` | 25 modules, 29 harness files checked |
+| Evidence harness tests | `corepack pnpm run evidence:test` | **16 passed, 0 failed, 0 skipped** |
+| Unit + API tests | `corepack pnpm run test:unit` | **626 passed, 0 failed, 0 skipped** (24 files) |
+| Real-PostgreSQL integration | `KFIN_INTEGRATION_TARGET=non-production … corepack pnpm run test:integration` | **64 passed, 0 failed** (7 files) on PostgreSQL **17.6** |
+
+Baseline at `de91113` was **573 passed across 23 files**; the delta is exactly the new 53-test file. The E-4 suite, the M08 snapshot suite, the M10 E-5 suite and the M07 regression block all still pass, untouched.
+
+### Mutation checks
+
+Each mutation was applied to `apps/api/src/app.ts`, the new suite was run, and the mutation was reverted (final state re-verified with `git diff --stat`).
+
+| # | Mutation | Result |
+|---|---|---|
+| A | Remove the new branch entirely (restore the pre-fix `500` catch-all) | **Killed** — 28 failures |
+| B | Exclude `FST_ERR_CTP_EMPTY_JSON_BODY` from the classified family | **Killed** — 8 failures |
+| C | Echo the framework `message` instead of the safe message | **Killed** — 12 failures |
+| D | Always answer `400`, ignoring the framework status | **Killed** — 8 failures |
+| E | Broaden the prefix from `FST_ERR_CTP_` to `FST_ERR_` | **Survived** — see below |
+| E′ | Broaden the prefix **and** remove the earlier validation branch | **Killed** — 6 failures |
+
+**Mutation E survived, and this is reported rather than hidden.** Broadening the prefix changes nothing observable, because `FST_ERR_VALIDATION` is already intercepted by the existing `validation` branch that runs one branch earlier: the narrow prefix and the branch order are two independent protections for the same property, so removing either one alone is a semantically equivalent mutant. Mutation E′ removes both at once and is killed by the six validation-precedence assertions, which is what proves those assertions detect a real regression rather than describing one. The lesson is recorded here so that a future reviewer who sees E survive does not read it as a dead test.
+
+### Findings left open by this addendum
+
+- **`413` and `415` are returned correctly but are not published in any route's OpenAPI response list.** Measured on this branch: no route in `packages/contracts/src/` or `apps/api/src/` declares either status, so both were already outside the published contract for every route before this change — this addendum only replaced a wrong `500` with the correct client status. Adding them means editing the shared response helpers for the whole API, which is a specification change, not a bug fix, and it is deliberately not made here. Recorded so QA can decide the contract question separately.
+- **The `text/plain` body on a JSON-contract route is a validation error, not a parser error** (`400 REQUEST_VALIDATION_FAILED`), because Fastify registers a built-in `text/plain` parser: the body parses to a string and then fails the object contract. Measured and pinned by test, and unchanged by this work.
+- **No client-facing change.** No web/PWA client exists in this repository, so the mapping is verified at the API boundary only.
+
+### Not claimed (E-6)
+
+No owner approval, ADR acceptance, blocker closure, production readiness, Supabase result or `FIN-RACE` PASS is implied. The integration run used the same repackaged PostgreSQL 17.6 described in the environment section above — the version matches the CI service, the distribution does not; CI remains the authority. This addendum closes one error-mapping defect and claims nothing about the correctness of any other error status in the API.
