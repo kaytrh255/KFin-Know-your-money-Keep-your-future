@@ -15,11 +15,27 @@ export const idempotencyHeadersSchema = z.object({
   'idempotency-key': z.string().trim().min(1).max(256),
 });
 
+/**
+ * One rejected contract rule, named so the caller can fix the request.
+ *
+ * `path` is a field name taken from the endpoint's own schema and `rule` is a
+ * fixed sentence describing the rule that failed. Neither carries the submitted
+ * value, so this field list is safe to return to the caller and to log: a
+ * rejected password, invitation code, or OTP never appears here. Present only on
+ * `REQUEST_VALIDATION_FAILED`, where the summary is the difference between the
+ * caller fixing the request and the caller guessing.
+ */
+export const errorFieldSchema = z.strictObject({
+  path: z.string().min(1).max(120),
+  rule: z.string().min(1).max(160),
+});
+
 export const errorResponseSchema = z.strictObject({
   error: z.strictObject({
     code: z.string().min(1).max(80),
     message: z.string().min(1).max(240),
     correlationId: z.string().min(1).max(128),
+    fields: z.array(errorFieldSchema).min(1).max(20).optional(),
   }),
 });
 

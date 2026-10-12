@@ -70,8 +70,14 @@ async function startUpstream(): Promise<Upstream> {
 
 async function startDevServer(environment: Record<string, string>): Promise<number> {
   const port = await freePort();
+  // The ambient shell may have sourced .env, which exports EMAIL_OUTBOX_DIR. These
+  // cases assert what the dev server does with and without that directory, so each
+  // one must state it itself instead of inheriting whatever the developer's shell
+  // happens to hold: an inherited value made "no outbox directory is configured"
+  // answer 200 where it must answer 404.
+  const { EMAIL_OUTBOX_DIR: _ignored, ...ambient } = process.env;
   const child = spawn(process.execPath, [devServerPath], {
-    env: { ...process.env, KFIN_WEB_PORT: String(port), KFIN_WEB_HOST: '127.0.0.1', ...environment },
+    env: { ...ambient, KFIN_WEB_PORT: String(port), KFIN_WEB_HOST: '127.0.0.1', ...environment },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   children.push(child);

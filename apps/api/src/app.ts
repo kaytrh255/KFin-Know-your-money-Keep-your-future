@@ -75,6 +75,7 @@ import { csrfFailedError, FinancialError, KfinServiceError } from '@kfin/domain'
 import { registerAuthRoutes, type AuthApiService } from './auth-routes.js';
 import { registerSavingsRoutes, type SavingsApiService } from './savings-routes.js';
 import { UnavailableEmailAdapter, type EmailDeliveryAdapter } from './email-delivery.js';
+import { describeRejectedContractRules, type RejectedContractField } from './validation-detail.js';
 import {
   isBrowserSafeRequest,
   readCsrfHeader,
@@ -730,10 +731,21 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return reply.code(error.statusCode).send(errorEnvelope(error.code, error.safeMessage, request.id));
     }
     if (error !== null && typeof error === 'object' && 'validation' in error && error.validation) {
+      // The caller is told which field broke which rule, and the same
+      // value-free summary is logged against `request.id` so the correlation id
+      // the caller was shown can actually be looked up. Neither the submitted
+      // values nor the validator's own message are copied anywhere: see
+      // `validation-detail.ts` for why that distinction matters here.
+      const fields = describeRejectedContractRules(error.validation);
+      request.log.warn(
+        { correlationId: request.id, fields },
+        'Rejected a request that does not match the API contract',
+      );
       return reply.code(400).send(errorEnvelope(
         'REQUEST_VALIDATION_FAILED',
         'The request does not match the API contract.',
         request.id,
+        fields,
       ));
     }
     // Milestone 10 (E-6): the body/content-type layer rejects a request before any
@@ -846,8 +858,20 @@ function requireUserId(request: FastifyRequest): string {
   return userId;
 }
 
-function errorEnvelope(code: string, message: string, correlationId: string) {
-  return { error: { code, message, correlationId } };
+function errorEnvelope(
+  code: string,
+  message: string,
+  correlationId: string,
+  fields?: readonly RejectedContractField[],
+) {
+  return {
+    error: {
+      code,
+      message,
+      correlationId,
+      ...(fields && fields.length > 0 ? { fields: [...fields] } : {}),
+    },
+  };
 }
 
 /**

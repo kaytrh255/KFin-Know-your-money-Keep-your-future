@@ -116,6 +116,45 @@ describe('same-origin API client', () => {
     });
   });
 
+  it('surfaces the rejected field list a 400 names, so the screen can show it', async () => {
+    const { api } = transport({
+      responses: [json(400, {
+        error: {
+          code: 'REQUEST_VALIDATION_FAILED',
+          message: 'The request does not match the API contract.',
+          correlationId: 'corr-register',
+          fields: [
+            { path: 'invitationCode', rule: 'the value does not satisfy a rule this contract states for the field' },
+            { path: 'emailVerified', rule: 'this endpoint does not accept this field' },
+          ],
+        },
+      })],
+    });
+
+    const failure = await api.auth.register({}).catch((error: unknown) => error) as ApiFailure;
+    expect(failure).toBeInstanceOf(ApiFailure);
+    expect(failure.fields).toEqual([
+      { path: 'invitationCode', rule: 'the value does not satisfy a rule this contract states for the field' },
+      { path: 'emailVerified', rule: 'this endpoint does not accept this field' },
+    ]);
+  });
+
+  it('keeps .fields readable and empty when the API names no field, or names it badly', async () => {
+    const { api } = transport({
+      responses: [
+        json(403, { error: { code: 'AUTH_CSRF_FAILED', message: 'refused', correlationId: 'corr-1' } }),
+        json(400, { error: { code: 'REQUEST_VALIDATION_FAILED', message: 'no detail', correlationId: 'corr-2', fields: [{ rule: 'missing path' }, null, 'nope'] } }),
+      ],
+    });
+
+    const withoutFields = await api.session.logout().catch((error: unknown) => error) as ApiFailure;
+    expect(withoutFields.fields).toEqual([]);
+
+    const malformed = await api.auth.register({}).catch((error: unknown) => error) as ApiFailure;
+    // A field entry without a path is dropped rather than rendered as `undefined`.
+    expect(malformed.fields).toEqual([]);
+  });
+
   it('reports an unreadable error body instead of claiming the call succeeded', async () => {
     const { api } = transport({ responses: [{ ok: false, status: 500, text: async () => '<html>proxy error</html>' }] });
     const failure = await api.session.me().catch((error: unknown) => error);

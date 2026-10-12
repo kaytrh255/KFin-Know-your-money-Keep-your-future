@@ -46,15 +46,35 @@ export class ApiFailure extends Error {
   readonly code: string;
   readonly correlationId: string | null;
   readonly details: unknown;
+  /**
+   * Contract rules the API named for this rejection (path + rule, never the
+   * submitted value). Empty when the API did not report field detail, so a
+   * caller can always read `.fields` without a null check.
+   */
+  readonly fields: readonly ContractFieldFailure[];
 
-  constructor(status: number, code: string, message: string, correlationId: string | null, details: unknown) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    correlationId: string | null,
+    details: unknown,
+    fields: readonly ContractFieldFailure[] = [],
+  ) {
     super(message);
     this.name = 'ApiFailure';
     this.status = status;
     this.code = code;
     this.correlationId = correlationId;
     this.details = details;
+    this.fields = fields;
   }
+}
+
+/** One rule the API reported as broken, named by field. Holds no submitted value. */
+export interface ContractFieldFailure {
+  readonly path: string;
+  readonly rule: string;
 }
 
 export interface ApiRequest {
@@ -70,7 +90,27 @@ export interface ApiResult<T> {
 }
 
 interface ErrorEnvelope {
-  error?: { code?: unknown; message?: unknown; correlationId?: unknown };
+  error?: { code?: unknown; message?: unknown; correlationId?: unknown; fields?: unknown };
+}
+
+/**
+ * Reads the API's field list defensively: only entries that are objects with
+ * string `path` and `rule` survive, and the list is capped. The client never
+ * invents a field name, so an unknown envelope shape degrades to "no detail"
+ * rather than to a guessed one.
+ */
+function contractFieldsFrom(value: unknown): readonly ContractFieldFailure[] {
+  if (!Array.isArray(value)) return [];
+  const fields: ContractFieldFailure[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const { path, rule } = entry as { path?: unknown; rule?: unknown };
+    if (typeof path !== 'string' || typeof rule !== 'string') continue;
+    if (path.length === 0 || rule.length === 0) continue;
+    fields.push({ path, rule });
+    if (fields.length === 20) break;
+  }
+  return fields;
 }
 
 function errorFrom(status: number, text: string): ApiFailure {
@@ -85,7 +125,14 @@ function errorFrom(status: number, text: string): ApiFailure {
     ? parsed.error.message
     : `The API answered ${status} without a readable error envelope.`;
   const correlationId = typeof parsed?.error?.correlationId === 'string' ? parsed.error.correlationId : null;
-  return new ApiFailure(status, code, message, correlationId, text.slice(0, 2_000));
+  return new ApiFailure(
+    status,
+    code,
+    message,
+    correlationId,
+    text.slice(0, 2_000),
+    contractFieldsFrom(parsed?.error?.fields),
+  );
 }
 
 /** Repeated retries of one user intent must reuse the key; a new intent takes a new key. */

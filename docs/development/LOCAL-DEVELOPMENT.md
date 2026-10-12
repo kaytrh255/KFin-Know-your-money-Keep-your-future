@@ -112,6 +112,39 @@ reachability call and one real state-changing request against a deliberately
 unregistered probe address, so a broken preview can be diagnosed from the browser
 without a shell.
 
+### Diagnosing a rejected write
+
+A `4xx` that says the request "does not match the API contract" now names the
+field and the rule next to the message, and prints the correlation ID:
+
+```json
+{ "error": {
+  "code": "REQUEST_VALIDATION_FAILED",
+  "message": "The request does not match the API contract.",
+  "correlationId": "5bcdd7b2-f5ba-413b-b09c-2c322b2c5ef6",
+  "fields": [
+    { "path": "invitationCode", "rule": "the value does not satisfy a rule this contract states for the field" }
+  ]
+} }
+```
+
+The `fields` list is deliberately value-free: it names the field and states the
+rule, and never repeats a submitted password, invitation code, or one-time code.
+The same summary is written to the API log against that correlation ID, so the ID
+the client shows can be looked up:
+
+```bash
+grep <correlationId> <the api:dev process output>
+```
+
+If a write is refused for a different reason, the code tells you the layer: `403
+AUTH_CSRF_FAILED` is the origin/CSRF defense, `400 REQUEST_BODY_UNREADABLE` is a
+body the JSON parser refused, `400 AUTH_INVITATION_INVALID` is an unknown, used,
+expired, or wrong-email invitation, `400 AUTH_PASSWORD_POLICY_FAILED` is the
+service password policy (at least 12 characters, at most 128, and not too common
+or too similar to the email address), and `409` codes are business rules such as a
+stale snapshot version.
+
 ## 4. Completing the email flows locally
 
 Registration issues a six-digit code and password recovery issues a reset secret.

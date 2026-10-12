@@ -58,7 +58,7 @@ proxied to the API on loopback. No value is simulated.
 | logout → `GET /auth/me` | `200 {revoked:true}` → `401 AUTHENTICATION_REQUIRED` |
 
 Gate results on the same tree: `evidence:check` 25 modules / 29 harness files; `evidence:test`
-16 pass / 0 fail / 0 skipped; `typecheck` exit 0; `test:unit` **679 passed / 29 files**
+16 pass / 0 fail / 0 skipped; `typecheck` exit 0; `test:unit` **691 passed / 30 files**
 (baseline `33357ea`: 626 / 24; the client adds 40 tests across four files, the email sink 9,
 and the extended config suite 4); `test:integration` **64 passed / 7 files** on PostgreSQL 17.6.
 
@@ -109,6 +109,61 @@ is restricted and the TLS handshake to `*.e2b.app` is refused), so no claim is m
 about the platform proxy's own header behaviour; both plausible behaviours are
 handled and tested, and the self-check screen reports which one is in effect in the
 user's browser.
+
+## 4.2 A rejected registration could not be explained (found by the user, fixed)
+
+Registering from the preview client answered `400 REQUEST_VALIDATION_FAILED — "The
+request does not match the API contract."` with correlation ID
+`4f6c54eb-1a71-4b19-a9c3-be28579bfb99`, and nothing else.
+
+Measured, in this order:
+
+- The correlation ID is retained **nowhere**: `disableRequestLogging: true` and
+  `requestIdHeader: false` mean no request is logged and the ID is API-generated,
+  and the validation branch of the shared error handler logged nothing. The
+  database held no trace either, so the request was rejected before the service
+  ran — i.e. by the body schema.
+- The client's register payload matches `registerBodySchema` field for field, and
+  the same payload through the client origin answers `202 accepted`. The form is
+  not the defect, and neither is the invitation code it was handed: the code in
+  `.env.preview-account` passes `invitationCodeSchema`, and 200 freshly generated
+  codes pass it 200/200.
+- The published OpenAPI for `invitationCode` said `{minLength: 1, maxLength: 64}`
+  and nothing else, because the rule is a `.refine` and a refine cannot become a
+  JSON-schema `pattern`. The contract callers were pointed at did not contain the
+  rule the API had enforced. The service password policy (`12–128` plus a
+  common/similarity check) was likewise unpublished behind a `1–200` contract.
+
+So the request that failed is genuinely unrecoverable, and this record says so
+rather than guessing its field. What changed is that the failure class is now
+identifiable — see `docs/implementation/MILESTONE-10-VALIDATION-ERROR-DETAIL.md`
+for the change and its evidence. Reproduced live after the change, a register body
+with a malformed invitation code answers `400` naming `invitationCode`, the same
+correlation ID appears in the API log with the same field list, an unknown key is
+named (`emailVerified`), a correct payload still answers `202`, and no submitted
+password or invitation code appears in the response or the log. New cover:
+`apps/api/test/validation-contract-detail.test.ts` and two tests in
+`apps/web/test/api.test.ts`.
+
+## 4.3 The unit gate depended on the developer's shell (found while fixing 4.2)
+
+The unit gate run once reported `1 failed | 690 passed`, then passed repeatedly on
+the same tree. It was not flaky: it was environment-sensitive, and it reproduced
+5 times out of 5 under the condition that mattered.
+
+`apps/web/test/dev-server.test.ts` starts the dev server as a child process with
+`{ ...process.env, … }`. When the shell has sourced `.env` — which is how the API,
+the client, and this document's own commands are started — `EMAIL_OUTBOX_DIR` is
+exported, so the case "hides the local email sink when no outbox directory is
+configured" was handed the one variable it is about, and answered `200` where it
+must answer `404`. Any developer following the documented run steps saw a red
+unit gate; a shell without `.env` saw a green one.
+
+The fix is in the test only: the spawn helper no longer inherits
+`EMAIL_OUTBOX_DIR`, so each case states the directory itself (one sets it, the rest
+leave it unset) and the assertion tests the behaviour instead of the ambient
+shell. No product code changed. Verified with `.env` sourced (3 × `691 passed`,
+previous 5 × `1 failed | 690 passed`) and with a clean shell (`691 passed`).
 
 ## 5. Open findings (recorded, not hidden)
 

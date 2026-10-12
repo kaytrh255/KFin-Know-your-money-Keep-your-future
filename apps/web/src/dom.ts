@@ -113,9 +113,17 @@ export function card(title: string, ...children: Child[]): HTMLElement {
   return el('section', { class: 'card' }, el('h2', { class: 'card-title', text: title }), ...children);
 }
 
-export function notice(kind: 'error' | 'ok' | 'info', text: string, correlationId?: string | null): HTMLElement {
+export function notice(
+  kind: 'error' | 'ok' | 'info',
+  text: string,
+  correlationId?: string | null,
+  fields?: readonly { readonly path: string; readonly rule: string }[],
+): HTMLElement {
   return el('div', { class: `notice notice-${kind}` },
     el('p', { text }),
+    fields && fields.length > 0
+      ? el('ul', { class: 'hint' }, ...fields.map((field) => el('li', { text: `${field.path} — ${field.rule}` })))
+      : null,
     correlationId ? el('p', { class: 'hint', text: `correlation id: ${correlationId}` }) : null,
   );
 }

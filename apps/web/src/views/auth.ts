@@ -23,7 +23,7 @@ export interface AuthViewContext {
 function failureNotice(error: unknown): HTMLElement {
   if (error && typeof error === 'object' && 'code' in error && 'message' in error) {
     const failure = error as ApiFailure;
-    return notice('error', `${failure.status} ${failure.code}: ${failure.message}`, failure.correlationId);
+    return notice('error', `${failure.status} ${failure.code}: ${failure.message}`, failure.correlationId, failure.fields);
   }
   return notice('error', error instanceof Error ? error.message : 'The request failed.');
 }
@@ -64,10 +64,23 @@ export function registerView(context: AuthViewContext): HTMLElement {
       label: 'Invitation code',
       name: 'invitationCode',
       required: true,
-      hint: 'Minted by an operator: `corepack pnpm run invite:provision`. There is no HTTP route for this by design (SEC-AUTH-14).',
+      // The rule below is the contract's own: `invitationCodeSchema` enforces four
+      // groups of eight Crockford characters. It used to be stated nowhere the
+      // user could see, so a mistyped code answered only "does not match the API
+      // contract" with no field named (2026-10-12).
+      hint: 'Four groups of eight characters, for example XXXX-XXXX-XXXX-XXXX — digits and A–Z without I, L, O and U. Case and surrounding spaces are accepted. Minted by an operator: `corepack pnpm run invite:provision`; there is no HTTP route for this by design (SEC-AUTH-14).',
     }),
     field({ label: 'Email', name: 'email', type: 'email', required: true }),
-    field({ label: 'Password', name: 'password', type: 'password', required: true, hint: '1–200 characters as the contract stands today.' }),
+    field({
+      label: 'Password',
+      name: 'password',
+      type: 'password',
+      required: true,
+      // The contract bounds the transport (1–200); the service enforces its own
+      // policy on top (`AUTH_PASSWORD_POLICY_FAILED`). Stating only the transport
+      // bound sent users into a refusal they could not have predicted.
+      hint: 'At least 12 characters, at most 128. The API also refuses a password that is too common or too similar to the email address.',
+    }),
     field({ label: 'Display name (optional)', name: 'displayName' }),
     selectField('Locale', LOCALES, { value: 'vi-VN', name: 'locale' }),
     selectField('Timezone', TIMEZONES, { value: 'Asia/Ho_Chi_Minh', name: 'timezone' }),

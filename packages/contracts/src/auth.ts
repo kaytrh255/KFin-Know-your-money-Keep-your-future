@@ -26,6 +26,18 @@ export const invitationCodeSchema = z
   .refine(
     (value) => value.split('-').length === 4 && value.split('-').every((part) => INVITATION_CODE_SEGMENT.test(part)),
     { message: 'must be the invitation code issued for this Private Beta account' },
+  )
+  // The rule above is a `.refine`, which OpenAPI cannot express as a `pattern`,
+  // so without this description the published contract claimed only "1 to 64
+  // characters" while the runtime required four groups of eight Crockford
+  // characters. A caller reading the contract was told it sent the wrong thing
+  // by a contract that never stated the rule (found by a live register attempt,
+  // 2026-10-12). Descriptions survive schema transformation, so the requirement
+  // is now published next to the field that enforces it.
+  .describe(
+    'Invitation code exactly as issued: four groups of eight characters separated by hyphens, '
+    + 'for example XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX. Crockford base32 alphabet (digits and '
+    + 'A-Z excluding I, L, O and U); case and surrounding whitespace are ignored.',
   );
 
 export const localeSchema = z.string().trim().min(2).max(35);
@@ -45,7 +57,16 @@ export const authSessionSchema = z.strictObject({
 
 export const registerBodySchema = z.strictObject({
   email: emailSchema,
-  password: passwordSchema,
+  // The transport bound and the enforced policy are different numbers, and only
+  // the transport bound was published, so a caller reading the contract could be
+  // refused by a rule the contract never stated (2026-10-12). The service policy
+  // is described next to the field that is subject to it; other endpoints reuse
+  // `passwordSchema` and are not, so the note stays on the register body only.
+  password: passwordSchema.describe(
+    'Transport bound only (1–200 characters). Registration additionally enforces the service '
+    + 'password policy: at least 12 characters, at most 128, and a refusal for a password that is '
+    + 'too common or too similar to the email address (400 AUTH_PASSWORD_POLICY_FAILED).',
+  ),
   invitationCode: invitationCodeSchema,
   displayName: z.string().trim().min(1).max(120).optional(),
   locale: localeSchema,

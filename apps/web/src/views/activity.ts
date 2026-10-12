@@ -25,7 +25,7 @@ const BALANCE_EFFECTS = ['current', 'historical'];
 function failureNotice(error: unknown): HTMLElement {
   if (error && typeof error === 'object' && 'code' in error && 'message' in error) {
     const failure = error as ApiFailure;
-    return notice('error', `${failure.status} ${failure.code}: ${failure.message}`, failure.correlationId);
+    return notice('error', `${failure.status} ${failure.code}: ${failure.message}`, failure.correlationId, failure.fields);
   }
   return notice('error', error instanceof Error ? error.message : 'The request failed.');
 }
