@@ -226,7 +226,7 @@ export class PostgresSavingsGoalRepository {
       const userResult = await query<{ timezone: string; base_currency: string }>(`
         SELECT timezone, base_currency
         FROM users
-        WHERE id = $1 AND status = 'active' AND email_verified_at IS NOT NULL
+        WHERE id = $1 AND status = 'active'
         FOR UPDATE
       `, [ownerUserId]);
       const user = userResult.rows[0];
@@ -694,7 +694,7 @@ async function lockGoal(query: Query, ownerUserId: string, goalId: string): Prom
     FROM savings_goals AS g
     JOIN users AS u ON u.id = g.user_id
     WHERE g.user_id = $1 AND g.id = $2
-      AND u.status = 'active' AND u.email_verified_at IS NOT NULL
+      AND u.status = 'active'
     FOR UPDATE OF g
   `, [ownerUserId, goalId]);
   const goal = result.rows[0];

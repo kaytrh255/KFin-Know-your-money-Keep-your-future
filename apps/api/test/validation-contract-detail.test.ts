@@ -44,9 +44,6 @@ const apps: FastifyInstance[] = [];
 async function build(): Promise<{ app: FastifyInstance; register: ReturnType<typeof vi.fn> }> {
   const register = vi.fn(async (): Promise<RegisterResult> => ({
     accepted: true,
-    issued: true,
-    resendAvailableAt: '2026-10-12T05:00:00.000Z',
-    delivery: null,
     userId: null,
   }));
   const app = await buildApp({

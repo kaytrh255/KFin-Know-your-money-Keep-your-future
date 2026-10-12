@@ -172,16 +172,25 @@ export function createApi(transport: ApiTransport) {
 
   return {
     session: {
-      me: () => request<{ userId: string; email: string; status: string; baseCurrency: string; displayName: string | null; session: { id: string } }>({ method: 'GET', path: '/api/v1/auth/me' }),
+      me: () => request<{
+        userId: string;
+        email: string;
+        status: string;
+        /** Null until a reset OTP has actually been consumed (OQ-20). */
+        emailVerifiedAt: string | null;
+        baseCurrency: string;
+        displayName: string | null;
+        session: { id: string };
+      }>({ method: 'GET', path: '/api/v1/auth/me' }),
       logout: () => request<{ revoked: true }>({ method: 'POST', path: '/api/v1/auth/logout' }),
       logoutAll: () => request<{ revokedSessions: number }>({ method: 'POST', path: '/api/v1/auth/logout-all' }),
       sessions: () => request<{ items: Array<Record<string, unknown>>; nextCursor: string | null }>({ method: 'GET', path: '/api/v1/auth/sessions' }),
       securityEvents: () => request<{ items: Array<Record<string, unknown>>; nextCursor: string | null }>({ method: 'GET', path: '/api/v1/auth/security-events' }),
     },
     auth: {
-      register: (body: unknown) => request<{ accepted: true; resendAvailableAt: string }>({ method: 'POST', path: '/api/v1/auth/register', body }),
-      resendVerification: (body: unknown) => request<{ accepted: true; resendAvailableAt: string }>({ method: 'POST', path: '/api/v1/auth/verification/resend', body }),
-      verifyEmail: (body: unknown) => request<{ userId: string; status: 'active' }>({ method: 'POST', path: '/api/v1/auth/verify-email', body }),
+      // Registration admits the account and issues nothing else: there is no
+      // verification endpoint and no resend window to publish (OQ-20, 2026-10-12).
+      register: (body: unknown) => request<{ accepted: true }>({ method: 'POST', path: '/api/v1/auth/register', body }),
       login: (body: unknown) => request<{ userId: string }>({ method: 'POST', path: '/api/v1/auth/login', body }),
       changePassword: (body: unknown) => request<{ revokedOtherSessions: number }>({ method: 'POST', path: '/api/v1/auth/password/change', body }),
       resetRequest: (body: unknown) => request<{ accepted: true }>({ method: 'POST', path: '/api/v1/auth/password/reset-request', body }),

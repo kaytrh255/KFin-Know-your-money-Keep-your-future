@@ -16,7 +16,6 @@ const INVITATION_CODE_SEGMENT = /^[0-9A-HJKMNP-TV-Z]{8}$/;
 export const emailSchema = z.string().trim().min(3).max(320).email();
 export const passwordSchema = z.string().min(1).max(200);
 export const otpSchema = z.string().regex(/^[0-9]{6}$/);
-export const resetSecretSchema = z.string().regex(/^[A-Za-z0-9_-]{32,128}$/);
 export const invitationCodeSchema = z
   .string()
   .trim()
@@ -77,30 +76,14 @@ export const registerBodySchema = z.strictObject({
 // Registration is intentionally generic: a new account and an existing email
 // return the same accepted outcome so the endpoint is not an enumeration oracle
 // (UF-AUTH-01, SEC-AUTH-04).
+/**
+ * OQ-20 (2026-10-12): registration issues no challenge and sends no email, so the
+ * response carries no delivery and no resend window — a caller cannot infer from it
+ * whether a verification email exists at all. Verification has no endpoint of its
+ * own: the only emailed code is the reset OTP, submitted to `/auth/password/reset`.
+ */
 export const registerResponseSchema = z.strictObject({
   accepted: z.literal(true),
-  resendAvailableAt: instantSchema,
-});
-
-export const resendVerificationBodySchema = z.strictObject({
-  email: emailSchema,
-});
-
-export const resendVerificationResponseSchema = z.strictObject({
-  accepted: z.literal(true),
-  resendAvailableAt: instantSchema,
-});
-
-export const verifyEmailBodySchema = z.strictObject({
-  email: emailSchema,
-  oneTimeCode: otpSchema,
-});
-
-export const verifyEmailResponseSchema = z.strictObject({
-  userId: uuidSchema,
-  status: z.literal('active'),
-  session: authSessionSchema,
-  csrfToken: z.string().min(16).max(256),
 });
 
 export const loginBodySchema = z.strictObject({
@@ -159,7 +142,7 @@ export const passwordResetRequestResponseSchema = z.strictObject({
 
 export const passwordResetBodySchema = z.strictObject({
   email: emailSchema,
-  resetSecret: resetSecretSchema,
+  oneTimeCode: otpSchema,
   newPassword: passwordSchema,
 });
 
@@ -209,7 +192,7 @@ export const securityEventListResponseSchema = z.strictObject({
 export const meResponseSchema = z.strictObject({
   userId: uuidSchema,
   email: z.string().min(3).max(320),
-  status: z.enum(['pending_verification', 'active', 'locked', 'disabled', 'deletion_pending']),
+  status: z.enum(['active', 'locked', 'disabled', 'deletion_pending']),
   emailVerifiedAt: instantSchema.nullable(),
   displayName: z.string().nullable(),
   locale: z.string(),
@@ -244,7 +227,6 @@ export function authResponses(
 
 export type RegisterBody = z.infer<typeof registerBodySchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;
-export type VerifyEmailBody = z.infer<typeof verifyEmailBodySchema>;
 export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
 export type PasswordResetBody = z.infer<typeof passwordResetBodySchema>;
 export type AuthSession = z.infer<typeof authSessionSchema>;

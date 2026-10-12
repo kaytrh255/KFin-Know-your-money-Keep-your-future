@@ -180,7 +180,10 @@ describe('configuration', () => {
       otpLifetimeMs: 600_000,
       maximumAttempts: 5,
       resendCooldownMs: 60_000,
-      resetLifetimeMs: 1_800_000,
+      hourlyIssuanceCap: 3,
+      dailyIssuanceCap: 6,
+      verifyCumulativeMaximum: 10,
+      verifyCumulativeWindowMs: 3_600_000,
     });
     expect(authPolicy.session).toMatchObject({
       tokenEntropyBytes: 32,
@@ -192,7 +195,34 @@ describe('configuration', () => {
 
   it('keeps every access secret at least 128 bits of entropy', () => {
     expect(authPolicy.session.tokenEntropyBytes).toBeGreaterThanOrEqual(16);
+    expect(authPolicy.session.csrfEntropyBytes).toBeGreaterThanOrEqual(16);
     expect(authPolicy.invitation.codeEntropyBytes).toBeGreaterThanOrEqual(16);
-    expect(authPolicy.challenge.resetSecretEntropyBytes).toBeGreaterThanOrEqual(16);
+  });
+
+  it('reserves the emailed OTP for password reset and bounds it (OQ-20)', () => {
+    // A six-digit code is only defensible while issuance and verification are both
+    // capped: 3 per hour, 6 per day, and one cumulative failure budget per account
+    // that a resend cannot reset (SEC-AUTH-20, TM-03).
+    expect(authPolicy.challenge.otpDigits).toBe(6);
+    expect(authPolicy.challenge.hourlyIssuanceCap).toBe(3);
+    expect(authPolicy.challenge.dailyIssuanceCap).toBe(6);
+    expect(authPolicy.challenge.verifyCumulativeMaximum).toBeGreaterThanOrEqual(5);
+    expect(authPolicy.challenge.verifyCumulativeMaximum).toBeLessThanOrEqual(20);
+    expect(authPolicy.challenge.verifyCumulativeWindowMs).toBe(60 * 60 * 1_000);
+    expect(authPolicy.challenge.maximumAttempts).toBeLessThanOrEqual(
+      authPolicy.challenge.verifyCumulativeMaximum,
+    );
+    // No verification-flow knob may survive: registration issues no challenge.
+    expect('verificationMaximumAttempts' in authPolicy.abuse).toBe(false);
+    expect(Object.keys(authPolicy.challenge).sort()).toEqual([
+      'dailyIssuanceCap',
+      'hourlyIssuanceCap',
+      'maximumAttempts',
+      'otpDigits',
+      'otpLifetimeMs',
+      'resendCooldownMs',
+      'verifyCumulativeMaximum',
+      'verifyCumulativeWindowMs',
+    ]);
   });
 });

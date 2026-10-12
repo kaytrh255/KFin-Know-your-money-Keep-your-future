@@ -41,15 +41,25 @@ export const authPolicy = Object.freeze({
     codeGroupLength: 8,
     defaultLifetimeMs: 14 * 24 * 60 * 60 * 1_000,
   }),
+  // OQ-20 (2026-10-12): the only emailed OTP is the password-reset OTP.
+  // Registration issues no challenge at all, so there is no verification lifetime
+  // or verification issuance cap here — only the reset-challenge bounds.
   challenge: Object.freeze({
     otpDigits: 6,
     otpLifetimeMs: 10 * 60 * 1_000,
     maximumAttempts: 5,
     resendCooldownMs: 60 * 1_000,
-    resetSecretEntropyBytes: 32,
-    resetLifetimeMs: 30 * 60 * 1_000,
-    hourlyIssuanceCap: 5,
-    dailyIssuanceCap: 12,
+    hourlyIssuanceCap: 3,
+    dailyIssuanceCap: 6,
+    /**
+     * Cumulative failed-verification budget across superseded challenges: a
+     * resend may never restore it (SEC-AUTH-20). The verifier records every
+     * attempt against this window *before* it looks at any challenge, so an
+     * address with no account is throttled exactly like one with an account and
+     * the limit cannot become an existence oracle (SEC-AUTH-04, TM-03).
+     */
+    verifyCumulativeMaximum: 10,
+    verifyCumulativeWindowMs: 60 * 60 * 1_000,
   }),
   session: Object.freeze({
     tokenEntropyBytes: 32,
@@ -64,7 +74,6 @@ export const authPolicy = Object.freeze({
   abuse: Object.freeze({
     windowMs: 15 * 60 * 1_000,
     loginMaximumFailures: 10,
-    verificationMaximumAttempts: 20,
     resetMaximumRequests: 10,
     registrationMaximumPerWindow: 20,
     retentionWindows: 8,

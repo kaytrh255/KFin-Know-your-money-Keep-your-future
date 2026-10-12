@@ -27,7 +27,7 @@ export interface UserRecord {
   readonly locale: string;
   readonly timezone: string;
   readonly baseCurrency: string;
-  readonly status: 'pending_verification' | 'active';
+  readonly status: 'active' | 'locked' | 'disabled' | 'deletion_pending';
 }
 
 export class PostgresUserRepository {
@@ -56,13 +56,16 @@ export class PostgresUserRepository {
     }
 
     const id = randomUUID();
-    const status = input.emailVerifiedAt ? 'active' : 'pending_verification';
+    // OQ-20 (2026-10-12): registration admits a usable account and records the email
+    // as explicitly unverified, rather than parking the account in a pre-active state.
+    const status = 'active';
+    const emailVerificationState = input.emailVerifiedAt ? 'verified' : 'unverified';
     try {
       await this.pool.query(`
         INSERT INTO users (
           id, email, email_normalized, email_verified_at, display_name,
-          locale, timezone, base_currency, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          locale, timezone, base_currency, status, email_verification_state
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `, [
         id,
         email,
@@ -73,6 +76,7 @@ export class PostgresUserRepository {
         input.timezone,
         input.baseCurrency,
         status,
+        emailVerificationState,
       ]);
     } catch (error) {
       if (sqlstateOf(error) === '23505') {
@@ -196,7 +200,7 @@ export class FinancialAccountBootstrapService {
       const userResult = await query<BootstrapUserRow>(`
         SELECT id, timezone, base_currency
         FROM users
-        WHERE id = $1 AND status = 'active' AND email_verified_at IS NOT NULL
+        WHERE id = $1 AND status = 'active'
         FOR UPDATE
       `, [input.ownerUserId]);
       const user = userResult.rows[0];

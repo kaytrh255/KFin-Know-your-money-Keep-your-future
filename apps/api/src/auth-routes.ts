@@ -23,16 +23,12 @@ import {
   passwordResetResponseSchema,
   registerBodySchema,
   registerResponseSchema,
-  resendVerificationBodySchema,
-  resendVerificationResponseSchema,
   revokeSessionResponseSchema,
   securityEventListQuerySchema,
   securityEventListResponseSchema,
   sessionListQuerySchema,
   sessionListResponseSchema,
   sessionPathSchema,
-  verifyEmailBodySchema,
-  verifyEmailResponseSchema,
 } from '@kfin/contracts';
 import type {
   AccessPrincipal,
@@ -42,11 +38,9 @@ import type {
   ProfileView,
   RegisterResult,
   RequestPasswordResetResult,
-  ResendVerificationResult,
   ResetPasswordResult,
   SecurityEventPage,
   SessionPage,
-  VerifyEmailResult,
 } from '@kfin/database';
 import { AuthError, csrfFailedError } from '@kfin/domain';
 import type { AuthenticateRequest } from './types.js';
@@ -85,19 +79,6 @@ export interface AuthApiService {
     ipAddress: string | null;
     userAgent: string | null;
   }): Promise<RegisterResult>;
-  resendVerification(input: {
-    email: string;
-    correlationId: string;
-    ipAddress: string | null;
-    userAgent: string | null;
-  }): Promise<ResendVerificationResult>;
-  verifyEmail(input: {
-    email: string;
-    oneTimeCode: string;
-    correlationId: string;
-    ipAddress: string | null;
-    userAgent: string | null;
-  }): Promise<VerifyEmailResult>;
   login(input: {
     email: string;
     password: string;
@@ -137,7 +118,7 @@ export interface AuthApiService {
   }): Promise<RequestPasswordResetResult>;
   resetPassword(input: {
     email: string;
-    resetSecret: string;
+    oneTimeCode: string;
     newPassword: string;
     correlationId: string;
     ipAddress: string | null;
@@ -255,7 +236,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
 
   const deliver = async (
     request: FastifyRequest,
-    input: { to: string; template: 'email_verification_otp' | 'password_reset'; challengeId: string; secret: string },
+    input: { to: string; template: 'password_reset'; challengeId: string; secret: string },
   ): Promise<void> => {
     try {
       const result = await emailDelivery.send({
@@ -294,7 +275,11 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
     },
   }, async (request, reply) => {
     const body = request.body;
-    const result = await authService.register({
+    // OQ-20 (2026-10-12): registration admits the account and nothing else. It issues
+    // no challenge and sends no email, so the route has no delivery to make and no
+    // resend window to publish — the 202 body is identical for a fresh address, an
+    // address that already exists, and a rejected invitation (SEC-AUTH-04).
+    await authService.register({
       email: body.email,
       password: body.password,
       invitationCode: body.invitationCode,
@@ -304,62 +289,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       baseCurrency: body.baseCurrency,
       ...requestContext(request),
     });
-    if (result.delivery) {
-      await deliver(request, {
-        to: body.email,
-        template: 'email_verification_otp',
-        challengeId: result.delivery.challengeId,
-        secret: result.delivery.oneTimeCode,
-      });
-    }
-    return reply.code(202).send({ accepted: true, resendAvailableAt: result.resendAvailableAt });
-  });
-
-  app.post('/api/v1/auth/verification/resend', {
-    onRequest: requireBrowserSafeWrite,
-    schema: {
-      tags: ['trusted-beta-access'],
-      body: resendVerificationBodySchema,
-      response: authResponses(200, resendVerificationResponseSchema),
-    },
-  }, async (request) => {
-    const body = request.body;
-    const result = await authService.resendVerification({
-      email: body.email,
-      ...requestContext(request),
-    });
-    if (result.delivery) {
-      await deliver(request, {
-        to: body.email,
-        template: 'email_verification_otp',
-        challengeId: result.delivery.challengeId,
-        secret: result.delivery.oneTimeCode,
-      });
-    }
-    return { accepted: true, resendAvailableAt: result.resendAvailableAt };
-  });
-
-  app.post('/api/v1/auth/verify-email', {
-    onRequest: requireBrowserSafeWrite,
-    schema: {
-      tags: ['trusted-beta-access'],
-      body: verifyEmailBodySchema,
-      response: authResponses(200, verifyEmailResponseSchema),
-    },
-  }, async (request, reply) => {
-    const body = request.body;
-    const result = await authService.verifyEmail({
-      email: body.email,
-      oneTimeCode: body.oneTimeCode,
-      ...requestContext(request),
-    });
-    issueSessionCookies(reply, result.session);
-    return {
-      userId: result.userId,
-      status: result.status,
-      session: result.session.session,
-      csrfToken: result.session.csrfToken,
-    };
+    return reply.code(202).send({ accepted: true });
   });
 
   app.post('/api/v1/auth/login', {
@@ -499,7 +429,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
         to: body.email,
         template: 'password_reset',
         challengeId: result.delivery.challengeId,
-        secret: result.delivery.resetSecret,
+        secret: result.delivery.oneTimeCode,
       });
     }
     return { accepted: true };
@@ -516,7 +446,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
     const body = request.body;
     const result = await authService.resetPassword({
       email: body.email,
-      resetSecret: body.resetSecret,
+      oneTimeCode: body.oneTimeCode,
       newPassword: body.newPassword,
       ...requestContext(request),
     });

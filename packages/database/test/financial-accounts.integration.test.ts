@@ -207,22 +207,45 @@ integration('financial-account onboarding on real PostgreSQL', () => {
     expect(await counts(owner.id)).toEqual({ accounts: 1, snapshots: 1, receipts: 1, audits: 1 });
   }, 30_000);
 
-  it('returns 404 for an unknown owner and for an unverified owner without writing', async () => {
+  it('returns 404 for an unknown owner and for a non-active owner without writing', async () => {
     const unknownOwner = randomUUID();
     await expect(repository.openFinancialAccount(unknownOwner, opening(), randomUUID(), randomUUID()))
       .rejects.toMatchObject({ code: 'FINANCIAL_RESOURCE_UNAVAILABLE', statusCode: 404 });
     expect(await counts(unknownOwner)).toEqual({ accounts: 0, snapshots: 0, receipts: 0, audits: 0 });
 
+    // OQ-20 (2026-10-12): registration admits an account that is usable while its
+    // address stays explicitly unverified, so an unverified owner is no longer
+    // refused — refusing it would deny the product to every beta account.
     const unverified = await users.create({
       email: `m05-unverified-${randomUUID()}@example.invalid`,
       locale: 'vi-VN',
       timezone: 'Asia/Ho_Chi_Minh',
       baseCurrency: 'VND',
     });
-    expect(unverified.status).toBe('pending_verification');
-    await expect(repository.openFinancialAccount(unverified.id, opening(), randomUUID(), randomUUID()))
+    expect(unverified.status).toBe('active');
+    const state = await database.query<{ email_verification_state: string }>(
+      'SELECT email_verification_state FROM users WHERE id = $1',
+      [unverified.id],
+    );
+    expect(state.rows[0]?.email_verification_state).toBe('unverified');
+    const opened = await repository.openFinancialAccount(unverified.id, opening(), randomUUID(), randomUUID());
+    expect(opened).toMatchObject({ financialStateVersion: '1', replayed: false });
+    expect(await counts(unverified.id)).toEqual({ accounts: 1, snapshots: 1, receipts: 1, audits: 1 });
+
+    // The gate that remains is account status: a disabled owner writes nothing.
+    const disabled = await users.create({
+      email: `m05-disabled-${randomUUID()}@example.invalid`,
+      locale: 'vi-VN',
+      timezone: 'Asia/Ho_Chi_Minh',
+      baseCurrency: 'VND',
+    });
+    await database.query(
+      `UPDATE users SET status = 'disabled', disabled_at = now() WHERE id = $1`,
+      [disabled.id],
+    );
+    await expect(repository.openFinancialAccount(disabled.id, opening(), randomUUID(), randomUUID()))
       .rejects.toMatchObject({ code: 'FINANCIAL_RESOURCE_UNAVAILABLE', statusCode: 404 });
-    expect(await counts(unverified.id)).toEqual({ accounts: 0, snapshots: 0, receipts: 0, audits: 0 });
+    expect(await counts(disabled.id)).toEqual({ accounts: 0, snapshots: 0, receipts: 0, audits: 0 });
   }, 30_000);
 
   it('rejects an invalid opening balance with 422 and writes nothing', async () => {

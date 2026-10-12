@@ -27,22 +27,25 @@ Start with the [KFin Specification Foundation](docs/README.md), [Milestone 01 tr
 - append-only correction chains, standalone voids, owner-scoped history, stable stale receipts, and no silent re-anchoring;
 - owner-scoped monthly actuals that exclude voided facts and identify amended groups;
 - one-off scheduled income/essential-expense occurrences with exact persisted states, derived due/Paid/Received presentation, explicit confirmation, and skip/cancel;
-- Trusted Private Beta access: digest-only single-use invitations, Argon2id registration with invitation admission and OTP email-verification, opaque rotating sessions with CSRF/origin defense, session list/revocation, known-password change, password reset that revokes every session, and sanitized security history;
+- Trusted Private Beta access: digest-only single-use invitations, Argon2id registration admitted by the invitation code alone (usable account, email explicitly unverified, no verification email), opaque rotating sessions with CSRF/origin defense, session list/revocation, known-password change, password reset by a single-use six-digit emailed OTP that revokes every session, and sanitized security history;
 - authenticated financial-account onboarding (`POST /api/v1/financial-account`: atomic account + opening snapshot + idempotency receipt, replay, duplicate-account `409`, CSRF-protected) and owner-scoped listing from `financial_current_balances` (`GET /api/v1/financial-accounts`);
 - savings goals (`/api/v1/savings-goals`): create, list by status, plan edits, absolute current-amount updates with immutable old/new history, optimistic versions, idempotent CSRF-protected mutations, and terminal archive; a goal is a declared reserve and never changes the account balance or monthly actuals;
 - schedule-linked correction pointer transfer and linked standalone-void rejection;
 - unit/API/static-contract tests plus guarded real-PostgreSQL foundation, correction, schedule, access, onboarding, and savings-goal integration suites.
 
-Access secrets are never persisted in plaintext: invitation codes, OTP/reset secrets, session tokens, and CSRF tokens are stored only as purpose-separated keyed digests. Unauthenticated outcomes stay generic so a missing account, a consumed invitation, an expired code, and a wrong password are indistinguishable. Invitation provisioning has no HTTP route; it remains an audited operator procedure.
+Access secrets are never persisted in plaintext: invitation codes, reset OTPs, session tokens, and CSRF tokens are stored only as purpose-separated keyed digests. Unauthenticated outcomes stay generic so a missing account, a consumed invitation, an expired code, and a wrong password are indistinguishable. Invitation provisioning has no HTTP route; it remains an audited operator procedure.
 
-> **Specification revision 2026-10-12 (OQ-20), not yet implemented.** The authentication
-> specification now admits registration by the invitation code alone — no email OTP, no email
-> enqueued, no session from registration — and reserves the emailed OTP for password reset, with
-> unverified addresses represented explicitly rather than marked verified. The code in this
-> repository still implements the earlier flow (a registration OTP plus
-> `/api/v1/auth/verify-email`), so the implementation currently deviates from the specification
-> and needs a follow-up change with its migration and OpenAPI update. See
-> [`docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md`](docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md).
+> **Specification revision 2026-10-12 (OQ-20), implemented.** Registration admits an account on the
+> invitation code alone — no OTP, no email composed or sent, no session — and leaves the address
+> explicitly unverified rather than marked verified. The emailed six-digit OTP exists only for
+> password reset, is single-use with a 10-minute lifetime, five attempts, a 60-second cooldown, a
+> cumulative per-account failure budget, and 3-per-hour / 6-per-day issuance caps; reset revokes
+> every session and issues none. `/api/v1/auth/verify-email` and `/api/v1/auth/verification/resend`
+> no longer exist. Implemented by
+> [`docs/implementation/MILESTONE-11-OTP-RESET-ONLY.md`](docs/implementation/MILESTONE-11-OTP-RESET-ONLY.md)
+> on top of the revision
+> [`docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md`](docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md)
+> (**not merged, not deployed**; `SPEC-AUTH-01`/`SPEC-AUTH-02` remain open owner decisions).
 
 ## Workspace commands
 

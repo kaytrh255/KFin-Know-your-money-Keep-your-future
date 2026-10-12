@@ -32,10 +32,10 @@ const POLICY: AuthAccessPolicy = {
     otpLifetimeMs: 10 * 60 * 1_000,
     maximumAttempts: 5,
     resendCooldownMs: 60 * 1_000,
-    resetSecretEntropyBytes: 32,
-    resetLifetimeMs: 30 * 60 * 1_000,
-    hourlyIssuanceCap: 5,
-    dailyIssuanceCap: 12,
+    hourlyIssuanceCap: 3,
+    dailyIssuanceCap: 6,
+    verifyCumulativeMaximum: 10,
+    verifyCumulativeWindowMs: 60 * 60 * 1_000,
   },
   session: {
     tokenEntropyBytes: 32,
@@ -48,7 +48,6 @@ const POLICY: AuthAccessPolicy = {
   abuse: {
     windowMs: 15 * 60 * 1_000,
     loginMaximumFailures: 10,
-    verificationMaximumAttempts: 20,
     resetMaximumRequests: 10,
     registrationMaximumPerWindow: 20,
     retentionWindows: 8,

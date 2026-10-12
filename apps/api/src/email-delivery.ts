@@ -13,8 +13,12 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
+/**
+ * OQ-20 (2026-10-12): the emailed OTP exists only for password reset. There is no
+ * verification template to fall back to, so no code path can email a code that a
+ * caller might later present as proof of a verification that never happened.
+ */
 export type SecurityEmailTemplate =
-  | 'email_verification_otp'
   | 'password_reset'
   | 'security_notice';
 
@@ -23,8 +27,8 @@ export interface SecurityEmailMessage {
   readonly template: SecurityEmailTemplate;
   readonly correlationId: string;
   /**
-   * Present only for `email_verification_otp` and `password_reset`. It exists in
-   * process memory for this single submission; no adapter may persist it.
+   * Present only for `password_reset`. It exists in process memory for this single
+   * submission; no adapter may persist it.
    */
   readonly oneTimeSecret?: string;
 }

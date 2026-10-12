@@ -145,21 +145,16 @@ service password policy (at least 12 characters, at most 128, and not too common
 or too similar to the email address), and `409` codes are business rules such as a
 stale snapshot version.
 
-## 4. Completing the email flows locally
+## 4. Completing the password-reset email flow locally
 
-> **Specification note (2026-10-12, OQ-20).** The authentication specification no longer
-> verifies email at registration: registration is admitted by the invitation code and creates no
-> challenge and no email, and the emailed OTP is reserved for password reset, which must not
-> reveal whether an address exists. The implementation in this repository still issues a
-> registration OTP and still exposes `/api/v1/auth/verify-email` and
-> `/api/v1/auth/verification/resend`; this section describes that current behavior and will be
-> updated by the implementation change. See
-> [`docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md`](../evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md).
+**Registration sends no email.** An invited account is created usable and explicitly unverified, and
+signing in needs nothing but the password you chose — there is no verification screen and no
+verification route, because the specification no longer verifies email at registration (OQ-20,
+2026-10-12). The only message the product sends is the password-reset OTP.
 
-Registration issues a six-digit code and password recovery issues a reset secret.
-Neither is returned in an API response, and the default adapter (`none`) reports
-delivery failure, so a browser flow cannot be completed on the default settings —
-by design, because the design never persists a one-time secret.
+The OTP is never returned in an API response, and the default adapter (`none`) reports delivery
+failure, so a browser reset cannot be completed on the default settings — by design, because the
+design never persists a one-time secret.
 
 For local development only, `EMAIL_DELIVERY_ADAPTER=file` writes each message to
 `EMAIL_OUTBOX_DIR` as a `0600` JSON file, and the dev server exposes the newest
@@ -170,8 +165,11 @@ messages at `/__dev__/outbox` for the "Local email outbox" panel. This is:
   reveals a one-time code;
 - local state that must be treated as sensitive: delete the directory when done.
 
-Start `api:dev` and `web:dev` with the same `EMAIL_OUTBOX_DIR`, then register and
-press "Use code" in the panel.
+To walk the flow: start `api:dev` and `web:dev` with the same `EMAIL_OUTBOX_DIR`, provision an
+invitation (§5), register, sign in, press "Forgot password" → "Email me a reset code", then press
+"Use code" in the panel — it fills the six-digit field on the reset screen. The code is single-use,
+lives ten minutes, allows five attempts, is superseded by the next request, and the reset revokes
+every session of the account, so sign in again with the new password afterwards.
 
 ## 5. First sign-up needs an invitation
 

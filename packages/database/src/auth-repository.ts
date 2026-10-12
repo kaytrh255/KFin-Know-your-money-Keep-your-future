@@ -45,7 +45,9 @@ import { decoyVerification, hashPassword, verifyPassword } from './passwords.js'
  *   scopes are stored only as purpose-separated keyed digests;
  * - every unauthenticated outcome is generic, so a missing account, a used
  *   invitation, an expired code, and a wrong password are indistinguishable;
- * - account status and verified-email state are re-checked on every session use;
+ * - account status is re-checked on every session use, and email verification is
+ *   represented but never required: registration admits an account usable and
+ *   explicitly unverified, and the only emailed OTP is the reset OTP (OQ-20);
  * - multi-record transitions run in one transaction (SEC-APP-06).
  *
  * Candidate policy values come from the caller (`authPolicy` in `@kfin/config`).
@@ -74,10 +76,11 @@ export interface AuthAccessPolicy {
     readonly otpLifetimeMs: number;
     readonly maximumAttempts: number;
     readonly resendCooldownMs: number;
-    readonly resetSecretEntropyBytes: number;
-    readonly resetLifetimeMs: number;
     readonly hourlyIssuanceCap: number;
     readonly dailyIssuanceCap: number;
+    /** Cumulative failed-verification budget shared by an account's reset challenges (SEC-AUTH-20). */
+    readonly verifyCumulativeMaximum: number;
+    readonly verifyCumulativeWindowMs: number;
   };
   readonly session: {
     readonly tokenEntropyBytes: number;
@@ -90,13 +93,11 @@ export interface AuthAccessPolicy {
   readonly abuse: {
     readonly windowMs: number;
     readonly loginMaximumFailures: number;
-    readonly verificationMaximumAttempts: number;
     readonly resetMaximumRequests: number;
     readonly registrationMaximumPerWindow: number;
     readonly retentionWindows: number;
   };
 }
-
 export interface AccessRequestContext {
   readonly correlationId: string;
   readonly ipAddress?: string | null;
@@ -124,7 +125,6 @@ export interface IssuedSession {
 }
 
 export type AccountStatus =
-  | 'pending_verification'
   | 'active'
   | 'locked'
   | 'disabled'
@@ -173,47 +173,16 @@ export interface RegisterInput extends AccessRequestContext {
   readonly baseCurrency: string;
 }
 
-export interface VerificationDelivery {
-  readonly challengeId: string;
-  /** Plaintext OTP held only in request-process memory for immediate delivery. */
-  readonly oneTimeCode: string;
-  readonly expiresAt: string;
-}
-
 /**
  * Registration never reports whether the email already existed: an existing
  * address, a consumed invitation, and a fresh registration all return the same
- * `accepted` outcome (UF-AUTH-01, SEC-AUTH-04).
+ * `accepted` outcome (UF-AUTH-01, SEC-AUTH-04). It also has no delivery to report
+ * and no resend window: registration issues no challenge at all (OQ-20).
  */
 export interface RegisterResult {
   readonly accepted: true;
-  readonly issued: boolean;
-  readonly resendAvailableAt: string;
-  readonly delivery: VerificationDelivery | null;
   /** Null when the registration was not performed; never exposed by the API. */
   readonly userId: string | null;
-}
-
-export interface ResendVerificationInput extends AccessRequestContext {
-  readonly email: string;
-}
-
-export interface ResendVerificationResult {
-  readonly accepted: true;
-  readonly issued: boolean;
-  readonly resendAvailableAt: string;
-  readonly delivery: VerificationDelivery | null;
-}
-
-export interface VerifyEmailInput extends AccessRequestContext {
-  readonly email: string;
-  readonly oneTimeCode: string;
-}
-
-export interface VerifyEmailResult {
-  readonly userId: string;
-  readonly status: 'active';
-  readonly session: IssuedSession;
 }
 
 export interface LoginInput extends AccessRequestContext {
@@ -251,12 +220,13 @@ export interface RequestPasswordResetInput extends AccessRequestContext {
 export interface RequestPasswordResetResult {
   readonly accepted: true;
   readonly issued: boolean;
-  readonly delivery: { readonly challengeId: string; readonly resetSecret: string; readonly expiresAt: string } | null;
+  readonly delivery: { readonly challengeId: string; readonly oneTimeCode: string; readonly expiresAt: string } | null;
 }
 
 export interface ResetPasswordInput extends AccessRequestContext {
   readonly email: string;
-  readonly resetSecret: string;
+  /** The six-digit OTP delivered by mail, verified against the stored digest. */
+  readonly oneTimeCode: string;
   readonly newPassword: string;
 }
 
@@ -382,6 +352,15 @@ export class PostgresAuthRepository {
     return { invitationId, code, expiresAt: expiresAt.toISOString() };
   }
 
+  /**
+   * Registration admits an account on the invitation code alone (OQ-20, SEC-AUTH-18).
+   *
+   * The account is created usable — `status = 'active'` — while its email stays
+   * explicitly `unverified`. Registration issues no challenge and sends no email:
+   * the only emailed OTP in the product is the password-reset OTP, so registration
+   * cannot be used as a delivery oracle (SEC-AUTH-04) and no identifier exists that
+   * a later step could present as a verification that never happened (SEC-AUTH-19).
+   */
   async register(input: RegisterInput): Promise<RegisterResult> {
     const email = this.requireEmail(input.email);
     this.assertPassword(input.password, email);
@@ -424,12 +403,12 @@ export class PostgresAuthRepository {
       }
 
       const userId = randomUUID();
-      const resendAvailableAt = new Date(now + this.options.policy.challenge.resendCooldownMs).toISOString();
       try {
         await client.query(
           `INSERT INTO users (
-             id, email, email_normalized, display_name, locale, timezone, base_currency, status
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_verification')`,
+             id, email, email_normalized, display_name, locale, timezone, base_currency,
+             status, email_verification_state
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', 'unverified')`,
           [
             userId,
             email.email,
@@ -446,7 +425,7 @@ export class PostgresAuthRepository {
         // The invitation consumption is rolled back with the insert, so a
         // duplicate email leaves nothing behind and answers generically.
         await this.recordBlockedRegistration(client, input, now);
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null, userId: null };
+        return { accepted: true, userId: null };
       }
 
       const consumedAt = new Date(now);
@@ -469,14 +448,6 @@ export class PostgresAuthRepository {
         ],
       );
 
-      const delivery = await this.issueChallenge(client, {
-        userId,
-        purpose: 'email_verification',
-        target: email.emailNormalized,
-        context: input,
-        now,
-      });
-
       await this.recordEvent(client, {
         userId,
         eventType: 'registration_requested',
@@ -486,273 +457,9 @@ export class PostgresAuthRepository {
         occurredAt: new Date(now),
         metadata: { invitationId: invitationRow.id },
       });
-      await this.recordEvent(client, {
-        userId,
-        eventType: 'verification_challenge_issued',
-        outcome: 'success',
-        correlationId: input.correlationId,
-        context: input,
-        occurredAt: new Date(now),
-        metadata: { challengeId: delivery.challengeId, purpose: 'email_verification' },
-      });
 
       await client.query('COMMIT');
-      return { accepted: true, issued: true, resendAvailableAt, delivery, userId };
-    } catch (error) {
-      await this.safeRollback(client, error);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async resendVerification(input: ResendVerificationInput): Promise<ResendVerificationResult> {
-    const email = normalizeEmail(input.email);
-    const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
-    const now = this.now();
-    // Abuse evidence is recorded before the operation connection is taken:
-    // a nested checkout would make an exhausted pool wait on the very
-    // transactions that are waiting for it (SEC-ABUSE-08/09).
-    await this.registerAbuseAttempt('verification_target', target, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-      target,
-    });
-    await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-    });
-
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      const resendAvailableAt = new Date(now + this.options.policy.challenge.resendCooldownMs).toISOString();
-      if (!email) {
-        await this.recordEvent(client, {
-          userId: null,
-          eventType: 'verification_challenge_issued',
-          outcome: 'blocked',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          metadata: { reason: 'invalid_target' },
-        });
-        await client.query('COMMIT');
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null };
-      }
-
-      const user = await client.query<{ id: string; status: string; email_verified_at: Date | null }>(
-        `SELECT id, status, email_verified_at FROM users WHERE email_normalized = $1`,
-        [email.emailNormalized],
-      );
-      const userRow = user.rows[0];
-      if (!userRow || userRow.email_verified_at !== null || userRow.status === 'deletion_pending') {
-        await client.query('COMMIT');
-        // Unknown, already-verified, and unavailable accounts receive the same
-        // generic accepted response (SEC-AUTH-04).
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null };
-      }
-
-      const active = await client.query<ChallengeRow>(
-        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
-                consumed_at, superseded_at, attempt_count, max_attempts
-           FROM auth_challenges
-          WHERE user_id = $1 AND purpose = 'email_verification'
-            AND consumed_at IS NULL AND superseded_at IS NULL
-          ORDER BY issued_at DESC
-          LIMIT 1
-          FOR UPDATE`,
-        [userRow.id],
-      );
-      const activeRow = active.rows[0];
-      if (
-        activeRow
-        && activeRow.issued_at.getTime() + this.options.policy.challenge.resendCooldownMs > now
-      ) {
-        await client.query('COMMIT');
-        return {
-          accepted: true,
-          issued: false,
-          resendAvailableAt: new Date(
-            activeRow.issued_at.getTime() + this.options.policy.challenge.resendCooldownMs,
-          ).toISOString(),
-          delivery: null,
-        };
-      }
-      if (!(await this.withinIssuanceCap(client, userRow.id, now))) {
-        await client.query('COMMIT');
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null };
-      }
-
-      const delivery = await this.issueChallenge(client, {
-        userId: userRow.id,
-        purpose: 'email_verification',
-        target: email.emailNormalized,
-        context: input,
-        now,
-      });
-      await this.recordEvent(client, {
-        userId: userRow.id,
-        eventType: 'verification_challenge_issued',
-        outcome: 'success',
-        correlationId: input.correlationId,
-        context: input,
-        occurredAt: new Date(now),
-        metadata: { challengeId: delivery.challengeId, purpose: 'email_verification', resend: true },
-      });
-      await client.query('COMMIT');
-      return {
-        accepted: true,
-        issued: true,
-        resendAvailableAt: new Date(now + this.options.policy.challenge.resendCooldownMs).toISOString(),
-        delivery,
-      };
-    } catch (error) {
-      await this.safeRollback(client, error);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async verifyEmail(input: VerifyEmailInput): Promise<VerifyEmailResult> {
-    const email = this.requireEmail(input.email);
-    const now = this.now();
-    // Abuse evidence is recorded before the operation connection is taken:
-    // a nested checkout would make an exhausted pool wait on the very
-    // transactions that are waiting for it (SEC-ABUSE-08/09).
-    await this.registerAbuseAttempt('verification_target', email.emailNormalized, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-      target: email.emailNormalized,
-    });
-    await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-    });
-
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      const challengeResult = await client.query<ChallengeRow>(
-        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
-                consumed_at, superseded_at, attempt_count, max_attempts
-           FROM auth_challenges
-          WHERE purpose = 'email_verification'
-            AND target_digest = $1
-            AND consumed_at IS NULL
-            AND superseded_at IS NULL
-          ORDER BY issued_at DESC
-          LIMIT 1
-          FOR UPDATE`,
-        [this.digest('challenge-target:email_verification', email.emailNormalized)],
-      );
-      const challenge = challengeResult.rows[0];
-      if (!challenge) {
-        await this.recordFailureAndCommit(client, {
-          userId: null,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'no_active_challenge' },
-        });
-        throw invalidChallengeError();
-      }
-      if (challenge.expires_at.getTime() <= now) {
-        await client.query(
-          `UPDATE auth_challenges SET superseded_at = $2 WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`,
-          [challenge.id, new Date(now)],
-        );
-        await this.recordFailureAndCommit(client, {
-          userId: challenge.user_id,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'expired' },
-        });
-        throw expiredChallengeError();
-      }
-      if (challenge.attempt_count >= challenge.max_attempts) {
-        await this.recordFailureAndCommit(client, {
-          userId: challenge.user_id,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'attempts_exhausted' },
-        });
-        throw challengeAttemptsExhaustedError();
-      }
-
-      const presented = this.digest(
-        'challenge-secret:email_verification',
-        input.oneTimeCode.trim(),
-      );
-      if (!constantTimeBufferEqual(presented, challenge.secret_digest)) {
-        await client.query(
-          `UPDATE auth_challenges SET attempt_count = attempt_count + 1 WHERE id = $1`,
-          [challenge.id],
-        );
-        await this.recordFailureAndCommit(client, {
-          userId: challenge.user_id,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'mismatch', attemptCount: challenge.attempt_count + 1 },
-        });
-        throw invalidChallengeError();
-      }
-
-      const consumedAt = new Date(now);
-      await client.query(
-        `UPDATE auth_challenges SET consumed_at = $2 WHERE id = $1 AND consumed_at IS NULL`,
-        [challenge.id, consumedAt],
-      );
-
-      const userResult = await client.query<{ id: string; status: string; email_verified_at: Date | null }>(
-        `SELECT id, status, email_verified_at FROM users WHERE id = $1 FOR UPDATE`,
-        [challenge.user_id],
-      );
-      const user = userResult.rows[0];
-      if (!user) {
-        await this.rollback(client);
-        throw invalidChallengeError();
-      }
-      await client.query(
-        `UPDATE users
-            SET email_verified_at = $2,
-                status = CASE WHEN status = 'pending_verification' THEN 'active' ELSE status END,
-                updated_at = $2,
-                version = version + 1
-          WHERE id = $1`,
-        [user.id, consumedAt],
-      );
-
-      // SPEC-AUTH-01 candidate branch selected for this milestone: verification
-      // issues one fresh rotated session. No pre-authenticated identifier exists
-      // and none can be promoted (SEC-AUTH-10/16).
-      const session = await this.createSession(client, {
-        userId: user.id,
-        context: input,
-        now,
-      });
-      await this.recordEvent(client, {
-        userId: user.id,
-        eventType: 'email_verified',
-        outcome: 'success',
-        correlationId: input.correlationId,
-        context: input,
-        occurredAt: consumedAt,
-        sessionId: session.session.id,
-        metadata: { challengeId: challenge.id },
-      });
-      await client.query('COMMIT');
-      return { userId: user.id, status: 'active', session };
+      return { accepted: true, userId };
     } catch (error) {
       await this.safeRollback(client, error);
       throw error;
@@ -820,7 +527,12 @@ export class PostgresAuthRepository {
         throw invalidCredentialsError();
       }
 
-      if (user.status !== 'active' || user.email_verified_at === null) {
+      // OQ-20: a verified email is no longer a sign-in gate. Registration verifies
+      // nothing, so demanding verification would lock every beta account out of its
+      // own account. Account *status* remains a hard gate, and the refusal stays
+      // operator-only evidence rather than a self-service path: a locked, disabled,
+      // or deletion-pending account cannot be recovered by signing in (D4).
+      if (user.status !== 'active') {
         await this.recordFailureAndCommit(client, {
           userId: user.id,
           eventType: 'access_denied_unverified',
@@ -828,7 +540,7 @@ export class PostgresAuthRepository {
           context: input,
           occurredAt: new Date(now),
           target: email.emailNormalized,
-          metadata: { reason: 'account_unavailable' },
+          metadata: { reason: 'account_unavailable', accountStatus: user.status },
         });
         throw accountUnavailableError();
       }
@@ -905,7 +617,10 @@ export class PostgresAuthRepository {
       await this.expireSession(row.id, now);
       return null;
     }
-    if (row.user_status !== 'active' || row.email_verified_at === null) return null;
+    // OQ-20: verification state is not a session gate. Sessions are granted by
+    // sign-in, reused while the account is active, and dropped the moment the
+    // account leaves `active` (SEC-SES-04/05, SEC-AUTH-19).
+    if (row.user_status !== 'active') return null;
 
     if (now - row.last_seen_at.getTime() >= this.options.policy.session.lastSeenThrottleMs) {
       await this.pool.query(
@@ -1144,6 +859,16 @@ export class PostgresAuthRepository {
     });
   }
 
+  /**
+   * Issues the single-use password-reset OTP (OQ-20, SEC-AUTH-20).
+   *
+   * Eligibility is `status = 'active'` alone. If a verified email were required, an
+   * invited beta account that legitimately never verifies could never recover its
+   * own password; if a *missing* account were treated differently, this route would
+   * be an account-existence oracle. Unknown address, non-active account, cooldown,
+   * and issuance cap therefore all return the same `accepted` body with no
+   * challenge issued and no mail queued (SEC-AUTH-04, TM-03).
+   */
   async requestPasswordReset(input: RequestPasswordResetInput): Promise<RequestPasswordResetResult> {
     const email = normalizeEmail(input.email);
     const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
@@ -1167,19 +892,45 @@ export class PostgresAuthRepository {
         await client.query('COMMIT');
         return { accepted: true, issued: false, delivery: null };
       }
-      const userResult = await client.query<{ id: string; status: string; email_verified_at: Date | null }>(
-        `SELECT id, status, email_verified_at FROM users WHERE email_normalized = $1`,
+      const userResult = await client.query<{ id: string; status: string }>(
+        `SELECT id, status FROM users WHERE email_normalized = $1`,
         [email.emailNormalized],
       );
       const user = userResult.rows[0];
-      if (!user || user.status !== 'active' || user.email_verified_at === null) {
+      if (!user || user.status !== 'active') {
+        await client.query('COMMIT');
+        return { accepted: true, issued: false, delivery: null };
+      }
+
+      const active = await client.query<ChallengeRow>(
+        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
+                consumed_at, superseded_at, attempt_count, max_attempts
+           FROM auth_challenges
+          WHERE user_id = $1 AND purpose = 'password_reset'
+            AND consumed_at IS NULL AND superseded_at IS NULL
+          ORDER BY issued_at DESC
+          LIMIT 1
+          FOR UPDATE`,
+        [user.id],
+      );
+      const activeRow = active.rows[0];
+      if (
+        activeRow
+        && activeRow.issued_at.getTime() + this.options.policy.challenge.resendCooldownMs > now
+      ) {
+        // A live challenge inside the cooldown is not re-sent and not replaced;
+        // the caller cannot tell this apart from an unknown address.
+        await client.query('COMMIT');
+        return { accepted: true, issued: false, delivery: null };
+      }
+      if (!(await this.withinIssuanceCap(client, user.id, now))) {
         await client.query('COMMIT');
         return { accepted: true, issued: false, delivery: null };
       }
 
       const challengeId = randomUUID();
-      const resetSecret = generateUrlToken(this.options.policy.challenge.resetSecretEntropyBytes);
-      const expiresAt = new Date(now + this.options.policy.challenge.resetLifetimeMs);
+      const oneTimeCode = generateNumericOtp(this.options.policy.challenge.otpDigits);
+      const expiresAt = new Date(now + this.options.policy.challenge.otpLifetimeMs);
       await this.supersedeActiveChallenges(client, user.id, 'password_reset', now);
       await client.query(
         `INSERT INTO auth_challenges (
@@ -1190,7 +941,7 @@ export class PostgresAuthRepository {
           challengeId,
           user.id,
           this.digest('challenge-target:password_reset', email.emailNormalized),
-          this.digest('challenge-secret:password_reset', resetSecret),
+          this.digest('challenge-secret:password_reset', oneTimeCode),
           new Date(now),
           expiresAt,
           this.options.policy.challenge.maximumAttempts,
@@ -1211,7 +962,7 @@ export class PostgresAuthRepository {
       return {
         accepted: true,
         issued: true,
-        delivery: { challengeId, resetSecret, expiresAt: expiresAt.toISOString() },
+        delivery: { challengeId, oneTimeCode, expiresAt: expiresAt.toISOString() },
       };
     } catch (error) {
       await this.safeRollback(client, error);
@@ -1221,6 +972,17 @@ export class PostgresAuthRepository {
     }
   }
 
+  /**
+   * Consumes one reset OTP: verifies it, writes the new password hash, and revokes
+   * every session of the account (ADR-004, PRD-AUTH-07); it issues none.
+   *
+   * Order matters for security and for privacy. The cumulative failure budget is
+   * spent *before* any challenge is read, so an address with no account is
+   * throttled exactly like one with an account and the limit never becomes an
+   * existence oracle (SEC-AUTH-04, SEC-AUTH-20, TM-03). The budget is deliberately
+   * not refunded on success: "spend first, then look" is what keeps the two
+   * indistinguishable.
+   */
   async resetPassword(input: ResetPasswordInput): Promise<ResetPasswordResult> {
     const email = normalizeEmail(input.email);
     const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
@@ -1234,6 +996,15 @@ export class PostgresAuthRepository {
     });
     await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
+    });
+    // Cumulative budget: superseded challenges share one per-account counter, so
+    // requesting a new code cannot reset the attacker's attempts to zero
+    // (SEC-AUTH-20). Scope `verification_target` is the one this counter has always
+    // used in `auth_attempt_counters`; it is now the only writer of that scope.
+    await this.registerAbuseAttempt('verification_target', target, now, {
+      limit: this.options.policy.challenge.verifyCumulativeMaximum,
+      windowMs: this.options.policy.challenge.verifyCumulativeWindowMs,
+      target,
     });
 
     const client = await this.pool.connect();
@@ -1283,6 +1054,14 @@ export class PostgresAuthRepository {
         throw expiredChallengeError();
       }
       if (challenge.attempt_count >= challenge.max_attempts) {
+        // The per-challenge attempt cap and the cumulative budget are separate
+        // limits: this one retires *this* code, the budget retires the hour. A
+        // superseded challenge can never be revived, so the owner must request a
+        // fresh code — itself capped and cooled down (SEC-AUTH-20).
+        await client.query(
+          `UPDATE auth_challenges SET superseded_at = $2 WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`,
+          [challenge.id, new Date(now)],
+        );
         await this.recordFailureAndCommit(client, {
           userId: challenge.user_id,
           eventType: 'password_reset_failed',
@@ -1295,7 +1074,7 @@ export class PostgresAuthRepository {
         throw challengeAttemptsExhaustedError();
       }
 
-      const presented = this.digest('challenge-secret:password_reset', input.resetSecret.trim());
+      const presented = this.digest('challenge-secret:password_reset', input.oneTimeCode.trim());
       if (!constantTimeBufferEqual(presented, challenge.secret_digest)) {
         await client.query(`UPDATE auth_challenges SET attempt_count = attempt_count + 1 WHERE id = $1`, [
           challenge.id,
@@ -1509,40 +1288,6 @@ export class PostgresAuthRepository {
     return this.digest('ip-prefix', prefix);
   }
 
-  private async issueChallenge(
-    client: PoolClient,
-    input: {
-      readonly userId: string;
-      readonly purpose: 'email_verification';
-      readonly target: string;
-      readonly context: AccessRequestContext;
-      readonly now: number;
-    },
-  ): Promise<VerificationDelivery> {
-    await this.supersedeActiveChallenges(client, input.userId, input.purpose, input.now);
-    const challengeId = randomUUID();
-    const oneTimeCode = generateNumericOtp(this.options.policy.challenge.otpDigits);
-    const expiresAt = new Date(input.now + this.options.policy.challenge.otpLifetimeMs);
-    await client.query(
-      `INSERT INTO auth_challenges (
-         id, user_id, purpose, target_digest, secret_digest, issued_at, expires_at,
-         max_attempts, request_context_digest, correlation_id, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $6)`,
-      [
-        challengeId,
-        input.userId,
-        input.purpose,
-        this.digest(`challenge-target:${input.purpose}`, input.target),
-        this.digest(`challenge-secret:${input.purpose}`, oneTimeCode),
-        new Date(input.now),
-        expiresAt,
-        this.options.policy.challenge.maximumAttempts,
-        this.contextDigest(input.context),
-        input.context.correlationId,
-      ],
-    );
-    return { challengeId, oneTimeCode, expiresAt: expiresAt.toISOString() };
-  }
 
   private async supersedeActiveChallenges(
     client: PoolClient,
@@ -1570,7 +1315,7 @@ export class PostgresAuthRepository {
       `SELECT COUNT(*) FILTER (WHERE issued_at > $2) AS hourly,
               COUNT(*) FILTER (WHERE issued_at > $3) AS daily
          FROM auth_challenges
-        WHERE user_id = $1 AND purpose = 'email_verification'`,
+        WHERE user_id = $1 AND purpose = 'password_reset'`,
       [
         userId,
         new Date(now - 60 * 60 * 1_000),
@@ -1942,14 +1687,15 @@ export class PostgresAuthRepository {
     scopeKind: AbuseScopeKind,
     scopeValue: string | null | undefined,
     now: number,
-    options: { readonly limit: number; readonly target?: string },
+    options: { readonly limit: number; readonly target?: string; readonly windowMs?: number },
   ): Promise<void> {
     if (!scopeValue) return;
     const scopeDigest = scopeKind.endsWith('_ip')
       ? this.ipPrefixDigest(scopeValue)
       : this.digest(`abuse:${scopeKind}`, options.target ?? scopeValue);
     if (!scopeDigest) return;
-    const windowStart = new Date(abuseWindowStart(now, this.options.policy.abuse.windowMs));
+    const windowMs = options.windowMs ?? this.options.policy.abuse.windowMs;
+    const windowStart = new Date(abuseWindowStart(now, windowMs));
     const instant = new Date(now);
     const client = await this.pool.connect();
     try {
@@ -1965,7 +1711,7 @@ export class PostgresAuthRepository {
       if (count > options.limit) {
         const retryAfterSeconds = Math.max(
           1,
-          Math.ceil((windowStart.getTime() + this.options.policy.abuse.windowMs - now) / 1_000),
+          Math.ceil((windowStart.getTime() + windowMs - now) / 1_000),
         );
         throw rateLimitedError(retryAfterSeconds);
       }

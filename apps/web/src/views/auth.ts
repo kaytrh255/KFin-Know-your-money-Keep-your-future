@@ -1,9 +1,13 @@
 /**
  * AUTH-01…AUTH-05 from `docs/ux/SCREEN-INVENTORY.md`, implemented as far as the
- * API actually goes: sign in, accept-invite registration, email verification,
- * password recovery, and the session screen. Nothing here invents an email
- * allowlist, a password-strength meter, or a "resend" that lies about the
- * resend window — the window comes from the API's own `resendAvailableAt`.
+ * API actually goes: sign in, accept-invite registration, password recovery with
+ * the emailed one-time code, and the session screen. Nothing here invents an email
+ * allowlist or a password-strength meter.
+ *
+ * OQ-20 (2026-10-12): registration no longer verifies an email and the emailed OTP
+ * exists only for password reset, so there is no verification screen to offer. An
+ * account may stay permanently unverified by design; the session screen says so
+ * plainly instead of implying a verification step that does not exist.
  */
 
 import type { Api, ApiFailure } from '../api.js';
@@ -104,9 +108,13 @@ export function registerView(context: AuthViewContext): HTMLElement {
     result.replaceChildren(wire('request', body), el('p', { class: 'hint', text: 'Submitting…' }));
     void context.api.auth.register(body)
       .then((response) => {
-        result.replaceChildren(wire('response', response.data));
+        result.replaceChildren(
+          notice('ok', 'Registration accepted. The account is ready to use — sign in with the email and password you just chose.'),
+          wire('response', response.data),
+          el('p', { class: 'hint', text: 'No verification email is sent and none is required: the emailed one-time code exists only for password reset.' }),
+        );
         toast('Registration accepted');
-        context.navigate(`#/verify-email?email=${encodeURIComponent(body.email)}`);
+        context.navigate('#/sign-in');
       })
       .catch((error: unknown) => { result.replaceChildren(wire('request', body), failureNotice(error)); });
   });
@@ -114,66 +122,10 @@ export function registerView(context: AuthViewContext): HTMLElement {
   return el('div', { class: 'stack' }, card('Accept invite and register (AUTH-02)', form, result));
 }
 
-export function verifyEmailView(context: AuthViewContext, email: string): HTMLElement {
-  const form = el('form', { class: 'stack' },
-    field({ label: 'Email', name: 'email', type: 'email', required: true, value: email }),
-    field({ label: 'Six-digit code from the email', name: 'oneTimeCode', required: true, placeholder: '000000', min: '000000', max: '999999' }),
-    el('div', { class: 'actions' },
-      el('button', { class: 'button', type: 'submit', text: 'Verify email' }),
-      el('button', { class: 'button secondary', type: 'button', text: 'Resend code', on: { click: () => { void resend(); } } }),
-    ),
-  );
-  const result = el('div', { class: 'result' });
-
-  async function resend(): Promise<void> {
-    const target = readInput(form, 'email');
-    result.replaceChildren(el('p', { class: 'hint', text: 'Requesting a new code…' }));
-    try {
-      const response = await context.api.auth.resendVerification({ email: target });
-      result.replaceChildren(
-        notice('ok', 'The API accepted the resend request.'),
-        el('p', { class: 'hint', text: `Next resend allowed at ${response.data.resendAvailableAt}` }),
-        wire('response', response.data),
-      );
-    } catch (error) {
-      result.replaceChildren(failureNotice(error));
-    }
-  }
-
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const body = { email: readInput(form, 'email'), oneTimeCode: readInput(form, 'oneTimeCode') };
-    result.replaceChildren(wire('request', body));
-    void context.api.auth.verifyEmail(body)
-      .then(async (response) => {
-        result.replaceChildren(notice('ok', 'Email verified; a session was issued.'), wire('response', response.data));
-        await context.refreshSession();
-        toast('Email verified');
-        context.navigate('#/money');
-      })
-      .catch((error: unknown) => {
-        const code = (error as ApiFailure)?.code ?? '';
-        const extra = code.startsWith('AUTH_') && code.includes('CHALLENGE')
-          ? [el('p', { class: 'hint', text: 'Attempt counts and expiry are enforced server-side; the exact rule is in the API response above, not in this client.' })]
-          : [];
-        result.replaceChildren(wire('request', body), failureNotice(error), ...extra);
-      });
-  });
-
-  return el('div', { class: 'stack' },
-    card('Verify email (AUTH-03)', form, result),
-    el('p', { class: 'hint' },
-      'No code yet? With EMAIL_DELIVERY_ADAPTER=file the adapter writes the message to the local outbox — open the ',
-      el('em', { text: 'Local email outbox' }),
-      ' panel in the corner of this page. That panel is the dev server reading a directory on your machine; the API itself has no route that exposes a one-time code.',
-    ),
-  );
-}
-
 export function forgotPasswordView(context: AuthViewContext): HTMLElement {
   const form = el('form', { class: 'stack' },
     field({ label: 'Email', name: 'email', type: 'email', required: true }),
-    el('div', { class: 'actions' }, el('button', { class: 'button', type: 'submit', text: 'Request recovery' })),
+    el('div', { class: 'actions' }, el('button', { class: 'button', type: 'submit', text: 'Email me a reset code' })),
   );
   const result = el('div', { class: 'result' });
 
@@ -190,7 +142,7 @@ export function forgotPasswordView(context: AuthViewContext): HTMLElement {
             el('button', {
               class: 'button',
               type: 'button',
-              text: 'I have a recovery secret',
+              text: 'I have the six-digit code',
               on: { click: () => context.navigate(`#/reset?email=${encodeURIComponent(email)}`) },
             }),
           ),
@@ -205,7 +157,7 @@ export function forgotPasswordView(context: AuthViewContext): HTMLElement {
 export function resetPasswordView(context: AuthViewContext, email: string): HTMLElement {
   const form = el('form', { class: 'stack' },
     field({ label: 'Email', name: 'email', type: 'email', required: true, value: email }),
-    field({ label: 'Recovery secret', name: 'resetSecret', required: true, hint: 'From the outbox message; the API never returns it in a response body.' }),
+    field({ label: 'Six-digit code from the email', name: 'oneTimeCode', required: true, placeholder: '000000', min: '000000', max: '999999', hint: 'Ten minutes to live, five attempts, and superseded by the next request. The API never returns it in a response body.' }),
     field({ label: 'New password', name: 'newPassword', type: 'password', required: true }),
     el('div', { class: 'actions' },
       el('button', { class: 'button', type: 'submit', text: 'Set new password' }),
@@ -218,7 +170,7 @@ export function resetPasswordView(context: AuthViewContext, email: string): HTML
     event.preventDefault();
     const body = {
       email: readInput(form, 'email'),
-      resetSecret: readInput(form, 'resetSecret'),
+      oneTimeCode: readInput(form, 'oneTimeCode'),
       newPassword: readInput(form, 'newPassword'),
     };
     result.replaceChildren(el('p', { class: 'hint', text: 'Submitting…' }));
@@ -238,7 +190,13 @@ export function resetPasswordView(context: AuthViewContext, email: string): HTML
 
 export function sessionView(
   context: AuthViewContext,
-  state: { readonly userId: string; readonly email: string; readonly displayName: string | null; readonly baseCurrency: string },
+  state: {
+    readonly userId: string;
+    readonly email: string;
+    readonly displayName: string | null;
+    readonly baseCurrency: string;
+    readonly emailVerifiedAt: string | null;
+  },
 ): HTMLElement {
   const output = el('div', { class: 'result' });
   const changeForm = el('form', { class: 'stack' },
@@ -302,6 +260,12 @@ export function sessionView(
         el('dt', { text: 'Email' }), el('dd', { text: state.email }),
         el('dt', { text: 'Display name' }), el('dd', { text: state.displayName ?? '—' }),
         el('dt', { text: 'Base currency' }), el('dd', { text: state.baseCurrency }),
+        el('dt', { text: 'Email verification' }),
+        el('dd', {
+          text: state.emailVerifiedAt === null
+            ? 'Not verified — no verification email is sent in this beta, and none is required to use the account.'
+            : `Verified at ${state.emailVerifiedAt}`,
+        }),
         el('dt', { text: 'Checked at' }), el('dd', { text: instantNow() }),
       ),
       actions, output),

@@ -313,7 +313,7 @@ describe('local testing client dev server', () => {
     const directory = await outboxDirectory();
     await writeFile(
       path.join(directory, '1000-aaaa.json'),
-      JSON.stringify({ to: 'beta.user@example.invalid', template: 'email_verification_otp', correlationId: 'c1', oneTimeSecret: '123456', recordedAt: '2026-10-12T00:00:00.000Z' }),
+      JSON.stringify({ to: 'beta.user@example.invalid', template: 'password_reset', correlationId: 'c1', oneTimeSecret: '123456', recordedAt: '2026-10-12T00:00:00.000Z' }),
       'utf8',
     );
     await writeFile(path.join(directory, 'not-json.json'), '{ this file is torn', 'utf8');
@@ -326,7 +326,7 @@ describe('local testing client dev server', () => {
     const payload = await response.json() as { items: Array<{ name: string; oneTimeSecret: string | null; template: string | null }> };
     expect(payload.items.map((item) => item.name).sort()).toEqual(['1000-aaaa.json', 'not-json.json']);
     const real = payload.items.find((item) => item.name === '1000-aaaa.json');
-    expect(real).toMatchObject({ oneTimeSecret: '123456', template: 'email_verification_otp' });
+    expect(real).toMatchObject({ oneTimeSecret: '123456', template: 'password_reset' });
     // A torn file yields a placeholder rather than hiding the readable message.
     expect(payload.items.find((item) => item.name === 'not-json.json')?.oneTimeSecret).toBeNull();
 

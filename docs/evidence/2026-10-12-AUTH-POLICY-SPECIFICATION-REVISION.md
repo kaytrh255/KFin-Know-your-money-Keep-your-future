@@ -106,6 +106,28 @@ Required follow-up, in its own task: the implementation change, its migration, i
 change, and its tests. This revision does not authorize it, and no environment may begin
 presenting an unverified address as verified in the meantime.
 
+## 5.2 Closure: the follow-up implementation landed (2026-10-12, Milestone 11)
+
+The §5 gap was closed by its own task on branch `arena/bfaf5019-…`, recorded in
+[`docs/implementation/MILESTONE-11-OTP-RESET-ONLY.md`](../implementation/MILESTONE-11-OTP-RESET-ONLY.md).
+Point by point:
+
+| §5 gap | Closed by |
+|---|---|
+| registration still issued an OTP challenge and sent the code | registration issues no challenge and sends nothing; the API route answers `202 {"accepted":true}` |
+| `/auth/verify-email` and `/auth/verification/resend` still existed and were published | both routes and their schemas are deleted; both answer `404` |
+| registration still left the account `pending_verification` | migration 0007 retires the status, converts those accounts to `active`, and adds the explicit `email_verification_state`; login and session resolution gate on `status='active'` alone |
+| the required data migration in `DATABASE` §16.1 had not been written | `0007_otp_only_for_password_reset.sql`, rehearsed against seeded legacy data and pinned by checksum in `migration-contract.test.ts` |
+| the revised reset-OTP bounds were not implemented or tested | six-digit OTP, 10-minute expiry, five attempts, 60-second cooldown, cumulative 10-per-hour budget, 3/6 issuance caps, single-use consumption, and the four byte-identical request outcomes — all covered by the AUTH-RST suite |
+
+Two things stayed open on purpose and are unchanged by this closure: `SPEC-AUTH-01` and
+`SPEC-AUTH-02` remain unratified owner decisions, and nothing was merged or deployed. One consequence
+the revision did not enumerate was found during implementation — three write guards in
+`identity.ts` and `savings-repository.ts` also required `email_verified_at`, which the revised
+`DATABASE.md` text ("email verification gates nothing") settles; it is recorded in the Milestone 11
+record §4. This file's §5.1 pinning is untouched: no authoritative document was edited by the
+implementation, so no digest moved.
+
 ## 5.1 The authoritative-document pin had to be re-pointed, and why that is not a weakened check
 
 The SPEC-FIN-02 evidence harness verifies that five authoritative documents are the exact

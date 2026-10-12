@@ -6,8 +6,8 @@ import {
   keyedDigest,
   migrateDatabase,
   type AuthAccessPolicy,
+  type LoginResult,
   type RegisterResult,
-  type VerificationDelivery,
 } from '../src/index.js';
 
 /**
@@ -39,10 +39,10 @@ const BASE_POLICY: AuthAccessPolicy = {
     otpLifetimeMs: 10 * 60 * 1_000,
     maximumAttempts: 5,
     resendCooldownMs: 60 * 1_000,
-    resetSecretEntropyBytes: 32,
-    resetLifetimeMs: 30 * 60 * 1_000,
-    hourlyIssuanceCap: 5,
-    dailyIssuanceCap: 12,
+    hourlyIssuanceCap: 3,
+    dailyIssuanceCap: 6,
+    verifyCumulativeMaximum: 10,
+    verifyCumulativeWindowMs: 60 * 60 * 1_000,
   },
   session: {
     tokenEntropyBytes: 32,
@@ -55,7 +55,6 @@ const BASE_POLICY: AuthAccessPolicy = {
   abuse: {
     windowMs: 15 * 60 * 1_000,
     loginMaximumFailures: 10,
-    verificationMaximumAttempts: 20,
     resetMaximumRequests: 10,
     registrationMaximumPerWindow: 20,
     retentionWindows: 8,
@@ -138,7 +137,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     code: string,
     email = `beta-${randomUUID()}@example.invalid`,
     network = 100,
-  ): Promise<RegisterResult & { userId: string; delivery: VerificationDelivery }> {
+  ): Promise<RegisterResult & { userId: string }> {
     const result = await repo.register({
       email,
       password: 'correct horse battery staple',
@@ -148,50 +147,89 @@ integration('trusted private beta access on real PostgreSQL', () => {
       ipAddress: source(network),
       userAgent: AGENT,
     });
-    if (!result.userId || !result.delivery) {
-      throw new Error('access fixture: registration was not issued for a fresh address');
+    if (!result.userId) {
+      throw new Error('access fixture: registration was not performed for a fresh address');
     }
-    return result as RegisterResult & { userId: string; delivery: VerificationDelivery };
+    return result as RegisterResult & { userId: string };
   }
 
-  it('registers with an invitation, verifies, and authenticates a session', async () => {
+  /**
+   * The session fixture. Registration no longer proves an email address and issues
+   * no session (OQ-20), so every scenario that needs an authenticated principal
+   * signs in with the password it just registered.
+   */
+  async function signIn(
+    repo: PostgresAuthRepository,
+    email: string,
+    network = 100,
+    password = 'correct horse battery staple',
+  ): Promise<LoginResult> {
+    return repo.login({
+      email,
+      password,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+      userAgent: AGENT,
+    });
+  }
+
+  it('registers a usable but explicitly unverified account and signs in without any code', async () => {
     const network = 11;
     const repo = repository();
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    expect(registered.issued).toBe(true);
-    expect(registered.delivery.oneTimeCode).toMatch(/^[0-9]{6}$/);
 
-    const pending = await database.query<{ status: string; email_verified_at: Date | null }>(
-      `SELECT status, email_verified_at FROM users WHERE id = $1`,
+    // Registration created the account in its finished state: usable, and honest
+    // about an address nobody has proved yet (OQ-20, SEC-AUTH-18/19).
+    const created = await database.query<{
+      status: string; email_verification_state: string; email_verified_at: Date | null;
+    }>(
+      `SELECT status, email_verification_state, email_verified_at FROM users WHERE id = $1`,
       [registered.userId],
     );
-    expect(pending.rows[0]).toMatchObject({ status: 'pending_verification', email_verified_at: null });
-
-    const verified = await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-      userAgent: AGENT,
+    expect(created.rows[0]).toMatchObject({
+      status: 'active',
+      email_verification_state: 'unverified',
+      email_verified_at: null,
     });
-    expect(verified.status).toBe('active');
 
-    const principal = await repo.authenticate(verified.session.sessionToken);
+    // No challenge was issued and no code exists to be verified: the only challenge
+    // purpose that can be inserted is `password_reset` (asserted below).
+    const challenges = await database.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM auth_challenges WHERE user_id = $1`,
+      [registered.userId],
+    );
+    expect(challenges.rows[0]?.count).toBe('0');
+
+    // No session is issued by registration, and none can be promoted from one.
+    const beforeSignIn = await database.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM sessions WHERE user_id = $1`,
+      [registered.userId],
+    );
+    expect(beforeSignIn.rows[0]?.count).toBe('0');
+
+    const signedIn = await signIn(repo, email, network);
+    const principal = await repo.authenticate(signedIn.session.sessionToken);
     expect(principal?.userId).toBe(registered.userId);
-    expect(principal?.sessionId).toBe(verified.session.session.id);
-    expect(repo.verifyCsrfToken(verified.session.csrfToken, principal!.csrfDigest)).toBe(true);
+    expect(principal?.sessionId).toBe(signedIn.session.session.id);
+    expect(repo.verifyCsrfToken(signedIn.session.csrfToken, principal!.csrfDigest)).toBe(true);
     expect(repo.verifyCsrfToken('another-value', principal!.csrfDigest)).toBe(false);
 
-    const active = await database.query<{ status: string }>(
-      `SELECT status FROM users WHERE id = $1`,
+    // Signing in does not verify anything either.
+    const afterSignIn = await database.query<{ email_verification_state: string; email_verified_at: Date | null }>(
+      `SELECT email_verification_state, email_verified_at FROM users WHERE id = $1`,
       [registered.userId],
     );
-    expect(active.rows[0]?.status).toBe('active');
+    expect(afterSignIn.rows[0]).toMatchObject({ email_verification_state: 'unverified', email_verified_at: null });
 
     const profileView = await repo.getProfile(registered.userId);
-    expect(profileView).toMatchObject({ email, status: 'active', baseCurrency: 'VND' });
+    expect(profileView).toMatchObject({
+      email,
+      status: 'active',
+      emailVerifiedAt: null,
+      baseCurrency: 'VND',
+    });
   });
 
   it('consumes one invitation exactly once, including under parallel registration', async () => {
@@ -251,19 +289,36 @@ integration('trusted private beta access on real PostgreSQL', () => {
     )).toBe(true);
     expect(stored.rows[0]?.code_digest.toString('utf8')).not.toContain(invitation.code);
 
-    const challenge = await database.query<{ secret_digest: Buffer; target_digest: Buffer }>(
-      `SELECT secret_digest, target_digest FROM auth_challenges WHERE id = $1`,
-      [registered.delivery.challengeId],
+    const requested = await repo.requestPasswordReset({
+      email,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    expect(requested.delivery?.oneTimeCode).toMatch(/^[0-9]{6}$/);
+
+    const challenge = await database.query<{
+      purpose: string; secret_digest: Buffer; target_digest: Buffer;
+    }>(
+      `SELECT purpose, secret_digest, target_digest FROM auth_challenges WHERE id = $1`,
+      [requested.delivery!.challengeId],
     );
+    expect(challenge.rows[0]?.purpose).toBe('password_reset');
     expect(challenge.rows[0]?.secret_digest.equals(
-      keyedDigest(SECRET, 'challenge-secret:email_verification', registered.delivery.oneTimeCode),
+      keyedDigest(SECRET, 'challenge-secret:password_reset', requested.delivery!.oneTimeCode),
     )).toBe(true);
     expect(challenge.rows[0]?.target_digest.equals(
-      keyedDigest(SECRET, 'challenge-target:email_verification', email.toLowerCase()),
+      keyedDigest(SECRET, 'challenge-target:password_reset', email.toLowerCase()),
     )).toBe(true);
     expect(challenge.rows[0]?.secret_digest.equals(
-      keyedDigest(SECRET, 'challenge-secret:email_verification', '000000'),
+      keyedDigest(SECRET, 'challenge-secret:password_reset', '000000'),
     )).toBe(false);
+    expect(challenge.rows[0]?.secret_digest.equals(
+      keyedDigest(SECRET, 'challenge-secret:email_verification', requested.delivery!.oneTimeCode),
+    )).toBe(false);
+    // The six digits exist only in request-process memory, never in a column.
+    expect(challenge.rows[0]?.secret_digest.toString('utf8')).not.toContain(
+      requested.delivery!.oneTimeCode,
+    );
 
     const credential = await database.query<{ password_hash: string }>(
       `SELECT password_hash FROM password_credentials WHERE user_id = $1`,
@@ -273,99 +328,356 @@ integration('trusted private beta access on real PostgreSQL', () => {
     expect(credential.rows[0]?.password_hash).not.toContain('correct horse battery staple');
   });
 
-  it('rejects a used OTP, expires an old challenge, and limits attempts generically', async () => {
-    const network = 15;
+  it('issues a six-digit, single-use reset OTP and refuses every later use of it', async () => {
+    const network = 40;
     const repo = repository();
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    const code = registered.delivery.oneTimeCode;
 
-    const verified = await repo.verifyEmail({
+    const requested = await repo.requestPasswordReset({
       email,
-      oneTimeCode: code,
       correlationId: randomUUID(),
       ipAddress: source(network),
     });
-    expect(verified.status).toBe('active');
+    expect(requested.issued).toBe(true);
+    expect(requested.delivery?.oneTimeCode).toMatch(/^[0-9]{6}$/);
 
-    await expect(repo.verifyEmail({
+    const stored = await database.query<{
+      purpose: string; issued_at: Date; expires_at: Date; max_attempts: number; attempt_count: number;
+    }>(
+      `SELECT purpose, issued_at, expires_at, max_attempts, attempt_count
+         FROM auth_challenges WHERE id = $1`,
+      [requested.delivery!.challengeId],
+    );
+    expect(stored.rows[0]).toMatchObject({ purpose: 'password_reset', attempt_count: 0 });
+    // Ten minutes, five attempts, and no URL-token lifetime to speak of: the reset
+    // challenge is an OTP challenge, not a bearer link.
+    expect(stored.rows[0]!.expires_at.getTime() - stored.rows[0]!.issued_at.getTime())
+      .toBe(BASE_POLICY.challenge.otpLifetimeMs);
+    expect(stored.rows[0]!.max_attempts).toBe(BASE_POLICY.challenge.maximumAttempts);
+
+    const reset = await repo.resetPassword({
       email,
-      oneTimeCode: code,
+      oneTimeCode: requested.delivery!.oneTimeCode,
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    expect(reset.userId).toBe(registered.userId);
+
+    const consumed = await database.query<{ consumed_at: Date | null }>(
+      `SELECT consumed_at FROM auth_challenges WHERE id = $1`,
+      [requested.delivery!.challengeId],
+    );
+    expect(consumed.rows[0]?.consumed_at).not.toBeNull();
+
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: requested.delivery!.oneTimeCode,
+      newPassword: 'reset-passphrase-value-2',
       correlationId: randomUUID(),
       ipAddress: source(network),
     })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
 
-    const wrongInvitation = await invite();
-    const wrongEmail = `beta-${randomUUID()}@example.invalid`;
-    const wrongRegistered = await register(repo, wrongInvitation.code, wrongEmail, network);
+    // The OTP was the only way to prove the address, and only after a reset did any
+    // verification state change — the reset itself does not claim verification.
+    const user = await database.query<{ email_verification_state: string; email_verified_at: Date | null }>(
+      `SELECT email_verification_state, email_verified_at FROM users WHERE id = $1`,
+      [registered.userId],
+    );
+    expect(user.rows[0]).toMatchObject({ email_verification_state: 'unverified', email_verified_at: null });
+  });
+
+  it('expires an unused reset OTP, retires it, and answers generically', async () => {
+    const network = 41;
+    const repo = repository();
+    const invitation = await invite();
+    const email = `beta-${randomUUID()}@example.invalid`;
+    await register(repo, invitation.code, email, network);
+
+    const requested = await repo.requestPasswordReset({
+      email,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    clock += BASE_POLICY.challenge.otpLifetimeMs + 1;
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: requested.delivery!.oneTimeCode,
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_EXPIRED' });
+    clock -= BASE_POLICY.challenge.otpLifetimeMs + 1;
+
+    // An expired challenge is superseded, so the same code can never be spent twice.
+    const retired = await database.query<{ superseded_at: Date | null }>(
+      `SELECT superseded_at FROM auth_challenges WHERE id = $1`,
+      [requested.delivery!.challengeId],
+    );
+    expect(retired.rows[0]?.superseded_at).not.toBeNull();
+  });
+
+  it('ends a reset OTP after five wrong attempts and requires a fresh one', async () => {
+    const network = 42;
+    const repo = repository();
+    const invitation = await invite();
+    const email = `beta-${randomUUID()}@example.invalid`;
+    await register(repo, invitation.code, email, network);
+
+    const requested = await repo.requestPasswordReset({
+      email,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    const wrong = requested.delivery!.oneTimeCode === '000000' ? '111111' : '000000';
     for (let attempt = 0; attempt < BASE_POLICY.challenge.maximumAttempts; attempt += 1) {
-      await expect(repo.verifyEmail({
-        email: wrongEmail,
-        oneTimeCode: '000000',
+      await expect(repo.resetPassword({
+        email,
+        oneTimeCode: wrong,
+        newPassword: 'reset-passphrase-value-1',
         correlationId: randomUUID(),
         ipAddress: source(network),
       })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
     }
-    await expect(repo.verifyEmail({
-      email: wrongEmail,
-      oneTimeCode: '000000',
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: wrong,
+      newPassword: 'reset-passphrase-value-1',
       correlationId: randomUUID(),
       ipAddress: source(network),
     })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_ATTEMPTS_EXHAUSTED' });
-    expect(wrongRegistered.delivery?.oneTimeCode).toBeTruthy();
 
-    const expiring = repository({ challenge: { otpLifetimeMs: 1 } });
-    const expiringInvitation = await invite();
-    const expiringEmail = `beta-${randomUUID()}@example.invalid`;
-    const expiringRegistered = await register(expiring, expiringInvitation.code, expiringEmail, network);
-    clock += 5;
-    await expect(expiring.verifyEmail({
-      email: expiringEmail,
-      oneTimeCode: expiringRegistered.delivery!.oneTimeCode,
+    const exhausted = await database.query<{ attempt_count: number; superseded_at: Date | null }>(
+      `SELECT attempt_count, superseded_at FROM auth_challenges WHERE id = $1`,
+      [requested.delivery!.challengeId],
+    );
+    expect(exhausted.rows[0]?.attempt_count).toBe(BASE_POLICY.challenge.maximumAttempts);
+    expect(exhausted.rows[0]?.superseded_at).not.toBeNull();
+
+    // The owner can still recover, with a new code and a fresh attempt allowance.
+    clock += BASE_POLICY.challenge.resendCooldownMs + 1;
+    const reissued = await repo.requestPasswordReset({
+      email,
       correlationId: randomUUID(),
       ipAddress: source(network),
-    })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_EXPIRED' });
-    clock -= 5;
+    });
+    expect(reissued.issued).toBe(true);
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: reissued.delivery!.oneTimeCode,
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    })).resolves.toMatchObject({ sessionsRevoked: 0 });
   });
 
-  it('supersedes a resent code so only the newest challenge is usable', async () => {
-    const network = 16;
+  it('counts wrong reset codes cumulatively across superseded challenges', async () => {
+    const network = 43;
+    const budget = 3;
+    const repo = repository({
+      challenge: { verifyCumulativeMaximum: budget, verifyCumulativeWindowMs: 60 * 60 * 1_000 },
+    });
+    const invitation = await invite();
+    const email = `beta-${randomUUID()}@example.invalid`;
+    await register(repo, invitation.code, email, network);
+
+    const wrong = (code: string) => (code === '000000' ? '111111' : '000000');
+    const first = await repo.requestPasswordReset({
+      email,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: wrong(first.delivery!.oneTimeCode),
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
+
+    // A resend must not restore the attacker's attempts: the second code is valid,
+    // but the budget is spent and the answer is a rate limit, not a challenge error.
+    clock += BASE_POLICY.challenge.resendCooldownMs + 1;
+    const second = await repo.requestPasswordReset({
+      email,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    expect(second.issued).toBe(true);
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: wrong(second.delivery!.oneTimeCode),
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: wrong(second.delivery!.oneTimeCode),
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
+
+    const rateLimited = await repo.resetPassword({
+      email,
+      oneTimeCode: second.delivery!.oneTimeCode,
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    }).catch((error: { code: string; retryAfterSeconds?: number }) => error);
+    expect(rateLimited).toMatchObject({ code: 'AUTH_RATE_LIMITED' });
+
+    // The budget is windowed, not permanent: an hour later recovery works again.
+    clock += 60 * 60 * 1_000 + 1;
+    const recovered = await repo.requestPasswordReset({
+      email,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    });
+    expect(recovered.issued).toBe(true);
+    await expect(repo.resetPassword({
+      email,
+      oneTimeCode: recovered.delivery!.oneTimeCode,
+      newPassword: 'reset-passphrase-value-1',
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+    })).resolves.toMatchObject({ sessionsRevoked: 0 });
+  });
+
+  it('stops issuing reset codes at three per hour and six per day', async () => {
+    const network = 44;
     const repo = repository();
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
 
-    const withinCooldown = await repo.resendVerification({
+    const request = () => repo.requestPasswordReset({
       email,
       correlationId: randomUUID(),
       ipAddress: source(network),
     });
-    expect(withinCooldown).toMatchObject({ accepted: true, issued: false });
+    const issuedWithin = async (count: number): Promise<void> => {
+      for (let index = 0; index < count; index += 1) {
+        clock += BASE_POLICY.challenge.resendCooldownMs + 1;
+        const outcome = await request();
+        expect(outcome.issued).toBe(true);
+        await database.query(
+          `UPDATE auth_challenges SET superseded_at = COALESCE(superseded_at, now())
+             WHERE id = $1`,
+          [outcome.delivery!.challengeId],
+        );
+      }
+    };
 
+    // Hourly cap: the third code is issued, the fourth request inside the same hour
+    // is accepted but silently issues nothing.
+    await issuedWithin(BASE_POLICY.challenge.hourlyIssuanceCap);
     clock += BASE_POLICY.challenge.resendCooldownMs + 1;
-    const resent = await repo.resendVerification({
+    expect((await request()).issued).toBe(false);
+
+    // Daily cap: the next hour reopens the hourly window, the daily ceiling holds.
+    clock += 60 * 60 * 1_000;
+    await issuedWithin(BASE_POLICY.challenge.dailyIssuanceCap - BASE_POLICY.challenge.hourlyIssuanceCap);
+    clock += BASE_POLICY.challenge.resendCooldownMs + 1;
+    expect((await request()).issued).toBe(false);
+
+    const issued = await database.query<{ purpose: string; count: string }>(
+      `SELECT purpose, COUNT(*) AS count FROM auth_challenges
+        WHERE user_id = $1 GROUP BY purpose`,
+      [registered.userId],
+    );
+    expect(issued.rows).toEqual([{ purpose: 'password_reset', count: String(BASE_POLICY.challenge.dailyIssuanceCap) }]);
+
+    // An address that never had an account is throttled by the same counters and gets
+    // the same unobservable answer.
+    const unknown = await repo.requestPasswordReset({
+      email: `nobody-${randomUUID()}@example.invalid`,
+      correlationId: randomUUID(),
+      ipAddress: source(45),
+    });
+    expect(unknown).toEqual({ accepted: true, issued: false, delivery: null });
+  });
+
+  it('never records a verification challenge and refuses to claim a verified address', async () => {
+    const network = 46;
+    const repo = repository();
+    const invitation = await invite();
+    const email = `beta-${randomUUID()}@example.invalid`;
+    const registered = await register(repo, invitation.code, email, network);
+
+    // Negative control, database-enforced (OQ-20): the retired verification flow
+    // cannot be restarted by a future caller that forgets this decision.
+    await expect(database.query(
+      `INSERT INTO auth_challenges (
+         id, user_id, purpose, target_digest, secret_digest, issued_at, expires_at,
+         max_attempts, correlation_id, created_at
+       ) VALUES ($1, $2, 'email_verification', '\\x00', '\\x01', now(), now() + interval '10 min', 5, $3, now())`,
+      [randomUUID(), registered.userId, randomUUID()],
+    )).rejects.toMatchObject({ code: '23514' });
+
+    // The retired status value is gone too, so no caller can park a fresh account in
+    // a pre-active state the product no longer understands.
+    await expect(database.query(
+      `UPDATE users SET status = 'pending_verification' WHERE id = $1`,
+      [registered.userId],
+    )).rejects.toMatchObject({ code: '23514' });
+
+    // And no writer may mark an address verified without a verification instant.
+    await expect(database.query(
+      `UPDATE users SET email_verification_state = 'verified' WHERE id = $1`,
+      [registered.userId],
+    )).rejects.toMatchObject({ code: '23514' });
+    await expect(database.query(
+      `UPDATE users SET email_verified_at = now() WHERE id = $1`,
+      [registered.userId],
+    )).rejects.toMatchObject({ code: '23514' });
+
+    const state = await database.query<{ email_verification_state: string; email_verified_at: Date | null }>(
+      `SELECT email_verification_state, email_verified_at FROM users WHERE id = $1`,
+      [registered.userId],
+    );
+    expect(state.rows[0]).toMatchObject({ email_verification_state: 'unverified', email_verified_at: null });
+  });
+
+  it('keeps a locked account unusable and records the operator-only refusal', async () => {
+    const network = 47;
+    const repo = repository();
+    const invitation = await invite();
+    const email = `beta-${randomUUID()}@example.invalid`;
+    const registered = await register(repo, invitation.code, email, network);
+    const session = await signIn(repo, email, network);
+
+    await database.query(`UPDATE users SET status = 'locked' WHERE id = $1`, [
+      registered.userId,
+    ]);
+
+    // Every session is dropped the moment the account leaves `active`, and a locked
+    // account cannot sign back in or reset its own way out (D4).
+    expect(await repo.authenticate(session.session.sessionToken)).toBeNull();
+    await expect(signIn(repo, email, network)).rejects.toMatchObject({
+      code: 'AUTH_ACCOUNT_UNAVAILABLE',
+    });
+    const refusal = await repo.requestPasswordReset({
       email,
       correlationId: randomUUID(),
       ipAddress: source(network),
     });
-    expect(resent.issued).toBe(true);
-    expect(resent.delivery?.oneTimeCode).toMatch(/^[0-9]{6}$/);
+    expect(refusal).toEqual({ accepted: true, issued: false, delivery: null });
 
-    await expect(repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    })).rejects.toMatchObject({ code: 'AUTH_CHALLENGE_INVALID' });
-
-    const verified = await repo.verifyEmail({
-      email,
-      oneTimeCode: resent.delivery!.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
-    expect(verified.status).toBe('active');
+    const events = await database.query<{ event_type: string; outcome: string; metadata: Record<string, unknown> }>(
+      `SELECT event_type, outcome, metadata FROM security_events
+        WHERE user_id = $1 AND event_type = 'access_denied_unverified'`,
+      [registered.userId],
+    );
+    expect(events.rows).toHaveLength(1);
+    expect(events.rows[0]).toMatchObject({ outcome: 'failure' });
+    expect(events.rows[0]!.metadata).toMatchObject({ accountStatus: 'locked' });
+    // Operator-only: the account holder never learns it was locked from this route.
+    const ownEvents = await repo.listSecurityEvents(registered.userId, { limit: 100 });
+    expect(ownEvents.items.map((event) => event.eventType)).not.toContain('access_denied_unverified');
   });
 
   it('answers unknown and known login failures identically and limits abuse', async () => {
@@ -374,12 +686,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
+    await signIn(repo, email, network);
 
     const knownFailure = await repo.login({
       email,
@@ -437,12 +744,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const expiringInvitation = await invite();
     const expiringEmail = `beta-${randomUUID()}@example.invalid`;
     const expiringRegistered = await register(expiring, expiringInvitation.code, expiringEmail, expiringNetwork);
-    const expiringVerified = await expiring.verifyEmail({
-      email: expiringEmail,
-      oneTimeCode: expiringRegistered.delivery!.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(expiringNetwork),
-    });
+    const expiringVerified = await signIn(expiring, expiringEmail, expiringNetwork);
     clock += 2 * 60_000;
     expect(await expiring.authenticate(expiringVerified.session.sessionToken)).toBeNull();
     const expired = await database.query<{ revocation_reason: string }>(
@@ -456,12 +758,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    const verified = await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
+    const verified = await signIn(repo, email, network);
     const firstToken = verified.session.sessionToken;
     const changed = await repo.changePassword({
       userId: registered.userId,
@@ -505,24 +802,9 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    const verificationToken = (await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    })).session.sessionToken;
-    const first = await repo.login({
-      email,
-      password: 'correct horse battery staple',
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
-    const second = await repo.login({
-      email,
-      password: 'correct horse battery staple',
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
+    const first = await signIn(repo, email, network);
+    const second = await signIn(repo, email, network);
+    const third = await signIn(repo, email, network);
 
     const requested = await repo.requestPasswordReset({
       email,
@@ -530,24 +812,30 @@ integration('trusted private beta access on real PostgreSQL', () => {
       ipAddress: source(network),
     });
     expect(requested).toMatchObject({ accepted: true, issued: true });
-    expect(requested.delivery?.resetSecret.length).toBeGreaterThanOrEqual(43);
+    expect(requested.delivery?.oneTimeCode).toMatch(/^[0-9]{6}$/);
 
     const reset = await repo.resetPassword({
       email,
-      resetSecret: requested.delivery!.resetSecret,
+      oneTimeCode: requested.delivery!.oneTimeCode,
       newPassword: 'reset-passphrase-value-1',
       correlationId: randomUUID(),
       ipAddress: source(network),
     });
-    // Verification issued a session too; a reset revokes every one of them.
+    // A reset revokes every existing session and issues none of its own
+    // (ADR-004, PRD-AUTH-07): the owner must sign in again with the new password.
     expect(reset.sessionsRevoked).toBe(3);
-    expect(await repo.authenticate(verificationToken)).toBeNull();
     expect(await repo.authenticate(first.session.sessionToken)).toBeNull();
     expect(await repo.authenticate(second.session.sessionToken)).toBeNull();
+    expect(await repo.authenticate(third.session.sessionToken)).toBeNull();
+    const sessionsAfterReset = await database.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM sessions WHERE user_id = $1 AND revoked_at IS NULL`,
+      [registered.userId],
+    );
+    expect(sessionsAfterReset.rows[0]?.count).toBe('0');
 
     await expect(repo.resetPassword({
       email,
-      resetSecret: requested.delivery!.resetSecret,
+      oneTimeCode: requested.delivery!.oneTimeCode,
       newPassword: 'reset-passphrase-value-2',
       correlationId: randomUUID(),
       ipAddress: source(network),
@@ -562,27 +850,58 @@ integration('trusted private beta access on real PostgreSQL', () => {
     expect(relogin.userId).toBe(registered.userId);
   });
 
-  it('answers a reset request generically for unknown and unavailable accounts', async () => {
+  it('answers every reset request identically: unknown, non-active, cooled down, capped', async () => {
     const network = 24;
     const repo = repository();
-    const unknown = await repo.requestPasswordReset({
-      email: `nobody-${randomUUID()}@example.invalid`,
+    const requested = (email: string, networkOverride = network) => repo.requestPasswordReset({
+      email,
       correlationId: randomUUID(),
-      ipAddress: source(network),
+      ipAddress: source(networkOverride),
     });
-    expect(unknown).toEqual({ accepted: true, issued: false, delivery: null });
+
+    const unknown = await requested(`nobody-${randomUUID()}@example.invalid`);
 
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    const pending = await repo.requestPasswordReset({
-      email,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
-    // Unverified accounts receive the same generic accepted response.
-    expect(pending).toEqual({ accepted: true, issued: false, delivery: null });
-    expect(registered.issued).toBe(true);
+    // An invited account that never verified anything is still recoverable: the
+    // reset path is gated on account status, not on a verification that registration
+    // no longer performs.
+    const issuedToUnverified = await requested(email);
+    expect(issuedToUnverified).toMatchObject({ accepted: true, issued: true });
+    expect(issuedToUnverified.delivery?.oneTimeCode).toMatch(/^[0-9]{6}$/);
+
+    // Case 2: inside the cooldown the request is accepted and nothing is issued.
+    const cooledDown = await requested(email);
+    // Case 3: a locked account is never self-recoverable (D4).
+    await database.query(`UPDATE users SET status = 'locked' WHERE id = $1`, [
+      registered.userId,
+    ]);
+    const locked = await requested(email);
+    // Case 4: the per-account issuance cap, reached by walking past the cooldown.
+    await database.query(`UPDATE users SET status = 'active' WHERE id = $1`, [
+      registered.userId,
+    ]);
+    let capped = cooledDown;
+    for (let index = 0; index < BASE_POLICY.challenge.hourlyIssuanceCap; index += 1) {
+      clock += BASE_POLICY.challenge.resendCooldownMs + 1;
+      capped = await requested(email);
+      if (!capped.issued) break;
+    }
+
+    // Byte-identical outcomes: a caller cannot tell the four cases apart
+    // (SEC-AUTH-04, TM-03), and the only differing field is the unobservable
+    // delivery handle held by the API.
+    const observable = (result: {
+      accepted: true; issued: boolean; delivery: unknown;
+    }) => JSON.stringify({ accepted: result.accepted, body: { accepted: true } });
+    expect(observable(unknown)).toBe(observable(cooledDown));
+    expect(observable(unknown)).toBe(observable(locked));
+    expect(observable(unknown)).toBe(observable(capped));
+    for (const result of [unknown, cooledDown, locked, capped]) {
+      expect(result).toEqual({ accepted: true, issued: false, delivery: null });
+    }
+    expect(capped.issued).toBe(false);
   });
 
   it('isolates owners in session management and hides operator-only events', async () => {
@@ -592,18 +911,8 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const secondEmail = `beta-${randomUUID()}@example.invalid`;
     const firstRegistered = await register(repo, (await invite()).code, firstEmail, network);
     const secondRegistered = await register(repo, (await invite()).code, secondEmail, network);
-    const firstVerified = await repo.verifyEmail({
-      email: firstEmail,
-      oneTimeCode: firstRegistered.delivery!.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
-    const secondVerified = await repo.verifyEmail({
-      email: secondEmail,
-      oneTimeCode: secondRegistered.delivery!.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
+    const firstVerified = await signIn(repo, firstEmail, network);
+    const secondVerified = await signIn(repo, secondEmail, network);
 
     const firstSessions = await repo.listSessions(firstRegistered.userId, {
       limit: 50,
@@ -627,7 +936,10 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const events = await repo.listSecurityEvents(firstRegistered.userId, { limit: 100 });
     const types = events.items.map((event) => event.eventType);
     expect(types).toContain('registration_requested');
-    expect(types).toContain('email_verified');
+    expect(types).toContain('login_succeeded');
+    // OQ-20: nothing in the product verifies an email any more, so nobody can hold a
+    // verification event — not even the account that just signed in successfully.
+    expect(types).not.toContain('email_verified');
     expect(types).not.toContain('verification_challenge_issued');
     expect(types).not.toContain('verification_challenge_failed');
     for (const event of events.items) {
@@ -686,13 +998,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    const verified = await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-      userAgent: AGENT,
-    });
+    const verified = await signIn(repo, email, network);
     const relogin = await repo.login({
       email,
       password: 'correct horse battery staple',
@@ -723,12 +1029,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    const verified = await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
+    const verified = await signIn(repo, email, network);
     expect(await repo.authenticate(verified.session.sessionToken)).not.toBeNull();
 
     await database.query(`UPDATE users SET status = 'disabled', disabled_at = now() WHERE id = $1`, [
@@ -764,12 +1065,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
 
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-    });
+    await signIn(repo, email, network);
     const session = await repo.login({
       email,
       password: 'correct horse battery staple',
@@ -798,7 +1094,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const network = 28;
     const repo = repository();
     const email = `beta-${randomUUID()}@example.invalid`;
-    await register(repo, (await invite()).code, email, network);
+    const registered = await register(repo, (await invite()).code, email, network);
     const secondInvitation = await invite();
 
     const duplicate = await repo.register({
@@ -810,12 +1106,14 @@ integration('trusted private beta access on real PostgreSQL', () => {
       ipAddress: source(network),
     });
 
-    expect(duplicate).toMatchObject({
-      accepted: true,
-      issued: false,
-      userId: null,
-      delivery: null,
-    });
+    expect(duplicate).toEqual({ accepted: true, userId: null });
+    // A duplicate address is answered generically and issues nothing: the existing
+    // account gains no challenge and no session from someone else's attempt.
+    const challenges = await database.query<{ count: string }>(
+      `SELECT COUNT(*) AS count FROM auth_challenges WHERE user_id = $1`,
+      [registered.userId],
+    );
+    expect(challenges.rows[0]?.count).toBe('0');
 
     const invitation = await database.query<{ status: string }>(
       `SELECT status FROM beta_invitations WHERE id = $1`,
@@ -838,13 +1136,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
     const invitation = await invite();
     const email = `beta-${randomUUID()}@example.invalid`;
     const registered = await register(repo, invitation.code, email, network);
-    const verified = await repo.verifyEmail({
-      email,
-      oneTimeCode: registered.delivery.oneTimeCode,
-      correlationId: randomUUID(),
-      ipAddress: source(network),
-      userAgent: AGENT,
-    });
+    const verified = await signIn(repo, email, network);
     const sessionId = verified.session.session.id;
     const absolute = new Date(verified.session.session.absoluteExpiresAt).getTime();
     expect(new Date(verified.session.session.idleExpiresAt).getTime()).toBeLessThan(absolute);
@@ -911,6 +1203,10 @@ integration('trusted private beta access on real PostgreSQL', () => {
   it('prunes expired abuse windows without removing the active one', async () => {
     const network = 29;
     const repo = repository();
+    // Counters created by earlier scenarios already sit in the past because this
+    // suite moves one shared clock forward; the assertion below is about *this*
+    // window and its retention, so start from an empty table.
+    await database.query('DELETE FROM auth_attempt_counters');
     await repo.login({
       email: `nobody-${randomUUID()}@example.invalid`,
       password: 'not-the-passphrase',

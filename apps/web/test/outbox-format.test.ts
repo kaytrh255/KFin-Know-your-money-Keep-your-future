@@ -13,7 +13,7 @@ describe('local outbox payload reader', () => {
       directoryConfigured: true,
       items: [{
         name: '1.json',
-        template: 'email_verification_otp',
+        template: 'password_reset',
         to: 'beta.user@example.invalid',
         oneTimeSecret: '123456',
         recordedAt: '2026-10-12T00:00:00.000Z',
@@ -21,7 +21,7 @@ describe('local outbox payload reader', () => {
     });
     expect(messages).toEqual([{
       name: '1.json',
-      template: 'email_verification_otp',
+      template: 'password_reset',
       to: 'beta.user@example.invalid',
       oneTimeSecret: '123456',
       recordedAt: '2026-10-12T00:00:00.000Z',

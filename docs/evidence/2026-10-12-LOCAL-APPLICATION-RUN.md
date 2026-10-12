@@ -31,6 +31,22 @@ client, every screen shows the request and response payload it used, and no scre
 seed invents data for a capability the API does not have. `/__dev__/outbox` is a **dev-server**
 route, not an API route: the API still exposes nothing that reveals a one-time code.
 
+## 2.1 Addendum (2026-10-12, Milestone 11): the register/reset flow changed after this run
+
+The measurements in §3 are preserved exactly as they were taken, on the tree that existed then. Two
+of those rows describe behaviour that the OQ-20 implementation has since replaced, so they are marked
+here rather than rewritten:
+
+| §3 row | Status after Milestone 11 |
+|---|---|
+| one-time code read from the local sink: `email_verification_otp` | **superseded** — registration sends nothing at all; the only sink message is `password_reset` |
+| `POST /api/v1/auth/verify-email` → `200` with a session | **superseded** — the route no longer exists (`404`); the session comes from `POST /api/v1/auth/login` |
+
+See [`docs/implementation/MILESTONE-11-OTP-RESET-ONLY.md`](../implementation/MILESTONE-11-OTP-RESET-ONLY.md)
+§7 for the same flows re-measured on the new tree, including the empty sink after registration, the
+single-use reset OTP, the revoked sessions, and the byte-identical reset responses for unknown and
+known addresses.
+
 ## 3. Measured results (this run, PostgreSQL 17.6, migrations 0001–0006, `NODE_ENV=development`)
 
 Every row below is a real HTTP exchange through the dev-server origin (`http://127.0.0.1:5173`),

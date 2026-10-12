@@ -17,7 +17,6 @@ import {
   resetPasswordView,
   sessionView,
   signInView,
-  verifyEmailView,
   type AuthViewContext,
 } from './views/auth.js';
 import { moneyView } from './views/money.js';
@@ -30,6 +29,7 @@ interface SessionState {
   readonly email: string;
   readonly displayName: string | null;
   readonly baseCurrency: string;
+  readonly emailVerifiedAt: string | null;
 }
 
 interface FinancialContext {
@@ -95,6 +95,7 @@ async function loadSession(): Promise<void> {
       email: response.data.email,
       displayName: response.data.displayName,
       baseCurrency: response.data.baseCurrency,
+      emailVerifiedAt: response.data.emailVerifiedAt,
     };
   } catch {
     session = null;
@@ -149,9 +150,6 @@ async function render(): Promise<void> {
       return;
     case '/register':
       app.replaceChildren(registerView(authContext));
-      return;
-    case '/verify-email':
-      app.replaceChildren(verifyEmailView(authContext, query.get('email') ?? ''));
       return;
     case '/forgot':
       app.replaceChildren(forgotPasswordView(authContext));
@@ -221,8 +219,8 @@ async function start(): Promise<void> {
         input.focus();
         toast('Code filled from the local outbox');
       } else {
-        window.location.hash = '#/verify-email';
-        toast('Opened the verification screen; use the code from the panel.');
+        window.location.hash = '#/reset';
+        toast('Opened the reset screen; use the code from the panel.');
       }
     },
   });

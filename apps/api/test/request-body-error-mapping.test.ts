@@ -5,7 +5,6 @@ import type {
   LoginResult,
   ProfileView,
   RegisterResult,
-  VerifyEmailResult,
 } from '@kfin/database';
 import {
   buildApp,
@@ -139,11 +138,7 @@ function authService(): AuthApiService {
   const issued = () => ({ session: SESSION, sessionToken: 'token-never-in-body', csrfToken: CSRF_TOKEN });
   return {
     register: vi.fn(async (): Promise<RegisterResult> => ({
-      userId: USER_ID, accepted: true, issued: false, resendAvailableAt: 'x', delivery: null,
-    })),
-    resendVerification: vi.fn(async () => ({ accepted: true as const, issued: false, resendAvailableAt: 'x', delivery: null })),
-    verifyEmail: vi.fn(async (): Promise<VerifyEmailResult> => ({
-      userId: USER_ID, status: 'active', session: issued(),
+      userId: USER_ID, accepted: true,
     })),
     login: vi.fn(async (): Promise<LoginResult> => ({ userId: USER_ID, session: issued() })),
     logout: vi.fn(async () => true),

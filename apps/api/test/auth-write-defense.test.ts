@@ -7,7 +7,6 @@ import type {
   ProfileView,
   RegisterResult,
   SecurityEventPage,
-  VerifyEmailResult,
 } from '@kfin/database';
 import { buildApp, type BuildAppOptions, type FinancialApiService } from '../src/app.js';
 import type { AuthApiService } from '../src/auth-routes.js';
@@ -107,22 +106,6 @@ const PRE_SESSION_ROUTES: readonly PreSessionRoute[] = [
     spy: (service) => service.register,
   },
   {
-    label: 'verification resend',
-    url: '/api/v1/auth/verification/resend',
-    openapiPath: '/auth/verification/resend',
-    body: { email: 'beta.user@example.invalid' },
-    successStatus: 200,
-    spy: (service) => service.resendVerification,
-  },
-  {
-    label: 'email verification',
-    url: '/api/v1/auth/verify-email',
-    openapiPath: '/auth/verify-email',
-    body: { email: 'beta.user@example.invalid', oneTimeCode: '123456' },
-    successStatus: 200,
-    spy: (service) => service.verifyEmail,
-  },
-  {
     label: 'sign-in',
     url: '/api/v1/auth/login',
     openapiPath: '/auth/login',
@@ -144,7 +127,7 @@ const PRE_SESSION_ROUTES: readonly PreSessionRoute[] = [
     openapiPath: '/auth/password/reset',
     body: {
       email: 'beta.user@example.invalid',
-      resetSecret: 'reset-secret-value-0123456789012345678901',
+      oneTimeCode: '123456',
       newPassword: 'a-brand-new-passphrase',
     },
     successStatus: 200,
@@ -217,24 +200,7 @@ function issued() {
 
 function authService(overrides: Partial<AuthApiService> = {}): AuthApiService {
   return {
-    register: vi.fn(async (): Promise<RegisterResult> => ({
-      userId: USER_ID,
-      accepted: true,
-      issued: true,
-      resendAvailableAt: '2026-10-08T02:01:00.000Z',
-      delivery: null,
-    })),
-    resendVerification: vi.fn(async () => ({
-      accepted: true as const,
-      issued: false,
-      resendAvailableAt: '2026-10-08T02:01:00.000Z',
-      delivery: null,
-    })),
-    verifyEmail: vi.fn(async (): Promise<VerifyEmailResult> => ({
-      userId: USER_ID,
-      status: 'active',
-      session: issued(),
-    })),
+    register: vi.fn(async (): Promise<RegisterResult> => ({ userId: USER_ID, accepted: true })),
     login: vi.fn(async (): Promise<LoginResult> => ({ userId: USER_ID, session: issued() })),
     logout: vi.fn(async () => true),
     logoutAll: vi.fn(async () => 3),
