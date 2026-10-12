@@ -1227,4 +1227,246 @@ integration('trusted private beta access on real PostgreSQL', () => {
     );
     expect(after.rows[0]?.count).toBe('0');
   });
+
+  /**
+   * F-3 — an unauthenticated caller could exhaust a victim's password-reset budget.
+   *
+   * Measured before this change: both reset endpoints spend `reset_target`, `reset_ip`
+   * and the cumulative `verification_target` budget *before* any account or challenge
+   * lookup, and the two target-scoped counters were keyed on the address alone. Ten
+   * wrong-code submissions against a known address — from any network, with no account
+   * and no code — therefore answered `429` to the address owner's own correct code for
+   * the rest of the window: denial of password recovery, externally reachable, no
+   * authentication required.
+   *
+   * The spend cannot move after the lookup without creating an existence oracle (a
+   * `429` that appears only for live accounts *is* the answer), so the fix confines the
+   * counter to the caller's network instead (`targetNetworkKey`). The cases below are
+   * the reproduction, the proof, and the residual limitation.
+   */
+  /**
+   * F-3 — an unauthenticated caller could exhaust a victim's password-reset budget.
+   *
+   * Measured before this change: both reset endpoints spend `reset_target`, `reset_ip`
+   * and the cumulative `verification_target` budget *before* any account or challenge
+   * lookup, and the two target-scoped counters were keyed on the address alone. Ten
+   * wrong-code submissions against a known address — from any network, with no account
+   * and no code — therefore answered `429` to the address owner's own correct code for
+   * the rest of the window: denial of password recovery, externally reachable, no
+   * authentication required.
+   *
+   * The spend cannot move after the lookup without creating an existence oracle (a
+   * `429` that appears only for live accounts *is* the answer), so the fix confines the
+   * counter to the caller's network instead (`targetNetworkKey`). The cases below are
+   * the reproduction, the proof, and the residual limitation.
+   *
+   * Each case takes its own `/24`s: the suite's clock is frozen, so the per-network
+   * windows are shared state and reusing a network across cases would let one case's
+   * spend throttle the next.
+   */
+  describe('F-3 — reset budget under an anonymous flood', () => {
+    /** Budget below the per-challenge cap (5), so the challenge survives the flood. */
+    const BUDGET = 3;
+
+    /** A policy whose cumulative budget binds before the per-challenge cap does. */
+    const budgetRepository = (extra: Partial<AuthAccessPolicy['challenge']> = {}) => repository({
+      challenge: {
+        verifyCumulativeMaximum: BUDGET,
+        verifyCumulativeWindowMs: 60 * 60 * 1_000,
+        ...extra,
+      },
+    });
+
+    async function victimWithLiveChallenge(repo: PostgresAuthRepository, network: number) {
+      const invitation = await invite();
+      const email = `f3-victim-${randomUUID()}@example.invalid`;
+      await register(repo, invitation.code, email, network);
+      const requested = await repo.requestPasswordReset({
+        email,
+        correlationId: randomUUID(),
+        ipAddress: source(network),
+        userAgent: AGENT,
+      });
+      expect(requested.issued).toBe(true);
+      return { email, code: requested.delivery!.oneTimeCode };
+    }
+
+    const wrongCodeFor = (code: string) => (code === '000000' ? '111111' : '000000');
+
+    const attempt = (
+      repo: PostgresAuthRepository,
+      email: string,
+      code: string,
+      network: number,
+      password: string,
+    ) => repo.resetPassword({
+      email,
+      oneTimeCode: code,
+      newPassword: password,
+      correlationId: randomUUID(),
+      ipAddress: source(network),
+      userAgent: AGENT,
+    }).then(() => 'accepted').catch((error: { code: string }) => error.code);
+
+    it('the flood spends the attacker\'s own budget and the victim still completes the reset', async () => {
+      const repo = budgetRepository();
+      const { email, code } = await victimWithLiveChallenge(repo, 302);
+      const password = 'flood-proof-passphrase-1';
+
+      for (let index = 0; index < BUDGET; index += 1) {
+        expect(await attempt(repo, email, wrongCodeFor(code), 301, password))
+          .toBe('AUTH_CHALLENGE_INVALID');
+      }
+
+      // The sender is still throttled — the control that stops one network guessing
+      // without limit, and the fix does not remove it.
+      expect(await attempt(repo, email, wrongCodeFor(code), 301, password))
+        .toBe('AUTH_RATE_LIMITED');
+
+      // The victim, on their own network, is inside the per-challenge cap (3 < 5) and
+      // their budget was never spent. Before the fix this answered `429`: that was F-3.
+      const completed = await repo.resetPassword({
+        email,
+        oneTimeCode: code,
+        newPassword: password,
+        correlationId: randomUUID(),
+        ipAddress: source(302),
+        userAgent: AGENT,
+      });
+      expect(completed.userId).toBeTruthy();
+    });
+
+    it('a flood on the request endpoint cannot stop the victim completing a reset', async () => {
+      const repo = budgetRepository();
+      const invitation = await invite();
+      const email = `f3-request-${randomUUID()}@example.invalid`;
+      await register(repo, invitation.code, email, 312);
+      const request = (network: number) => repo.requestPasswordReset({
+        email,
+        correlationId: randomUUID(),
+        ipAddress: source(network),
+        userAgent: AGENT,
+      });
+
+      // `reset_target` is shared by both reset endpoints, so exhausting it through
+      // `requestPasswordReset` used to deny the victim's continuation as well. The
+      // flood's first call does issue a code — to the victim's own mailbox, which is
+      // the only place a reset code can go — and the rest fall inside the 60-second
+      // resend cooldown.
+      for (let index = 0; index < BASE_POLICY.abuse.resetMaximumRequests; index += 1) {
+        const flooded = await request(311);
+        expect(flooded.accepted, 'generic by design: issued and not-issued look identical').toBe(true);
+      }
+
+      // The victim's own request inside the cooldown is not re-sent — that is the
+      // shipped cooldown, not the attacker's spend — and it is neither an error nor a
+      // rate limit. The counters the attacker burned belong to the attacker's network.
+      const duringCooldown = await request(312);
+      expect(duringCooldown.accepted).toBe(true);
+      expect(duringCooldown.issued).toBe(false);
+
+      // Once the cooldown elapses the victim obtains a code normally and completes the
+      // reset. Nothing the attacker spent here is charged to the victim.
+      clock += BASE_POLICY.challenge.resendCooldownMs + 1;
+      const afterCooldown = await request(312);
+      expect(afterCooldown.issued).toBe(true);
+
+      const completed = await repo.resetPassword({
+        email,
+        oneTimeCode: afterCooldown.delivery!.oneTimeCode,
+        newPassword: 'flood-proof-passphrase-2',
+        correlationId: randomUUID(),
+        ipAddress: source(312),
+        userAgent: AGENT,
+      });
+      expect(completed.userId).toBeTruthy();
+    });
+
+    it('answers known and unknown addresses identically at the exhaustion boundary', async () => {
+      // The anti-enumeration property the fix must not disturb: because the counter is
+      // spent before any lookup, the `429` lands on exactly the same call whether or not
+      // the address exists.
+      const repo = budgetRepository();
+      const { email: known } = await victimWithLiveChallenge(repo, 322);
+      const unknown = `f3-unknown-${randomUUID()}@example.invalid`;
+      const password = 'flood-proof-passphrase-3';
+
+      const flood = async (email: string, network: number) => {
+        const outcomes: string[] = [];
+        for (let index = 0; index < BUDGET + 2; index += 1) {
+          outcomes.push(await attempt(repo, email, wrongCodeFor('000000'), network, password));
+        }
+        return outcomes;
+      };
+
+      const knownOutcomes = await flood(known, 321);
+      const unknownOutcomes = await flood(unknown, 323);
+      expect(knownOutcomes).toEqual(unknownOutcomes);
+      expect(knownOutcomes.slice(0, BUDGET))
+        .toEqual(Array.from({ length: BUDGET }, () => 'AUTH_CHALLENGE_INVALID'));
+      expect(knownOutcomes.at(-1)).toBe('AUTH_RATE_LIMITED');
+    });
+
+    it('counts concurrent flood requests without losing one', async () => {
+      // `maximumAttempts` is raised here so the per-challenge cap cannot retire the
+      // challenge mid-run: this case measures counter integrity, and the challenge cap
+      // throws its own, different error, which would otherwise mask it.
+      const repo = budgetRepository({ maximumAttempts: 10 });
+      const { email } = await victimWithLiveChallenge(repo, 332);
+      const concurrency = 12;
+      const password = 'flood-proof-passphrase-4';
+
+      // Two attacker networks, six requests each, all in flight together. The counter is
+      // an atomic `INSERT … ON CONFLICT … RETURNING`, so a lost update would surface here
+      // as an extra request answered on its merits instead of being throttled.
+      const outcomes = await Promise.all(Array.from({ length: concurrency }, (_, index) => (
+        attempt(repo, email, wrongCodeFor('000000'), 331 + (index % 2), password)
+      )));
+
+      expect(outcomes.filter((outcome) => outcome === 'AUTH_CHALLENGE_INVALID'))
+        .toHaveLength(2 * BUDGET);
+      expect(outcomes.filter((outcome) => outcome === 'AUTH_RATE_LIMITED'))
+        .toHaveLength(concurrency - 2 * BUDGET);
+    });
+
+    it('records one operator-visible event when a budget tips over, not one per request', async () => {
+      const repo = budgetRepository();
+      const { email, code } = await victimWithLiveChallenge(repo, 342);
+      const password = 'flood-proof-passphrase-5';
+
+      for (let index = 0; index < BUDGET + 3; index += 1) {
+        await attempt(repo, email, wrongCodeFor(code), 341, password);
+      }
+
+      const events = await database.query<{
+        outcome: string; visibility: string; metadata: Record<string, unknown>;
+      }>(
+        `SELECT outcome, visibility, metadata
+           FROM security_events
+          WHERE event_type = 'password_reset_failed' AND target_digest = $1
+          ORDER BY occurred_at`,
+        [keyedDigest(SECRET, 'event-target', email)],
+      );
+      const exhausted = events.rows.filter((row) => row.metadata?.reason === 'reset_budget_exhausted');
+      expect(exhausted, 'exactly the transition is recorded, however long the flood runs').toHaveLength(1);
+      expect(exhausted[0]?.outcome).toBe('blocked');
+      expect(exhausted[0]?.visibility, 'never surfaced to the account holder').toBe('operator');
+    });
+
+    it('residual limitation: an attacker sharing the victim\'s network still shares the bucket', async () => {
+      // Documented, not fixed. Network scoping removes the *remote* denial; a caller
+      // inside the same /24 (shared office, CGNAT, or the victim's own uplink) is
+      // indistinguishable from the victim and shares their counter. Asserted so the
+      // limitation cannot later be mistaken for an oversight.
+      const repo = budgetRepository();
+      const { email, code } = await victimWithLiveChallenge(repo, 352);
+      const password = 'flood-proof-passphrase-6';
+
+      for (let index = 0; index < BUDGET; index += 1) {
+        await attempt(repo, email, wrongCodeFor(code), 352, password);
+      }
+
+      expect(await attempt(repo, email, code, 352, password)).toBe('AUTH_RATE_LIMITED');
+    });
+  });
 });

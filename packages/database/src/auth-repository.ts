@@ -876,9 +876,12 @@ export class PostgresAuthRepository {
     // Abuse evidence is recorded before the operation connection is taken:
     // a nested checkout would make an exhausted pool wait on the very
     // transactions that are waiting for it (SEC-ABUSE-08/09).
+    // F-3: the target-scoped counters are keyed by (target, caller network) so that
+    // one network cannot spend another person's budget — see `targetNetworkKey`.
     await this.registerAbuseAttempt('reset_target', target, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
-      target,
+      target: this.targetNetworkKey(target, input.ipAddress),
+      onExhausted: (info) => this.recordBudgetExhausted(info, input, target),
     });
     await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
@@ -990,9 +993,11 @@ export class PostgresAuthRepository {
     // Abuse evidence is recorded before the operation connection is taken:
     // a nested checkout would make an exhausted pool wait on the very
     // transactions that are waiting for it (SEC-ABUSE-08/09).
+    // F-3: both target-scoped counters below are keyed by (target, caller network).
     await this.registerAbuseAttempt('reset_target', target, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
-      target,
+      target: this.targetNetworkKey(target, input.ipAddress),
+      onExhausted: (info) => this.recordBudgetExhausted(info, input, target),
     });
     await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
@@ -1004,7 +1009,8 @@ export class PostgresAuthRepository {
     await this.registerAbuseAttempt('verification_target', target, now, {
       limit: this.options.policy.challenge.verifyCumulativeMaximum,
       windowMs: this.options.policy.challenge.verifyCumulativeWindowMs,
-      target,
+      target: this.targetNetworkKey(target, input.ipAddress),
+      onExhausted: (info) => this.recordBudgetExhausted(info, input, target),
     });
 
     const client = await this.pool.connect();
@@ -1274,6 +1280,33 @@ export class PostgresAuthRepository {
   private contextDigest(input: AccessRequestContext): Buffer | null {
     if (!input.ipAddress && !input.userAgent) return null;
     return this.digest('request-context', `${input.ipAddress ?? ''}|${input.userAgent ?? ''}`);
+  }
+
+  /**
+   * F-3 mitigation — confines a target-scoped abuse counter to the caller's network.
+   *
+   * Before this, `reset_target` and the cumulative `verification_target` budget were
+   * keyed on the target address alone, and both are spent **before** any account or
+   * challenge lookup (deliberately: spending after the lookup would turn the counter
+   * into an existence oracle). The combination meant any anonymous caller could
+   * exhaust another person's budget: ten wrong-code submissions against a known
+   * address answered `429` to the address owner's own correct code for the rest of
+   * the window. That is an externally reachable denial of password recovery.
+   *
+   * Composing the counter input with the caller's network prefix keeps the spend
+   * unconditional and pre-lookup (so the anti-enumeration property is untouched) while
+   * confining one network's spend to its own bucket. What actually bounds code
+   * guessing is not this counter but the challenge-scoped controls — five attempts per
+   * challenge and at most three issuances per hour (six per day) per account — and
+   * those are unchanged, so rotating networks buys an attacker nothing.
+   *
+   * Residual, documented in `docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`:
+   * a caller sharing the victim's /24 (IPv4) or /48 (IPv6) still shares the bucket, and
+   * a caller arriving without an address keeps the previous target-only scope.
+   */
+  private targetNetworkKey(target: string, ipAddress: string | null | undefined): string {
+    const prefix = this.ipPrefixDigest(ipAddress);
+    return prefix ? `${target}|${prefix.toString('hex')}` : target;
   }
 
   private ipPrefixDigest(value: string | null | undefined): Buffer | null {
@@ -1630,6 +1663,38 @@ export class PostgresAuthRepository {
   }
 
   /**
+   * F-3 detection: records an operator-only event the moment a reset budget tips over.
+   *
+   * Before this, exhausting a victim's reset budget was silent: the `429` path wrote
+   * no event at all, so an attack and a burst of forgetful users looked identical to
+   * the operator. This writes one `password_reset_failed` event with
+   * `outcome = 'blocked'` on the transition only (`count === limit + 1`), which keeps
+   * a sustained flood from turning one attack into an event-per-request flood.
+   *
+   * It is deliberately operator-only, never user-facing, and it is written whether or
+   * not the address exists — mirroring the unconditional spend it reports, so it adds
+   * no oracle either. It is evidence, not mitigation: the availability fix is the
+   * network-scoped key in `targetNetworkKey`.
+   */
+  private async recordBudgetExhausted(
+    info: { readonly client: PoolClient; readonly count: number; readonly limit: number; readonly scopeKind: AbuseScopeKind },
+    context: AccessRequestContext,
+    target: string,
+  ): Promise<void> {
+    if (info.count !== info.limit + 1) return;
+    await this.recordEvent(info.client, {
+      userId: null,
+      eventType: 'password_reset_failed',
+      outcome: 'blocked',
+      correlationId: context.correlationId,
+      context,
+      occurredAt: new Date(),
+      target,
+      metadata: { reason: 'reset_budget_exhausted', scope: info.scopeKind },
+    });
+  }
+
+  /**
    * Records a sanitized failure event and commits it before throwing.
    *
    * Failed attempts are abuse evidence and challenge-attempt evidence, so they
@@ -1682,12 +1747,28 @@ export class PostgresAuthRepository {
    * `pool.connect()`: acquiring a second connection while an operation
    * transaction is open holds one connection and waits for another, which
    * deadlocks the auth pool once every connection is in that state.
+   *
+   * `onExhausted` (F-3) lets a caller record operator-visible evidence when a
+   * budget tips over, using the same connection. It is awaited but never allowed
+   * to change the outcome: a failure to record evidence must not turn a `429`
+   * into a `200` or a `500`. Callers that want "once per transition" semantics
+   * filter on `count === limit + 1` themselves.
    */
   private async registerAbuseAttempt(
     scopeKind: AbuseScopeKind,
     scopeValue: string | null | undefined,
     now: number,
-    options: { readonly limit: number; readonly target?: string; readonly windowMs?: number },
+    options: {
+      readonly limit: number;
+      readonly target?: string;
+      readonly windowMs?: number;
+      readonly onExhausted?: (info: {
+        readonly client: PoolClient;
+        readonly count: number;
+        readonly limit: number;
+        readonly scopeKind: AbuseScopeKind;
+      }) => Promise<void>;
+    },
   ): Promise<void> {
     if (!scopeValue) return;
     const scopeDigest = scopeKind.endsWith('_ip')
@@ -1709,6 +1790,10 @@ export class PostgresAuthRepository {
       );
       const count = result.rows[0]?.count ?? 1;
       if (count > options.limit) {
+        if (options.onExhausted) {
+          await options.onExhausted({ client, count, limit: options.limit, scopeKind })
+            .catch(() => undefined);
+        }
         const retryAfterSeconds = Math.max(
           1,
           Math.ceil((windowStart.getTime() + windowMs - now) / 1_000),
