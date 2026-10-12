@@ -63,6 +63,20 @@ corepack pnpm run test:integration
 
 Never commit connection strings or populated `.env` files. The checked-in [`.env.example`](.env.example) contains names and placeholders only.
 
+### Running it locally
+
+[`docs/development/LOCAL-DEVELOPMENT.md`](docs/development/LOCAL-DEVELOPMENT.md) is the single runbook: environment names, migrations, how to make registration/recovery completable on a local machine without a provider, and how to mint the first invitation.
+
+```bash
+cp .env.example .env            # fill in locally; never commit it
+corepack pnpm run db:migrate    # local/disposable database only
+corepack pnpm run api:dev       # terminal 1
+corepack pnpm run web:dev       # terminal 2, serves the local testing client
+corepack pnpm run invite:provision
+```
+
+`apps/web` is a **local testing client**, not a product surface: one form per implemented API flow, no stub endpoints, no seeded data. Browser writes must be same-origin, so the dev server proxies `/api/*` to the API rather than the client calling another port.
+
 ## Specification areas
 
 - [Product](docs/product/PRD.md)

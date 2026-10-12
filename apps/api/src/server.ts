@@ -37,7 +37,9 @@ const authService = new PostgresAuthRepository(runtime.pool, {
   secret: config.authSecret,
   policy: authPolicy,
 });
-const emailDelivery = createEmailDeliveryAdapter(config.emailDeliveryAdapter);
+const emailDelivery = createEmailDeliveryAdapter(config.emailDeliveryAdapter, {
+  directory: config.emailOutboxDir,
+});
 
 // Sessions are opaque server-side records. The API resolves the bearer token
 // from the host cookie only; no trusted user-ID header shortcut exists.

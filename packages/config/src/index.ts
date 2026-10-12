@@ -111,8 +111,29 @@ const environmentSchema = z.object({
     .transform((value) => value === 'true')
     .pipe(z.boolean()),
   // Provider selection remains Phase 6 (OQ-17). Only vendor-neutral adapters exist.
-  EMAIL_DELIVERY_ADAPTER: z.enum(['memory', 'none']).default('none'),
+  EMAIL_DELIVERY_ADAPTER: z.enum(['memory', 'none', 'file']).default('none'),
+  // Local-development sink only: the `file` adapter writes each security message
+  // into this directory so a developer can complete registration and recovery
+  // without an email provider. Refused in production below, because it puts an
+  // OTP/reset secret on the filesystem where the design never persists one.
+  EMAIL_OUTBOX_DIR: z.string().trim().min(1).max(4_096).optional(),
 }).superRefine((value, ctx) => {
+  if (value.EMAIL_DELIVERY_ADAPTER === 'file') {
+    if (value.NODE_ENV === 'production') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_DELIVERY_ADAPTER'],
+        message: 'must not be "file" when NODE_ENV=production: the local development sink writes one-time secrets to the filesystem',
+      });
+    }
+    if (!value.EMAIL_OUTBOX_DIR) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_OUTBOX_DIR'],
+        message: 'is required when EMAIL_DELIVERY_ADAPTER=file',
+      });
+    }
+  }
   // A clear-cookie session flag in production would put the bearer token on the
   // network in plaintext; refuse to boot instead of degrading silently
   // (SEC-SES-01/02).
@@ -138,7 +159,9 @@ export interface ApiConfig {
   readonly financialPreviewSigningKey: string;
   readonly authSecret: string;
   readonly authCookieSecure: boolean;
-  readonly emailDeliveryAdapter: 'memory' | 'none';
+  readonly emailDeliveryAdapter: 'memory' | 'none' | 'file';
+  /** Absolute or relative directory for the local-development email sink. */
+  readonly emailOutboxDir: string | null;
 }
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -164,6 +187,7 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): Api
     authSecret: parsed.data.AUTH_SECRET,
     authCookieSecure: parsed.data.AUTH_COOKIE_SECURE,
     emailDeliveryAdapter: parsed.data.EMAIL_DELIVERY_ADAPTER,
+    emailOutboxDir: parsed.data.EMAIL_OUTBOX_DIR ?? null,
   });
 }
 

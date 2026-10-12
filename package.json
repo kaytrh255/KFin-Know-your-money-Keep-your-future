@@ -25,7 +25,10 @@
     "evidence:reset": "node evidence/spec-fin-02/src/cli.mjs reset",
     "evidence:drop": "node evidence/spec-fin-02/src/cli.mjs drop",
     "evidence:run": "node evidence/spec-fin-02/src/cli.mjs run",
-    "evidence:case": "node evidence/spec-fin-02/src/cli.mjs run"
+    "evidence:case": "node evidence/spec-fin-02/src/cli.mjs run",
+    "web:dev": "corepack pnpm --filter @kfin/web dev",
+    "invite:provision": "tsx apps/api/tools/provision-invitation.ts",
+    "web:build": "corepack pnpm --filter @kfin/web build"
   },
   "dependencies": {
     "pg": "8.23.1"

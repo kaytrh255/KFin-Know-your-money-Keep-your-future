@@ -72,6 +72,57 @@ describe('configuration', () => {
     expect(config.authCookieSecure).toBe(true);
   });
 
+  it('accepts the local file email sink in development when a directory is given', () => {
+    const config = loadApiConfig({
+      NODE_ENV: 'development',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      DATABASE_SSL_MODE: 'disable',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      EMAIL_DELIVERY_ADAPTER: 'file',
+      EMAIL_OUTBOX_DIR: '/tmp/kfin-outbox',
+    });
+    expect(config.emailDeliveryAdapter).toBe('file');
+    expect(config.emailOutboxDir).toBe('/tmp/kfin-outbox');
+  });
+
+  it('requires a directory when the file email sink is selected', () => {
+    expect(() => loadApiConfig({
+      NODE_ENV: 'development',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      DATABASE_SSL_MODE: 'disable',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      EMAIL_DELIVERY_ADAPTER: 'file',
+    })).toThrow(/EMAIL_OUTBOX_DIR/);
+  });
+
+  it('refuses the file email sink in production because it writes one-time secrets to disk', () => {
+    expect(() => loadApiConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      DATABASE_SSL_MODE: 'verify-full',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      EMAIL_DELIVERY_ADAPTER: 'file',
+      EMAIL_OUTBOX_DIR: '/tmp/kfin-outbox',
+    })).toThrow(/EMAIL_DELIVERY_ADAPTER/);
+  });
+
+  it('leaves the outbox unset for the provider-less default', () => {
+    const config = loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+    });
+    expect(config.emailDeliveryAdapter).toBe('none');
+    expect(config.emailOutboxDir).toBeNull();
+  });
+
   it('rejects every configured origin because credentialed CORS is unsupported', () => {
     expect(() => loadApiConfig({
       DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',

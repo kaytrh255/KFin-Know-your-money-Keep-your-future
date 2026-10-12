@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>KFin — local testing client</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div class="banner" role="note">
+      <strong>Local testing client.</strong>
+      Not a finished product surface: it exercises the implemented API flows one call at a time and
+      shows exactly what it sends and receives. No data is simulated and no endpoint is stubbed.
+    </div>
+    <header class="topbar">
+      <a class="brand" href="#/money">KFin</a>
+      <nav id="nav" class="nav" aria-label="Sections"></nav>
+      <div id="session-chip" class="chip" aria-live="polite"></div>
+    </header>
+    <main id="app" class="app" tabindex="-1"></main>
+    <aside id="outbox" class="outbox" aria-label="Local development email sink" hidden></aside>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

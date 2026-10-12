@@ -1,0 +1,11 @@
+{
+  "name": "@kfin/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "KFin local-testing client: static TypeScript, no framework, no build step beyond the dev server's on-the-fly transpile.",
+  "scripts": {
+    "dev": "node ../../tools/dev-server.mjs",
+    "build": "tsc -b ."
+  }
+}
