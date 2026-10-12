@@ -296,7 +296,7 @@ same-commit re-pin described in §5.
 |---|---|---|---|---|
 | F-1 | **HIGH** (governance) | D5 beta risk acceptance has no repository record | `grep` over `docs/`; register `:109` | record before merge |
 | F-2 | **MEDIUM** (accuracy) | `MILESTONE-11` §8 falsely says `ARCHITECTURE.md` and `SCREEN-INVENTORY.md` still describe the old flow | `git diff 28ee85f..9456067` on both files; §5 above | fix wording |
-| F-3 | **MEDIUM** (availability) | cumulative budget spent pre-lookup → 10 unauthenticated requests deny a victim's reset completion for the hour window | live: `400 ×10` then `429`, counters at 10/10 for a non-existent address | owner decision + record |
+| F-3 | **MEDIUM** (availability) | cumulative budget spent pre-lookup → 10 unauthenticated requests deny a victim's reset completion for the hour window | live: `400 ×10` then `429`, counters at 10/10 for a non-existent address | owner decision + record (code state as of `afc5201`: §12) |
 | F-4 | **MEDIUM** (governance) | PR #10 title/body describe only Milestone 10 (5 files) vs 87 files actually merged | `gh pr view 10` | rewrite before merge |
 | F-5 | LOW | `MILESTONE-11` §9 lists D5 among "decisions implemented", contradicting its own §8 | file, `:151` vs `:167` | fix wording |
 | F-6 | LOW | revision record: §5.2 was inserted **before** §5.1 | `docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md` — §5.2 at `:109`, §5.1 at `:131` | reorder |
@@ -384,7 +384,7 @@ changeset did about each item; nothing above is rewritten, so the original revie
 |---|---|---|
 | F-1 (D5 unrecorded) | **Prepared, still open — owner signature required** | [`docs/evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](../evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md) §1.1 and the empty approval block D-1; no name, date or signature entered |
 | F-2 (false claim about the two documents) | **Closed** | `MILESTONE-11` §8 now states that `ARCHITECTURE.md` and `SCREEN-INVENTORY.md` were already synchronized by `9456067`, and records that the earlier claim was wrong |
-| F-3 (reset availability) | **Open and blocking — no longer an unquantified worry** | Analysis and costed options R1–R5 in the request record §2; measured again as `400 ×10` then `429`, with the counter reaching 10 for an address that has no account. **No rate-limit value, key, window or spend point was changed**: that is a policy decision this changeset may not take, and a risk note does not close the finding |
+| F-3 (reset availability) | **Open and blocking — no longer an unquantified worry** · *code state superseded 2026-10-12 by `afc5201` (mitigated for the remote vector, still open) — see §12* | Analysis and costed options R1–R5 in the request record §2; measured again as `400 ×10` then `429`, with the counter reaching 10 for an address that has no account. **No rate-limit value, key, window or spend point was changed**: that is a policy decision this changeset may not take, and a risk note does not close the finding |
 | F-4 (PR description) | **Addressed outside the repository** | PR #10 title and body rewritten to describe the actual scope (`gh api -X PATCH`); the count quoted there is corrected in §11.2, where the scope is re-measured |
 | F-5 (§9 listed D5 as implemented) | **Closed** | `MILESTONE-11` §9 now lists D2/D3/D4/D7/D8 as implemented in code and D5 as a *request*, with no signature |
 | F-6 (§5.2 before §5.1) | **Closed** | Reordered in the revision record, with an editorial note recording the move and its reason |
@@ -423,7 +423,7 @@ evidence records carry the detail; nothing in §7 was rewritten.
 | Finding | State after the finalization pass | Evidence |
 |---|---|---|
 | F-1 (D5 unrecorded) | **Recorded, acceptance still unsigned — owner signature required** | [`docs/evidence/2026-10-12-D5-UNVERIFIED-EMAIL-BETA-RISK.md`](../evidence/2026-10-12-D5-UNVERIFIED-EMAIL-BETA-RISK.md): dated, with the residual exposure, the implemented compensating controls, a **proposed accountable risk owner** (Product Owner, co-approver Security Owner — proposed, not signed) and an empty acceptance block. No name, date or signature was invented |
-| F-3 (reset availability) | **Open and blocking — measured, costed, unchanged in behaviour** | [`docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](../evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md) Part A: mechanism, re-measured `400 ×10` → `429` against an address with no account, impact table, options R1–R6 with a stated anti-enumeration implication, and R4/R6 rejected. **No rate-limit value, key, window or spend point was changed**; F-3 closes only when an authorised option ships |
+| F-3 (reset availability) | **Open and blocking — measured, costed, unchanged in behaviour** · *behaviour changed after this row was written: `afc5201` scopes the counters per caller network — see §12* | [`docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](../evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md) Part A: mechanism, re-measured `400 ×10` → `429` against an address with no account, impact table, options R1–R6 with a stated anti-enumeration implication, and R4/R6 rejected. **No rate-limit value, key, window or spend point was changed**; F-3 closes only when an authorised option ships |
 | F-8 (timing) | **Confirmed — measured, not equivalent; mitigation or informed acceptance required** | Same record, Part B: in-process (40 samples/case, 5 cases, interleaved) medians A 4.74 / B 2.11 / C 2.84 / D 2.09 / E 1.91 ms, A−B ≈ 2.6 ms with essentially disjoint ranges, plus an HTTP-boundary cross-check (issuing 8.24 ms vs unknown 4.06 ms, disjoint ranges). Conclusion: identical bodies, distinguishable latency; options M1–M4 with M3 rejected |
 
 **Verification of the earlier closure claims (re-inspected, not assumed):** `MILESTONE-11` §8/§9 and the
@@ -441,3 +441,37 @@ is left untouched for auditability. The PR body carries the corrected count.
 has no authorised fix, F-8 has no chosen mitigation, and D5 / `SPEC-AUTH-01` / `SPEC-AUTH-02` still carry
 empty signature blocks.
 
+
+## 12. F-3 implementation addendum (2026-10-12, commit `afc5201`)
+
+> **Authorship.** This section is written by the implementation session that acted on the review's F-3
+> finding — **not** by the reviewer, and **not** as a re-review. Every measurement in §§1–11 stands as
+> written. No independent reviewer has re-assessed the code; the claims below are the implementation's, with
+> the commands and results that support them recorded in
+> [`docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](../evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md) §A.7.
+
+**What changed since §11.** The follow-up commit `afc5201` (child of `5629fa2`, the tip §11 assessed)
+implements the durable option **R2** for F-3 — the `reset_target` and cumulative `verification_target`
+counters are keyed on the target composed with the caller's network-prefix digest, still spent
+unconditionally and pre-lookup — together with **R1** detection (one operator-only
+`password_reset_failed` / `reason = 'reset_budget_exhausted'` event on the exhaustion transition). A
+six-case regression suite reproduces the attack against the previous code (4 of the 6 cases fail there,
+the victim's own completion throwing `AUTH_RATE_LIMITED`) and passes with the fix applied.
+
+**What this does to F-3's status.** It moves F-3 from *"open, measured, unmitigated"* to
+**mitigated in code for the remote vector, still open**: the fix changes a `SPEC-AUTH-02` behaviour
+dimension, so amendment A-1 in
+[`docs/evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](../evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md) §2.4
+is **requested and unsigned**, and two limitations remain (§A.7.4 of the risks record): a caller sharing the
+victim's /24 or /48 shares the bucket, and a caller with no resolvable address keeps the previous
+target-only scope. **F-3 is not closed.**
+
+**Effect on the verdict.** None yet. §11's condition 1 — "F-3 has no authorised fix" — is now *partly*
+satisfied: an eligible fix exists and is proven, but it is a candidate, not an authorised one, and the
+residual is unaccepted. F-8 and the empty signature blocks (D5 / `SPEC-AUTH-01` / `SPEC-AUTH-02`) are
+untouched by this commit. The verdict therefore remains **NOT READY FOR MERGE**.
+
+**Deliberately not done here.** No pinned authoritative document was edited (`TEST-STRATEGY.md`,
+`DATABASE.md`, `APPROVAL-AND-EVIDENCE-REGISTER.md` carry SHA-256 pins that fail `evidence:check` if they
+move), because moving a pin for an unapproved change would dress the candidate amendment up as a decision.
+The pin updates that the amendment will require are listed in the amendment packet §2.4.

@@ -11,6 +11,10 @@
 > `SPEC-AUTH-02` is approved. As of this commit all three are **open**, and `EVID-AUTH-POLICY` in
 > [`docs/governance/APPROVAL-AND-EVIDENCE-REGISTER.md`](../governance/APPROVAL-AND-EVIDENCE-REGISTER.md)
 > is still `Missing / Not evaluated`.
+>
+> **Amendment A-1** (§2.4, the `SPEC-AUTH-02` budget-scope change implemented as a candidate in commit
+> `afc5201`) is likewise **requested and unsigned**, and it is the reason F-3 is recorded as mitigated
+> rather than closed.
 
 **Date prepared:** 2026-10-12
 **Prepared by:** implementation review session (Arena agent), acting for — not as — the owners
@@ -112,11 +116,86 @@ load-bearing control**.
 makes the risk *handled* rather than *noted*, and take **R2** as the durable fix together with the
 `SPEC-AUTH-02` approval it implies. R4 must not be adopted.
 
-**Explicitly not done in this changeset:** no limit value, key, window, or spend point was changed,
-because that would be a policy decision this session may not take. **F-3 therefore remains open and
-blocking**, and a risk note alone does not close it.
+  **Explicitly not done in this changeset:** no limit value, key, window, or spend point was changed,
+  because that would be a policy decision this session may not take. **F-3 therefore remains open and
+  blocking**, and a risk note alone does not close it.
 
-## 3. F-8 — reset-request timing (open, low)
+  > **Note added 2026-10-12 (later commit `afc5201`).** After this packet was written, the durable option
+  > **R2 was implemented in code as a candidate**, together with **R1** detection, on the same PR #10 branch,
+  > with a regression suite that fails on the previous code and passes on the new one
+  > ([`2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md)
+  > §A.7). Nothing in §2.1–§2.3 is retracted: the measurements still describe the code as it was, and the
+  > statement above is still true of *this* changeset. What changed is that the code now ships a candidate
+  > that **needs the amendment in §2.4 to be signed**; the finding is therefore **mitigated but not closed**,
+  > and the sentence "not mitigated in code" no longer describes the branch tip (see §5).
+
+  ### 2.4 The exact `SPEC-AUTH-02` amendment this fix requires — and its approval request
+
+  **Why an amendment is needed at all.** R2 changes a behaviour dimension that `SPEC-AUTH-02` is the
+  decision for — the *scope and keying* of the cumulative reset failed-verification budget — and the current
+  `SEC-AUTH-20` sentence says the budget is **per-account**. Shipping the fix without requesting the change
+  would be a silent policy edit, so the deviation is recorded in public, in
+  [`2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md)
+  §A.7, and the amendment is requested here. **No approval is claimed, and the amendment is not in force.**
+
+  **Amendment A-1 — reset cumulative-budget dimension (`SPEC-AUTH-02`, D-3).** Wording to be adopted
+  verbatim in the decision record if the owners approve it:
+
+  > **Cumulative reset failed-verification budget — scope and keying (amendment A-1, 2026-10-12).**
+  > The cumulative budget is keyed on the normalized account identifier composed with the caller's
+  > network-prefix digest (IPv4 /24, IPv6 /48; digest-only, never a full address): **10 failed
+  > verifications per 1-hour fixed window per (account, caller network)**. A caller whose address cannot be
+  > resolved keeps the account-only key. The spend remains unconditional and **before** any account or
+  > challenge lookup. The per-challenge attempt cap (5), the 60-second resend cooldown and the issuance caps
+  > (3 per account per hour, 6 per 24 hours) remain **account-wide and unchanged**. The transition into
+  > exhaustion (`count = limit + 1`) writes exactly **one** operator-only security event
+  > (`password_reset_failed`, `outcome = 'blocked'`, `metadata.reason = 'reset_budget_exhausted'`,
+  > `visibility = 'operator'`), whether or not the address exists. The residual is explicit: a caller sharing
+  > the victim's /24 or /48 shares the bucket.
+
+  **Companion wording change in `SEC-AUTH-20`** (the requirement text, which currently reads "bounded by a
+  cumulative **per-account** failed-verification budget across superseded challenges, a 60-second resend
+  cooldown, and per-account, per-IP/network, and global issuance/cost caps"):
+
+  > … be bounded by a cumulative **per-account, per-caller-network** failed-verification budget across
+  > superseded challenges, a 60-second resend cooldown, and per-account, per-IP/network, and global
+  > issuance/cost caps.
+
+  This text has **not** been written into `docs/security/SECURITY-REQUIREMENTS.md`; only a clearly-marked
+  *pending* pointer was added there, because rewriting a requirement before approval would be the silent
+  edit this packet exists to prevent.
+
+  **Consequential table change in §4 (D-3).** The D-3 row "Cumulative failed verifications" would read
+  "10 per account per hour **per caller network** (fixed window, keyed on the target composed with the
+  network-prefix digest)" — see the note added under that table.
+
+  **Also required in the same signed commit** (deliberately **not** done by this session, because the change
+  is unapproved):
+
+  | Item | Why it must move with the signature |
+  |---|---|
+  | `docs/testing/TEST-STRATEGY.md` — a row for the network-scoped budget and the six regression cases | It is an authoritative document **pinned by SHA-256** in `evidence/spec-fin-02/src/constants.mjs`; any edit fails `evidence:check` unless the pin advances in the same commit with the revision recorded (the OQ-20 pattern), and `evidence/spec-fin-02/test/static-contract.test.mjs` pins the amended set exactly. |
+  | `docs/architecture/DATABASE.md` §4.5 and the `APPROVAL-AND-EVIDENCE-REGISTER.md` `SPEC-AUTH-02` row | Same pinning mechanism; the register row is where the signature has to land. |
+  | `docs/product/DECISION-LOG.md` — the dated decision entry | The change control for a value/behaviour decision, so the log and the code cite each other. |
+
+  | Field | Value |
+  |---|---|
+  | Amendment | **A-1** — cumulative reset budget keyed per (account, caller network); exhaustion transition event |
+  | Accountable owner (Security Owner, `APPROVAL-AND-EVIDENCE-REGISTER.md:69`) | _(name — not filled by this session)_ |
+  | Co-approver (Product Owner) | _(name — not filled by this session)_ |
+  | Implementation awaiting the decision | commit `afc5201` on the PR #10 branch (unmerged, undeployed) |
+  | Evidence reviewed | ☐ `docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md` §A.7 ☐ the six `F-3` integration cases ☐ pre-fix reproduction ☐ `pnpm run check` output ☐ other: ___ |
+  | Residual the signer is also accepting | ☐ a caller sharing the victim's /24 (IPv4) or /48 (IPv6) can still exhaust the bucket ☐ accepted ☐ not accepted (then a further control is required — see R5) |
+  | Date | _(not filled)_ |
+  | Signature / evidence reference | _(not filled)_ |
+  | Outcome | ☐ approve A-1 ☐ approve with conditions ☐ reject (then the code must revert to the pre-`afc5201` keying or another authorised option must ship) |
+
+  **What signing A-1 does and does not do.** Signing it approves the *behaviour dimension* above; it does not
+  by itself close F-3 — that also needs the acceptance of the residual (or a further control) and the
+  operational response to the R1 event confirmed, as listed in §A.7.6 of the risks record. Rejecting A-1
+  leaves F-3 open and the shipped candidate unauthorised, which is a merge blocker, not a merge risk.
+
+  ## 3. F-8 — reset-request timing (open, low)
 
 Measured (single samples, same-origin, warm server after the first request):
 
@@ -212,25 +291,34 @@ Values to be approved exactly as they stand in `packages/config/src/index.ts`:
 | Evidence reviewed | ☐ integration suite ☐ live HTTP run ☐ Argon2 benchmark ☐ provider quota assumptions ☐ usability/paste/autofill review ☐ other: ___ |
 | Date | _(not filled)_ |
 | Signature / evidence reference | _(not filled)_ |
-| Outcome | ☐ approve ☐ approve with conditions ☐ reject |
+  | Outcome | ☐ approve ☐ approve with conditions ☐ reject |
 
-### D-4 / D-5 — how F-3 and F-8 are closed
+  > **Note (2026-10-12, amendment A-1).** The limit and window in the "Cumulative failed verifications" row
+  > are unchanged (10 per 1-hour fixed window), but its **keying** changed in code (`afc5201`): the counter is
+  > now per (account, caller network). An approval of this table alone would not cover that dimension — sign
+  > §2.4 **A-1** for the keying, or request the keying be reverted.
 
-| Field | F-3 | F-8 |
-|---|---|---|
-| Option chosen | _(R1 / R2 / R3 / R5 / combination — not chosen by this changeset)_ | _(M1 / M2 / M4 — not chosen by this changeset)_ |
-| Requires `SPEC-AUTH-02` re-approval? | _(owner to state)_ | _(owner to state)_ |
-| Follow-up owner and date | _(not filled)_ | _(not filled)_ |
-| Does this close the finding? | ☐ yes, once the chosen option ships ☐ no | ☐ yes ☐ no |
-| Signature / evidence reference | _(not filled)_ | _(not filled)_ |
+  ### D-4 / D-5 — how F-3 and F-8 are closed
+
+  | Field | F-3 | F-8 |
+  |---|---|---|
+  | Option chosen | _(not chosen by this packet's authors)_ — but the branch now **ships a candidate implementation of R1 + R2** (`afc5201`), so this field is now a *confirm/reject*, not a blank choice. The candidates remain R1 / R2 / R3 / R5 and any combination; if the owners choose one that is **not** R1 + R2 as shipped, that is a code change, not just a signature. | _(M1 / M2 / M4 — not chosen by this changeset)_ |
+  | Requires `SPEC-AUTH-02` re-approval? | **Yes** — amendment A-1 in §2.4 (the cumulative budget's scope/keying). The rest of R1 is detection only and changes no approved value. | _(owner to state)_ |
+  | Follow-up owner and date | _(not filled)_ — needed for the residual acceptance and for the R1 event's operational response (§A.7.6 of the risks record). | _(not filled)_ |
+  | Does this close the finding? | ☐ yes, once the chosen option ships **and** A-1 is signed **and** the residual is accepted or controlled ☐ no — **today: mitigated, not closed** | ☐ yes ☐ no |
+  | Signature / evidence reference | _(not filled)_ | _(not filled)_ |
 
 ## 5. Explicit non-claims
 
 - No approver was named, no signature was simulated, and no decision is marked approved anywhere in
   this file or in this changeset.
-- F-3 is **not** closed, **not** accepted, and **not** mitigated in code by this changeset. It is a
-  real, externally reachable availability weakness; the options and their costings are a request for a
-  decision, not a substitute for one.
+  - F-3 is **not** closed and **not** accepted. As of the amendment note in §2.4, it is **mitigated in code
+    for the remote vector** (commit `afc5201`, reproduced and regression-proven) while **remaining open**
+    until the §2.4 amendment is signed and the shared-network residual is accepted or controlled. The
+    original sentence of this packet — "not mitigated in code by this changeset" — remains true of *this*
+    changeset; the branch tip has moved on, and the risks record's §A.7 is the authority on what shipped.
+    It is a real, externally reachable availability weakness; the options and their costings are a request
+    for a decision, not a substitute for one.
 - F-8 is **not** quantified yet; the numbers in §3 are single samples and are labelled as such.
 - This file does not close, weaken, or reinterpret any `SPEC-*` blocker, does not change any
   rate-limit value, and does not touch the SPEC-FIN-02 harness pins.

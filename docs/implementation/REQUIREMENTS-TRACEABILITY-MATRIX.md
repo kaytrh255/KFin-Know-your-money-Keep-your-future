@@ -32,7 +32,7 @@ entire family.
 |---|---|---|---|
 | Registration admitted by a single-use, expiring, address-bound invitation; address presence never grants admission | **VERIFIED** | `packages/database/src/auth-repository.ts` `register`; `apps/api/tools/provision-invitation.ts` (operator channel) | `journey.integration.test.ts` 1; `auth-access.integration.test.ts` "consumes one invitation exactly once", "binds an invitation to its invited email" |
 | Registration creates a usable account with **no** OTP, **no** email, **no** session | **VERIFIED** | `4866d13` (OQ-20) | `journey.integration.test.ts` 1 asserts zero sessions, zero challenges, zero messages; `MILESTONE-11` §7 |
-| Email OTP exists for password reset only; requests do not reveal whether an address exists | **VERIFIED (with the F-3 caveat)** | `auth-repository.ts` `requestPasswordReset`/`resetPassword` | `journey.integration.test.ts` 12; `auth-access.integration.test.ts` "answers every reset request identically: unknown, non-active, cooled down, capped". **F-3**: 10 anonymous requests can exhaust an address's hourly budget (availability, not disclosure) — OPEN, see §7 |
+| Email OTP exists for password reset only; requests do not reveal whether an address exists | **VERIFIED (with the F-3 caveat)** | `auth-repository.ts` `requestPasswordReset`/`resetPassword` | `journey.integration.test.ts` 12; `auth-access.integration.test.ts` "answers every reset request identically: unknown, non-active, cooled down, capped". **F-3**: 10 anonymous requests could exhaust an address's hourly budget (availability, not disclosure) — **mitigated for the remote vector in `afc5201`** (counters now scoped per caller network; six `F-3` cases added to `auth-access.integration.test.ts`), **still OPEN** pending the `SPEC-AUTH-02` amendment A-1 and the shared-network residual, see §7 |
 | Email/password sign-in; session resolvable only from the opaque cookie | **VERIFIED** | `login`, `authenticate` | `journey.integration.test.ts` 2 (401 without a cookie) |
 | Revocable session; idle and absolute expiry; replay containment | **VERIFIED** | sessions/tokens schema + `authenticate` | `auth-access.integration.test.ts` "enforces idle expiry, rotation grace, replay containment, and logout" |
 | Current-session logout and all-session logout | **VERIFIED** | `logout`, `logoutAll` | `auth-access.integration.test.ts` "revokes the requesting session on logout-all so its token cannot be replayed" |
@@ -136,13 +136,13 @@ that any of them is closed.
 | 1 | Every pre-implementation `SPEC-*` blocker has an authorized outcome and versioned evidence | **OPEN** — 12 blockers tracked in `docs/reviews/SPECIFICATION-REMEDIATION-ROUND-3.md` |
 | 2 | Specifications and required ADRs approved with named approvers | **OPEN** — ADR-002/004/005/008 Proposed; `SPEC-AUTH-01`/`02` unratified (D-2/D-3 request open) |
 | 3 | In-scope acceptance outcomes pass automated and manual tests | **PARTIAL** — automated financial/auth outcomes pass (82 integration cases, 681 unit); manual outcomes and the unimplemented capabilities above are not covered |
-| 4 | Threat-model mitigations implemented and reviewed | **PARTIAL** — E-4/E-5/E-6 closed with tests; F-3 open |
+| 4 | Threat-model mitigations implemented and reviewed | **PARTIAL** — E-4/E-5/E-6 closed with tests; F-3 mitigated in code for the remote vector (`afc5201`), not closed (amendment A-1 unsigned) |
 | 5 | WCAG 2.2 AA core-flow and small-screen review pass | **NOT RUN** |
 | 6 | Cross-user authorization tests pass for every financial resource | **PARTIAL** — `journey.integration.test.ts` 10 covers transaction, goal, and account; every remaining object needs its own case |
 | 7 | Migration, backup restoration, and rollback drills pass | **PARTIAL** — migration upgrade rehearsal is in `MILESTONE-11` §3; backup/restore/rollback needs infrastructure |
 | 8 | Monitoring, alert routing, support ownership, incident runbooks active | **NOT RUN** |
 | 9 | Privacy/legal documents, retention policy, beta consent approved | **OPEN** |
-| 10 | No unresolved critical/high security vulnerability; accepted lower risks have owners and expiry | **OPEN** — F-3 (high, availability) unresolved; F-8 (low, timing) measured and awaiting a decision |
+| 10 | No unresolved critical/high security vulnerability; accepted lower risks have owners and expiry | **OPEN** — F-3 (availability) technically mitigated for the remote vector but unresolved: amendment A-1 unsigned and the shared-network residual unaccepted; F-8 (low, timing) measured and awaiting a decision |
 | 11 | Release checklist signed for the initial five-user cohort | **OPEN** — `docs/testing/RELEASE-CHECKLIST.md` unsigned |
 
 ## 10. What this matrix deliberately does not claim

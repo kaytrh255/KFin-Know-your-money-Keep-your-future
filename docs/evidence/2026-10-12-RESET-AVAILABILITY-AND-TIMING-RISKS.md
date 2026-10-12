@@ -1,12 +1,27 @@
 # Reset-surface risk: F-3 (availability) and F-8 (timing) — analysis, measurements, and mitigation proposal
 
-> ## Status: F-3 OPEN · F-8 CONFIRMED, awaiting a mitigation decision
+> ## Status: F-3 MITIGATED (remote vector closed in code) — **not closed** · F-8 CONFIRMED, awaiting a mitigation decision
 >
 > Both findings come from the pre-merge review of PR #10
 > ([`docs/reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md`](../reviews/2026-10-12-PRE-MERGE-REVIEW-PR-10.md), F-3 and F-8).
-> This record contains the analysis and the costed mitigation proposals. **Nothing here is implemented,
-> approved, or accepted.** No rate-limit value, key, window, or spend point was changed to produce this
-> document, and the working tree still implements exactly what the review measured.
+> Part A was written as analysis only: **nothing was implemented when §§A.1–A.6 were written**, and the
+> working tree then implemented exactly what the review measured.
+>
+> **§A.7 was added later the same day** and records what changed after that: option **R2** was implemented
+> as the durable fix together with **R1** detection, with a regression suite that fails on the pre-fix code
+> and passes on the fixed code. Part B (F-8) and everything in §A.1–§A.6 remain analysis: no F-8 mitigation
+> is implemented, and §A.5's option costings are unchanged by §A.7.
+>
+> Two things are therefore true at once and must not be blurred:
+>
+> - The **remote** denial — any anonymous caller anywhere denying a victim's password recovery — is
+>   **technically mitigated** in code, and the regression suite reproduces the attack against the previous
+>   code and proves the fix (§A.7). The residual (§A.7.4) is limited to callers *sharing the victim's
+>   network prefix*.
+> - **F-3 is not closed.** The fix changes a `SPEC-AUTH-02` behaviour dimension (the scope of the
+>   cumulative reset budget), and that amendment is **requested, not approved** (§A.7.6). Until an
+>   authorised owner signs it — or a governance decision explicitly accepts the residual — the finding
+>   stays open, and this document does not decide it.
 
 **Date:** 2026-10-12
 **Prepared by:** implementation review session (Arena agent), acting for — not as — the owners
@@ -108,6 +123,111 @@ adopted. **F-3 stays open until an authorised option ships**, and this document 
 3. If R5 is chosen, confirm the runbook owner and the access control on the counter-clearing action.
 4. If R2 or R3 is chosen, re-approve the affected `SPEC-AUTH-02` values in the same decision.
 
+## A.7 Implementation and verification (2026-10-12) — what shipped, and what it does not close
+
+**Code commit:** `afc5201` — *fix(auth): scope the reset-target abuse budget to the caller's network (F-3)* —
+on the PR #10 branch, child of `5629fa2`. **Status claim:** this is a *candidate implementation* of R2 plus
+R1 detection. It ships no approval: the `SPEC-AUTH-02` amendment it needs is requested in
+[`2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md) §2.4 and
+is **not signed**.
+
+### A.7.1 What changed
+
+| Where | Change |
+|---|---|
+| `packages/database/src/auth-repository.ts` — `targetNetworkKey(target, ipAddress)` | Composes the counter input as `"<target>\|<network-prefix-digest>"` (IPv4 /24, IPv6 /48 — the same truncated, digested network context the abuse evidence already stores, never a full address). A caller with no address yields the previous value, so that path is unchanged. |
+| `resetPassword` — `reset_target` and `verification_target` | Both are now keyed by the composed value. The spend point, the ordering (still **before** any account or challenge lookup), and both limits/windows (10 per 15 min, 10 per 1 h) are unchanged. |
+| `requestPasswordReset` — `reset_target` | Same composition. Because this counter is shared by both reset endpoints, the request endpoint and the verify endpoint now confine their spend to the caller's own network. |
+| `registerAbuseAttempt` + `recordBudgetExhausted` | The R1 detection: an optional, awaited `onExhausted` callback that cannot alter the outcome, writing **one** `password_reset_failed` / `outcome = 'blocked'` / `metadata.reason = 'reset_budget_exhausted'` / `visibility = 'operator'` event on the `count === limit + 1` transition, whether or not the address exists. |
+
+Deliberately **not** changed: the spend ordering that preserves anti-enumeration; every response body,
+status and timing; `reset_ip`; the five-attempts-per-challenge cap; the 60-second resend cooldown; the
+per-account issuance caps (still counted `WHERE user_id = $1`, i.e. still account-wide); login and
+registration scopes; configuration values; schema and migrations (existing counter rows age out).
+
+### A.7.2 The options against the five comparison axes
+
+| Axis | **R1** detection | **R2** (target, network) — *implemented* | **R3** shorter window | **R5** operator runbook |
+|---|---|---|---|---|
+| Resistance to account enumeration | Preserved — event is operator-only | **Preserved** — spend stays unconditional and pre-lookup, so the `429` still lands on the same call for known and unknown addresses (asserted, §A.7.3) | Preserved | Neutral (operator action) |
+| Victim availability and recovery | **None** — makes the attack visible, not stoppable | **Recovery restored for the remote vector**: the victim's own network's bucket is untouched, and their correct code completes the reset — previously the failing 429 (asserted) | Denial shortened, **not removed**: the attacker re-arms at each boundary and the victim can be held out indefinitely | Restores practical recovery *only while an operator is available* and only to the time it takes someone to act |
+| Abuse resistance and operational burden | Unchanged resistance; **adds** an operational burden (somebody must watch the events — still unassigned, §A.7.6) | **Unchanged resistance.** The bound on guessing was never this counter: a challenge retires after 5 attempts and at most 3 challenges may be issued per account per hour (6/day), so ≤15 guesses/hour and ≤30/day against a 10⁶ space. Network-scoping the *throttle* opens no guess space; the `429` bound is now per network, which is what stops one network denying service. One event per tip-over, no paging contract defined | Slightly weaker as an account-wide throttle and still leaves the denial; buys ~15 minutes of attacker work | Neutral to resistance; the clearing action needs access control and logging to stay an accountable control |
+| Database / schema changes | None (`security_events` already carries the type, outcome, digest and metadata keys) | **None** — no migration; keys are computed at write time and old rows age out | None (one config value) | None |
+| Compatibility with existing tests and approved specifications | Compatible | **Incompatible with the current wording of `SEC-AUTH-20` and the `SPEC-AUTH-02` budget dimension** — that is precisely why F-3 is *not* closed (§A.7.6). Compatible with every other control and with the existing suite, which passes unchanged | Also requires a `SPEC-AUTH-02` value re-approval | No policy change, but needs a named owner — which cannot be invented |
+
+R4 and R6 stay rejected for the reasons in §A.5 (oracle; targeted-address disclosure). R5 is **not adopted**:
+the durable fix removes its need for the remote vector, and adopting it now would create an operational
+control with no owner. It remains the fallback for the residual in §A.7.4 and would need the owner,
+access control, an expiry/review date and the logged action that §A.6.3 asks for.
+
+### A.7.3 Evidence
+
+Attack reproduced against the previous code — the fix was temporarily reverted to its `5629fa2` content and
+the new suite re-run against it (`npx vitest run packages/database/test/auth-access.integration.test.ts -t "F-3"`),
+**4 failed / 2 passed**:
+
+| Case | Pre-fix result |
+|---|---|
+| `the flood spends the attacker's own budget and the victim still completes the reset` | **FAILED** — the victim's own completion threw `AUTH_RATE_LIMITED` (this is F-3, mechanised) |
+| `a flood on the request endpoint cannot stop the victim completing a reset` | **FAILED** — same `AUTH_RATE_LIMITED` |
+| `counts concurrent flood requests without losing one` | **FAILED** — `expected [...] to have a length of 6 but got 3` (12 concurrent requests across two networks were charged to one counter) |
+| `records one operator-visible event when a budget tips over, not one per request` | **FAILED** — `expected [] to have a length of 1` (no event existed) |
+| `answers known and unknown addresses identically at the exhaustion boundary` | passed — the property the fix must **preserve** |
+| `residual limitation: an attacker sharing the victim's network still shares the bucket` | passed — the residual is a property of both versions |
+
+With `afc5201` applied, the same command reports **6 passed**, and the properties asserted are: the victim on
+another network completes the reset after the flood; a request-endpoint flood cannot deny the victim (whose
+own in-cooldown request answers `accepted: true, issued: false`, then succeeds after the cooldown); known and
+unknown addresses produce identical outcome sequences through the exhaustion boundary
+(`AUTH_CHALLENGE_INVALID` ×budget, then `AUTH_RATE_LIMITED`); 12 concurrent submissions across two networks are
+counted exactly, 2×budget on their merits and the remainder throttled; exactly one operator event regardless of
+flood length; and the shared-network residual is asserted rather than assumed.
+
+Whole-gate result on this tree: `pnpm run check` **exit 0** — `evidence:check`, `evidence:test` **17/17**,
+`typecheck` clean, and vitest **769 passed / 38 files**, which includes the real-PostgreSQL integration suites
+(database + journey) run against a disposable local PostgreSQL 17.6 with the non-production target flag set;
+`pnpm run web:build` exit 0. No production, Supabase, or shared database was contacted, and no credential
+entered this record, the logs, or the repository.
+
+### A.7.4 Residual limitations (documented and asserted, not assumed)
+
+1. **A caller sharing the victim's network still shares the bucket.** Network scope removes the *remote*
+   denial; a caller in the same /24 (IPv4) or /48 (IPv6) — a shared office, a CGNAT aggregation, a
+   compromised host on the victim's own link — is indistinguishable at this layer and can still exhaust the
+   bucket for the victim's address. This is strictly narrower than the finding as measured (which needed no
+   relationship to the victim at all), and it is asserted by a regression case so it cannot be mistaken for
+   an oversight.
+2. **A caller arriving without a resolvable address keeps the previous target-only scope.** That is the
+   pre-fix behaviour for that path, unchanged rather than worsened; the deployment must therefore resolve a
+   trustworthy client address (proxy/`X-Forwarded-For` policy) for the mitigation to apply.
+3. **The removed control** — an account-wide counter that every network shared — was itself the denial
+   vector; it is replaced by a per-network counter with the same limit and window, and the account-wide
+   bound on guessing is carried by the untouched per-account issuance caps.
+
+### A.7.5 What this closes, and what it does not
+
+The **remote** vector — "any unauthenticated caller denies a stranger's password recovery" — is technically
+mitigated and regression-proven. F-3 is therefore no longer in the state the review measured it in.
+
+F-3 is **not closed**, for two independent reasons, either of which alone would be enough:
+
+1. the residual in §A.7.4 has not been accepted by any authorised owner; and
+2. the change alters a `SPEC-AUTH-02` behaviour dimension (the scope of the cumulative reset budget) and the
+   matching `SEC-AUTH-20` wording, and that amendment is **requested, not approved** (§A.7.6).
+
+### A.7.6 What the owners still owe this finding
+
+1. **Sign or reject the amendment** in
+   [`2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md) §2.4
+   (D-4). Until then the code is a candidate, the specification text is unamended, and the divergence is
+   disclosed here rather than silently reconciled.
+2. **Decide the residual** in §A.7.4: accept it for the closed beta, or require an additional control
+   (R5 operator runbook, or a future same-network control) — with a named owner, an expiry/review date, the
+   access control on any counter-clearing action, and the logged action §A.6.3 asks for.
+3. **Confirm the operator response to the R1 event**: who watches `password_reset_failed` /
+   `reason = reset_budget_exhausted`, how fast, and what they do. The event is written today; nothing consumes
+   it yet, and this session appoints nobody.
+
 ---
 
 # Part B — F-8: the response bodies are identical, the latency is not
@@ -202,12 +322,15 @@ recipe below is complete enough to rebuild it in a scratch directory:
 
 # Part C — Status and non-claims
 
-| Finding | Status after this record |
+| Finding | Status after this record (including §A.7, added later the same day) |
 |---|---|
-| **F-3** | **OPEN.** Analysed and measured; mitigation proposals costed; **nothing implemented**; requires an authorised option before merge. A risk note does not close it. |
-| **F-8** | **CONFIRMED, PENDING APPROVAL.** Measured; conclusion stated; mitigation (M2) or informed acceptance (M4) required. |
-| D-3 / `SPEC-AUTH-02` | Unchanged: still awaiting signature. R2 or R3 would extend what it must approve; B.3 M4 would extend what it must accept. |
+| **F-3** | **MITIGATED IN CODE FOR THE REMOTE VECTOR — NOT CLOSED.** §A.1–§A.6 analysed and measured it with nothing implemented; §A.7 records what then shipped (`afc5201`: R2 network-scoped counters + R1 detection), with the pre-fix reproduction and the passing suite. It stays open because amendment **A-1** is unsigned and the shared-network residual (§A.7.4) is unaccepted; both are required before merge, and a risk note still closes nothing. |
+| **F-8** | **CONFIRMED, PENDING APPROVAL.** Measured; conclusion stated; mitigation (M2) or informed acceptance (M4) required. **No F-8 change was made**: §A.7 is Part A only. |
+| D-3 / `SPEC-AUTH-02` | Still awaiting signature, and now **larger**: R2 shipped as a candidate, so the decision has to cover the budget's scope/keying (amendment A-1, §2.4 of the request packet) as well as the values. R3 remains the fallback if A-1 is rejected; B.3 M4 would extend what the signature must accept. |
 
-No rate-limit behaviour was changed by this record. No production system was touched. No credit is
-claimed for closing either finding: this document is the input to the owners' decisions, not their
-outcome.
+§§A.1–A.6 and Part B changed no behaviour: no rate-limit value, key, window or spend point was touched
+to produce the analysis, and no F-8 mitigation exists. §A.7 changed exactly one thing — the key the two
+reset-target counters are composed from — and records it, its limits, and its evidence. No production
+system was touched. No credit is claimed for closing either finding: this document is the input to the
+owners' decisions, not their outcome, and the person who implemented §A.7 is not the person who
+authorises it.
