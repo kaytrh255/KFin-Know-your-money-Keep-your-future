@@ -94,7 +94,7 @@ Proposed reset-OTP baseline (candidate values pending validation, tuning, and `S
 
 > **Pending amendment A-1 to SEC-AUTH-20 — NOT in force.** Finding **F-3** (an anonymous caller exhausting another account's reset budget) is mitigated in code by scoping the cumulative budget counter, so the requirement text above — "a cumulative **per-account** failed-verification budget" — no longer matches what the branch implements. The exact replacement wording, the residual it implies, and the (empty) approval fields are in
 > [`docs/evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](../evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md) §2.4, with the implementation and evidence in
-> [`docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](../evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md) §A.7.
+> [`docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](../evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md) §A.7, and the decision packet for the owners is [`docs/evidence/2026-10-13-A1-DECISION-PACKET.md`](../evidence/2026-10-13-A1-DECISION-PACKET.md).
 > This note is a pointer, not the amendment: the requirement text above stays as approved until an owner signs A-1, and the divergence is disclosed rather than silently reconciled. **Nothing here may be read as an approval.**
 
 ## 7. Session and CSRF requirements

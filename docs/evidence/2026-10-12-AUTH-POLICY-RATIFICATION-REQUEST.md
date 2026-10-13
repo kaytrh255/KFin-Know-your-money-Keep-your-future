@@ -137,6 +137,15 @@ makes the risk *handled* rather than *noted*, and take **R2** as the durable fix
   would be a silent policy edit, so the deviation is recorded in public, in
   [`2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md)
   §A.7, and the amendment is requested here. **No approval is claimed, and the amendment is not in force.**
+  The review-ready rendering of this request — behaviour change, compatibility, the demonstrated/untested
+  residual classification, the operator-response proposal and the blank signature blocks — is
+  [`2026-10-13-A1-DECISION-PACKET.md`](2026-10-13-A1-DECISION-PACKET.md); **the wording below governs** if
+  the two ever disagree.
+
+  **Numbering note (2026-10-13).** Two series exist in the records: **D-1 ≡ D5** (both name the
+  unverified-email beta risk acceptance — this packet's §1/D-5 block and the D5 record are the same decision),
+  and **D-4** is the F-3 closure decision. Earlier records that wrote bare "D4"/"D9" meant **D-4**/**D-3**;
+  those cross-references were corrected in the D5 record and `MILESTONE-11`. No decision text changed.
 
   **Amendment A-1 — reset cumulative-budget dimension (`SPEC-AUTH-02`, D-3).** Wording to be adopted
   verbatim in the decision record if the owners approve it:

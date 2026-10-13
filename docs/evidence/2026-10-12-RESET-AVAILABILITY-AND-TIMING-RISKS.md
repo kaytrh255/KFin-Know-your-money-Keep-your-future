@@ -163,8 +163,9 @@ access control, an expiry/review date and the logged action that §A.6.3 asks fo
 ### A.7.3 Evidence
 
 Attack reproduced against the previous code — the fix was temporarily reverted to its `5629fa2` content and
-the new suite re-run against it (`npx vitest run packages/database/test/auth-access.integration.test.ts -t "F-3"`),
-**4 failed / 2 passed**:
+the suite re-run against it (`npx vitest run packages/database/test/auth-access.integration.test.ts -t "F-3"`),
+**6 failed / 2 passed** (amended 2026-10-13 by commit `987b28e`, which added two cases — the distributed
+flood and the unresolved-address fallback — to the six originally recorded here):
 
 | Case | Pre-fix result |
 |---|---|
@@ -172,19 +173,24 @@ the new suite re-run against it (`npx vitest run packages/database/test/auth-acc
 | `a flood on the request endpoint cannot stop the victim completing a reset` | **FAILED** — same `AUTH_RATE_LIMITED` |
 | `counts concurrent flood requests without losing one` | **FAILED** — `expected [...] to have a length of 6 but got 3` (12 concurrent requests across two networks were charged to one counter) |
 | `records one operator-visible event when a budget tips over, not one per request` | **FAILED** — `expected [] to have a length of 1` (no event existed) |
+| `a distributed flood across several networks is still bounded by the challenge, not by geography` | **FAILED** — the victim's fresh code was refused, because three networks had spent one shared account counter |
+| `residual limitation: without a resolvable caller address the budget falls back to the account-only key` | **FAILED** — the addressless flood consumed the budget of a caller that *did* have an address (the shared account-only key) |
 | `answers known and unknown addresses identically at the exhaustion boundary` | passed — the property the fix must **preserve** |
 | `residual limitation: an attacker sharing the victim's network still shares the bucket` | passed — the residual is a property of both versions |
 
-With `afc5201` applied, the same command reports **6 passed**, and the properties asserted are: the victim on
+With `afc5201` applied, the same command reports **8 passed**, and the properties asserted are: the victim on
 another network completes the reset after the flood; a request-endpoint flood cannot deny the victim (whose
 own in-cooldown request answers `accepted: true, issued: false`, then succeeds after the cooldown); known and
 unknown addresses produce identical outcome sequences through the exhaustion boundary
 (`AUTH_CHALLENGE_INVALID` ×budget, then `AUTH_RATE_LIMITED`); 12 concurrent submissions across two networks are
-counted exactly, 2×budget on their merits and the remainder throttled; exactly one operator event regardless of
-flood length; and the shared-network residual is asserted rather than assumed.
+counted exactly, 2×budget on their merits and the remainder throttled; three attacking networks each throttled
+on their own bucket with only five submissions ever evaluated against the code digest — measured back from
+`auth_challenges`, so distribution is bounded by the account rather than by geography; exactly one operator
+event regardless of flood length; the addressless fallback asserted and shown confined to its own path; and
+the shared-network residual asserted rather than assumed.
 
-Whole-gate result on this tree: `pnpm run check` **exit 0** — `evidence:check`, `evidence:test` **17/17**,
-`typecheck` clean, and vitest **769 passed / 38 files**, which includes the real-PostgreSQL integration suites
+Whole-gate result on this tree at `987b28e`: `pnpm run check` **exit 0** — `evidence:check`, `evidence:test`
+**17/17**, `typecheck` clean, and vitest **771 passed / 38 files**, which includes the real-PostgreSQL integration suites
 (database + journey) run against a disposable local PostgreSQL 17.6 with the non-production target flag set;
 `pnpm run web:build` exit 0. No production, Supabase, or shared database was contacted, and no credential
 entered this record, the logs, or the repository.
@@ -219,7 +225,9 @@ F-3 is **not closed**, for two independent reasons, either of which alone would 
 
 1. **Sign or reject the amendment** in
    [`2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md) §2.4
-   (D-4). Until then the code is a candidate, the specification text is unamended, and the divergence is
+   (D-4); the review-ready packet — behaviour change, compatibility, residual classification, operator-response
+   proposal and the blank signature blocks — is
+   [`2026-10-13-A1-DECISION-PACKET.md`](2026-10-13-A1-DECISION-PACKET.md). Until then the code is a candidate, the specification text is unamended, and the divergence is
    disclosed here rather than silently reconciled.
 2. **Decide the residual** in §A.7.4: accept it for the closed beta, or require an additional control
    (R5 operator runbook, or a future same-network control) — with a named owner, an expiry/review date, the

@@ -176,8 +176,9 @@ never written to a report, a log, or the repository; the sink directory was dele
 - **D5 is not implemented and is not yet accepted in writing.** It is a risk-acceptance decision with
   no code, and it is one of the owner decisions requested in
   [`docs/evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md`](../evidence/2026-10-12-AUTH-POLICY-RATIFICATION-REQUEST.md),
-  which also carries the `SPEC-AUTH-01` ratification request (D1) and the `SPEC-AUTH-02` value approval
-  request (D9). None of the three has a signature.
+  which also carries the `SPEC-AUTH-01` ratification request (D-2) and the `SPEC-AUTH-02` value approval
+  request (D-3). None of the three has a signature, and as of 2026-10-13 `SPEC-AUTH-02` also carries the
+  F-3 amendment request A-1 ([`2026-10-13-A1-DECISION-PACKET.md`](../evidence/2026-10-13-A1-DECISION-PACKET.md)).
 - Two findings from the pre-merge review are **open and not closed here**: F-3 (a reset-request
   availability weakness that is externally reachable) and F-8 (a reset-request timing difference).
   Both are analysed with options and costings in the same record, and neither may be closed by a risk

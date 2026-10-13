@@ -51,7 +51,7 @@ The residual exposure is therefore not "anyone can take over an account". It is:
    address the system has never confirmed, so delivery failure is silent to the account.
 4. **Operator load and social engineering.** Locked or unreachable accounts become an operator
    conversation. `locked`, `disabled` and `deletion_pending` accounts are deliberately
-   **not self-recoverable** (decision D4), and the operator-only event `access_denied_unverified`
+   **not self-recoverable** (decision D-4), and the operator-only event `access_denied_unverified`
    records the refusal, so the operator path must resist "please unlock my account" requests.
 5. **Enumeration and availability on the reset surface** — carried separately and **not** accepted
    here: F-3 (measured availability weakness) and F-8 (measured, confirmed timing difference), both in
@@ -110,6 +110,14 @@ Each of these is verifiable in the tree today; none of them depends on this reco
 | Review cadence or expiry | _(not filled)_ |
 | Signature / evidence reference | _(not filled)_ |
 | Outcome | ☐ accept ☐ accept with conditions ☐ reject |
+
+> **Consistency note (2026-10-13).** F-3 has since been mitigated in code for the remote vector (PR #10
+> branch, commits `afc5201`/`987b28e`) but remains **OPEN**: the `SPEC-AUTH-02` amendment A-1 is requested and
+> unsigned, and the shared-network residual is unaccepted. The acceptance condition in §5 is therefore *partly*
+> satisfiable — the remote denial of password recovery is gone — and accepting D5 today would still mean
+> accepting an open F-3. Nothing here is an acceptance; the current F-3 status is in
+> [`2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`](2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md) §A.7
+> and [`2026-10-13-A1-DECISION-PACKET.md`](2026-10-13-A1-DECISION-PACKET.md).
 
 ## 6. Explicit non-claims
 

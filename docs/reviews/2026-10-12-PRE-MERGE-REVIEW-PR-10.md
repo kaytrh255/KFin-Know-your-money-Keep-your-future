@@ -185,7 +185,7 @@ blocked by the trigger.
 
 **F-11 (INFO).** `access_denied_unverified` is now emitted for *any* non-active status
 (`auth-repository.ts:538`) and is classified operator-only (`packages/domain/src/auth.ts:226`), so
-users never see it and D4 holds. The event *name* is legacy; renaming needs a new event type and a
+users never see it and D-4 holds. The event *name* is legacy; renaming needs a new event type and a
 migration (the `0004` CHECK), so leaving it is the right call — worth one line in the record.
 
 **F-12 (INFO).** The abuse windows are grid-aligned fixed windows (observed: 15-minute windows on the
@@ -454,9 +454,12 @@ empty signature blocks.
 implements the durable option **R2** for F-3 — the `reset_target` and cumulative `verification_target`
 counters are keyed on the target composed with the caller's network-prefix digest, still spent
 unconditionally and pre-lookup — together with **R1** detection (one operator-only
-`password_reset_failed` / `reason = 'reset_budget_exhausted'` event on the exhaustion transition). A
-six-case regression suite reproduces the attack against the previous code (4 of the 6 cases fail there,
-the victim's own completion throwing `AUTH_RATE_LIMITED`) and passes with the fix applied.
+`password_reset_failed` / `reason = 'reset_budget_exhausted'` event on the exhaustion transition). An
+**eight-case** regression suite (six at `afc5201`, extended by `987b28e` with the distributed-flood and
+unresolved-address cases) reproduces the attack against the previous code — **6 of the 8 fail there**, the
+victim's own completion throwing `AUTH_RATE_LIMITED` — and passes with the fix applied. The decision packet
+the owners now need, with the residual classification, the operator-response proposal and the blank signature
+blocks, is [`2026-10-13-A1-DECISION-PACKET.md`](../evidence/2026-10-13-A1-DECISION-PACKET.md).
 
 **What this does to F-3's status.** It moves F-3 from *"open, measured, unmitigated"* to
 **mitigated in code for the remote vector, still open**: the fix changes a `SPEC-AUTH-02` behaviour
