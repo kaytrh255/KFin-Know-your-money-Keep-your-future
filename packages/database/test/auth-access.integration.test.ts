@@ -1429,6 +1429,69 @@ integration('trusted private beta access on real PostgreSQL', () => {
         .toHaveLength(concurrency - 2 * BUDGET);
     });
 
+    it('a distributed flood across several networks is still bounded by the challenge, not by geography', async () => {
+      // Three networks, each kept inside its own cumulative budget, so the only limit
+      // left standing is the account-scoped per-challenge cap. This is the case the
+      // fix must not have broken: distribution buys per-network budgets, never extra
+      // code guesses.
+      const repo = budgetRepository();
+      const { email, code } = await victimWithLiveChallenge(repo, 362);
+      const password = 'flood-proof-passphrase-7';
+      const attackerNetworks = [361, 363, 364];
+      const wrong = wrongCodeFor(code);
+
+      const outcomes: string[] = [];
+      for (const network of attackerNetworks) {
+        for (let index = 0; index < BUDGET; index += 1) {
+          outcomes.push(await attempt(repo, email, wrong, network, password));
+        }
+        // One past this network's own budget: throttled on its own bucket.
+        outcomes.push(await attempt(repo, email, wrong, network, password));
+      }
+
+      // Exactly one submission retires the challenge — the sixth failure, whatever
+      // network it came from. Everything after it is generically invalid or
+      // throttled, and can no longer be compared against the code.
+      expect(outcomes.filter((outcome) => outcome === 'AUTH_CHALLENGE_ATTEMPTS_EXHAUSTED'))
+        .toHaveLength(1);
+      expect(outcomes.filter((outcome) => outcome === 'AUTH_RATE_LIMITED').length)
+        .toBeGreaterThanOrEqual(attackerNetworks.length);
+
+      // The direct measurement: however many networks join in, only five submissions
+      // were ever evaluated against this challenge's digest.
+      const challenge = await database.query<{ attempt_count: number; superseded_at: Date | null }>(
+        `SELECT attempt_count, superseded_at
+           FROM auth_challenges
+          WHERE user_id = (SELECT id FROM users WHERE email_normalized = $1)
+            AND purpose = 'password_reset'
+          ORDER BY created_at
+          LIMIT 1`,
+        [email],
+      );
+      expect(challenge.rows[0]?.attempt_count).toBe(BASE_POLICY.challenge.maximumAttempts);
+      expect(challenge.rows[0]?.superseded_at).not.toBeNull();
+
+      // And the victim is not locked out by any of it: a fresh code, obtained after
+      // the cooldown, completes the reset.
+      clock += BASE_POLICY.challenge.resendCooldownMs + 1;
+      const fresh = await repo.requestPasswordReset({
+        email,
+        correlationId: randomUUID(),
+        ipAddress: source(362),
+        userAgent: AGENT,
+      });
+      expect(fresh.issued).toBe(true);
+      const completed = await repo.resetPassword({
+        email,
+        oneTimeCode: fresh.delivery!.oneTimeCode,
+        newPassword: password,
+        correlationId: randomUUID(),
+        ipAddress: source(362),
+        userAgent: AGENT,
+      });
+      expect(completed.userId).toBeTruthy();
+    });
+
     it('records one operator-visible event when a budget tips over, not one per request', async () => {
       const repo = budgetRepository();
       const { email, code } = await victimWithLiveChallenge(repo, 342);
@@ -1451,6 +1514,51 @@ integration('trusted private beta access on real PostgreSQL', () => {
       expect(exhausted, 'exactly the transition is recorded, however long the flood runs').toHaveLength(1);
       expect(exhausted[0]?.outcome).toBe('blocked');
       expect(exhausted[0]?.visibility, 'never surfaced to the account holder').toBe('operator');
+    });
+
+    it('residual limitation: without a resolvable caller address the budget falls back to the account-only key', async () => {
+      // Documented, not fixed. `registerAbuseAttempt` skips a scope whose value is
+      // absent, and `targetNetworkKey` degrades to the bare target, so a caller that
+      // arrives with no address writes — and shares — the pre-fix, account-only
+      // bucket, and the per-network `reset_ip` throttle does not apply at all.
+      // Asserted so the fallback is a stated property rather than an assumption.
+      const repo = budgetRepository();
+      const invitation = await invite();
+      const email = `f3-no-address-${randomUUID()}@example.invalid`;
+      await register(repo, invitation.code, email, 371);
+      const requested = await repo.requestPasswordReset({
+        email,
+        correlationId: randomUUID(),
+        userAgent: AGENT,
+      });
+      expect(requested.issued).toBe(true);
+      const { oneTimeCode } = requested.delivery!;
+      const password = 'flood-proof-passphrase-8';
+      const wrong = wrongCodeFor(oneTimeCode);
+      const addresslessAttempt = (code: string) => repo.resetPassword({
+        email,
+        oneTimeCode: code,
+        newPassword: password,
+        correlationId: randomUUID(),
+        userAgent: AGENT,
+      }).then(() => 'accepted').catch((error: { code: string }) => error.code);
+
+      for (let index = 0; index < BUDGET; index += 1) {
+        expect(await addresslessAttempt(wrong)).toBe('AUTH_CHALLENGE_INVALID');
+      }
+      expect(await addresslessAttempt(wrong), 'addressless callers share one bucket').toBe('AUTH_RATE_LIMITED');
+
+      // The fallback is confined to that path: the same account, reset from a real
+      // network, is unaffected, and its code still works.
+      const completed = await repo.resetPassword({
+        email,
+        oneTimeCode,
+        newPassword: password,
+        correlationId: randomUUID(),
+        ipAddress: source(372),
+        userAgent: AGENT,
+      });
+      expect(completed.userId).toBeTruthy();
     });
 
     it('residual limitation: an attacker sharing the victim\'s network still shares the bucket', async () => {
