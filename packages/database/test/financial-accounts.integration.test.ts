@@ -318,4 +318,59 @@ integration('financial-account onboarding on real PostgreSQL', () => {
     expect((await repository.listFinancialAccounts(outsider.id)).items).toEqual([]);
     expect((await repository.listFinancialAccounts(randomUUID())).items).toEqual([]);
   }, 30_000);
+
+  /**
+   * MVP-SCOPE §2.4 "default categories": the money write flows require a
+   * `categoryCode`, so the codes a caller may use have to be discoverable
+   * without reading the schema. This asserts the ordering the client relies on,
+   * that inactive categories are withheld, and — the part that must never
+   * regress — that one owner's custom category is invisible to another.
+   */
+  it('lists active categories deterministically and never leaks another owner\'s custom category', async () => {
+    const owner = await verifiedUser();
+    const other = await verifiedUser();
+
+    const shared = await repository.listCategories(owner.id);
+    expect(shared.items.length).toBeGreaterThan(0);
+    // Deterministic order: display_order, then code.
+    const keys = shared.items.map((item) => `${item.displayOrder}:${item.code}`);
+    expect(keys).toEqual([...keys].sort((a, b) => {
+      const [orderA, codeA] = a.split(':');
+      const [orderB, codeB] = b.split(':');
+      return Number(orderA) - Number(orderB) || String(codeA).localeCompare(String(codeB));
+    }));
+    // The seeded baseline every direction needs.
+    const income = shared.items.filter((item) => item.transactionKind === 'income');
+    const expense = shared.items.filter((item) => item.transactionKind === 'expense');
+    expect(income.map((item) => item.code)).toContain('income_other');
+    expect(expense.map((item) => item.code)).toContain('food');
+    expect(shared.items.every((item) => item.messageKey.startsWith('category.'))).toBe(true);
+    // The same list for two owners, because the baseline is shared.
+    expect((await repository.listCategories(other.id)).items).toEqual(shared.items);
+
+    // An owner-owned category is private to that owner...
+    await database.query(
+      `INSERT INTO categories (id, owner_user_id, code, message_key, transaction_kind, default_expense_class, display_order)
+       VALUES ($1, $2, 'owner_private_probe', 'category.owner_private_probe', 'expense', NULL, 500)`,
+      [randomUUID(), owner.id],
+    );
+    const withCustom = await repository.listCategories(owner.id);
+    expect(withCustom.items.map((item) => item.code)).toContain('owner_private_probe');
+    // ...and another owner, and an unknown id, never see it.
+    const otherView = await repository.listCategories(other.id);
+    expect(otherView.items.map((item) => item.code)).not.toContain('owner_private_probe');
+    expect(otherView.items).toEqual(shared.items);
+    const strangerView = await repository.listCategories(randomUUID());
+    expect(strangerView.items.map((item) => item.code)).not.toContain('owner_private_probe');
+
+    // Deactivating a category removes it from the selectable list for everyone.
+    await database.query(
+      `INSERT INTO categories (id, owner_user_id, code, message_key, transaction_kind, default_expense_class, display_order, active)
+       VALUES ($1, NULL, 'retired_probe', 'category.retired_probe', 'expense', NULL, 510, false)`,
+      [randomUUID()],
+    );
+    const afterRetire = await repository.listCategories(owner.id);
+    expect(afterRetire.items.map((item) => item.code)).not.toContain('retired_probe');
+    expect(afterRetire.items.map((item) => item.code)).toContain('owner_private_probe');
+  }, 30_000);
 });

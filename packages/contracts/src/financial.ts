@@ -320,3 +320,28 @@ export const financialAccountSummarySchema = z.strictObject({
 export const financialAccountListResponseSchema = z.strictObject({
   items: z.array(financialAccountSummarySchema).max(100),
 });
+
+/**
+ * Transaction categories (MVP-SCOPE §2.4 "default categories").
+ *
+ * Read-only product reference data, seeded by migration `0001` and shared by
+ * every owner (`owner_user_id IS NULL`). The list exists because the money
+ * write flows require a `categoryCode` and the client had no way to learn which
+ * codes are valid for a direction: the field had to be typed blind, and a wrong
+ * code was refused only at write time (`FINANCIAL_VALIDATION_FAILED`).
+ *
+ * `messageKey` is carried so the client can label a code without inventing
+ * wording, and `defaultExpenseClass` so the expense form can pre-select the
+ * approved class for a category rather than asking the user to guess one.
+ */
+export const categorySchema = z.strictObject({
+  code: z.string().regex(/^[a-z][a-z0-9_]{1,62}$/),
+  transactionKind: transactionKindSchema,
+  messageKey: z.string().min(1).max(120),
+  defaultExpenseClass: expenseClassSchema.nullable(),
+  displayOrder: z.number().int().min(0),
+});
+
+export const categoryListResponseSchema = z.strictObject({
+  items: z.array(categorySchema).max(200),
+});

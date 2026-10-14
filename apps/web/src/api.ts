@@ -198,11 +198,23 @@ export function createApi(transport: ApiTransport) {
     },
     financial: {
       account: () => request<{
-        accountId: string; name: string; currency: string; financialStateVersion: string;
+        // The route answers `currentBalanceSchema`, which has no account name.
+        accountId: string; currency: string; financialStateVersion: string;
         snapshot: { id: string; amountMinor: string; effectiveAt: string; effectiveLocalDate: string };
         postedCurrentIncomeMinor: string; postedCurrentExpenseMinor: string; currentBalanceMinor: string;
       }>({ method: 'GET', path: '/api/v1/financial-account' }),
       accounts: () => request<{ items: Array<Record<string, unknown>> }>({ method: 'GET', path: '/api/v1/financial-accounts' }),
+      /**
+       * Category reference data (MVP-SCOPE §2.4). Fetched so the money-entry
+       * forms can offer the valid codes for a direction instead of asking a
+       * person to type one from memory.
+       */
+      categories: () => request<{
+        items: Array<{
+          code: string; transactionKind: string; messageKey: string;
+          defaultExpenseClass: string | null; displayOrder: number;
+        }>;
+      }>({ method: 'GET', path: '/api/v1/categories' }),
       // `idempotencyHeadersSchema` on this route makes the header mandatory: without
       // it the API answers 400 REQUEST_VALIDATION_FAILED before the handler runs.
       open: (body: unknown, idempotencyKey: string) => request<{ accountId: string; snapshotId: string; financialStateVersion: string }>({ method: 'POST', path: '/api/v1/financial-account', body, idempotencyKey }),

@@ -112,6 +112,34 @@ reachability call and one real state-changing request against a deliberately
 unregistered probe address, so a broken preview can be diagnosed from the browser
 without a shell.
 
+### Sign-in inside the preview frame (2026-10-13)
+
+The preview renders the client inside a **cross-site iframe** on the platform page.
+A browser stores and sends a `SameSite=Lax`/`Strict` cookie only when the page is
+same-site with the top-level document, so the session cookie (`SameSite=Lax`) and the
+CSRF cookie (`SameSite=Strict`) are **not kept inside that frame**: sign-in answers
+200 because the API did mint the session, then `GET /api/v1/auth/me` answers 401 and
+no screen may claim a signed-in state.
+
+Reproduced locally on 2026-10-13 with a browser-equivalent client and a separate test
+account, driving the real dev server and API: first-party origin → login 200,
+`/auth/me` 200; cross-site iframe → login 200, `/auth/me` 401. The API and the proxy
+are correct — the proxy passes `Set-Cookie` out and the returned `Cookie` back
+unchanged, which `apps/web/test/dev-server.test.ts` now pins.
+
+Two consequences, both deliberate:
+
+- **Sign in from a top-level tab**, not from inside the frame (`window.top !==
+  window.self` is `true` inside the frame). The cookie transport stays
+  `HttpOnly; Secure; SameSite=Lax` for the session and `SameSite=Strict` for CSRF;
+  relaxing it for the frame was considered and **rejected** (owner decision,
+  2026-10-13), because SameSite remains defense-in-depth alongside the API's
+  `Origin`/`Sec-Fetch-Site` check.
+- **The client reports the failure honestly.** The sign-in screen shows "Signed in."
+  only after `/api/v1/auth/me` confirms a session; otherwise it says the API accepted
+  the sign-in but this browser did not keep the session cookie, and points at its own
+  tab. `apps/web/test/session-routing.test.ts` covers both outcomes.
+
 ### Diagnosing a rejected write
 
 A `4xx` that says the request "does not match the API contract" now names the

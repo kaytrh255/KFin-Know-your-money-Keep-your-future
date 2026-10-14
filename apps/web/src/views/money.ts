@@ -17,7 +17,6 @@ export interface MoneyViewContext {
 
 interface AccountSummary {
   accountId: string;
-  name: string;
   currency: string;
   financialStateVersion: string;
   snapshot: { id: string; amountMinor: string; effectiveAt: string; effectiveLocalDate: string };
@@ -95,7 +94,10 @@ function accountSummary(context: MoneyViewContext, account: AccountSummary, relo
     card('Authoritative balance (HOME-01)',
       el('dl', { class: 'facts' },
         el('dt', { text: 'Current balance' }), el('dd', { class: 'amount', text: formatMinor(account.currentBalanceMinor, account.currency) }),
-        el('dt', { text: 'Account' }), el('dd', { text: `${account.name} (${account.currency})` }),
+        // `currentBalanceSchema` carries no account name, so the screen shows the
+        // currency it does carry instead of rendering a field that is not sent
+        // (it printed "undefined" until 2026-10-13).
+        el('dt', { text: 'Account currency' }), el('dd', { text: account.currency }),
         el('dt', { text: 'Snapshot' }), el('dd', { text: `${account.snapshot.id} · ${formatMinor(account.snapshot.amountMinor, account.currency)} · ${account.snapshot.effectiveAt}` }),
         el('dt', { text: 'Posted this anchor' }), el('dd', { text: `income ${account.postedCurrentIncomeMinor} · expense ${account.postedCurrentExpenseMinor}` }),
         el('dt', { text: 'financialStateVersion' }), el('dd', { text: account.financialStateVersion }),

@@ -8,6 +8,7 @@
  */
 
 import { createApi, type Api } from './api.js';
+import { routeNeedsSession, sessionGate } from './session-routing.js';
 import { el, notice, toast } from './dom.js';
 import { mountOutboxPanel } from './outbox.js';
 import { activityView } from './views/activity.js';
@@ -78,7 +79,26 @@ if (!app) throw new Error('The application shell is missing.');
 const authContext: AuthViewContext = {
   api,
   navigate: (route) => { window.location.hash = route; },
-  refreshSession: async () => { await loadSession(); renderNav(); render(); },
+  /**
+   * Re-reads the session and reports whether the browser actually holds one.
+   *
+   * The return value is the point: `POST /api/v1/auth/login` answering 200 only
+   * proves the API minted a session, not that this browser kept the cookie
+   * (2026-10-13). Only a confirmed `GET /api/v1/auth/me` does, and the caller has
+   * to be able to say so instead of claiming a signed-in state.
+   *
+   * Session-dependent screens are repainted here; auth screens are deliberately
+   * not, because repainting the sign-in screen would throw away the result the
+   * caller is about to show.
+   */
+  refreshSession: async () => {
+    await loadSession();
+    renderNav();
+    renderChip();
+    const { path } = currentRoute();
+    if (session !== null && routeNeedsSession(path, NAV)) await render();
+    return session !== null;
+  },
 };
 
 function currentRoute(): { readonly path: string; readonly query: URLSearchParams } {
@@ -134,10 +154,10 @@ async function render(): Promise<void> {
   const { path, query } = currentRoute();
   if (!app) return;
 
-  const needsSession = NAV.some((entry) => entry.route === `#${path}` && entry.needsSession);
-  if (needsSession && session === null) {
-    app.replaceChildren(notice('info', 'Sign in first: these screens read real API data and there is no placeholder mode.'));
-    window.location.hash = '#/sign-in';
+  const gate = sessionGate(path, session, NAV);
+  if (gate.redirectTo !== null) {
+    app.replaceChildren(notice('info', gate.notice ?? 'Sign in first.'));
+    window.location.hash = gate.redirectTo;
     return;
   }
 

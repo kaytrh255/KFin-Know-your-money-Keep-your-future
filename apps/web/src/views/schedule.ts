@@ -8,6 +8,7 @@
 import type { Api, ApiFailure } from '../api.js';
 import { newIdempotencyKey } from '../api.js';
 import { card, el, field, notice, readInput, selectField, toast, wire } from '../dom.js';
+import { categoryPicker } from './category-picker.js';
 import { formatMinor, localDateToday } from '../money.js';
 
 export interface ScheduleViewContext {
@@ -127,16 +128,26 @@ export function scheduleView(context: ScheduleViewContext): HTMLElement {
     );
   }
 
+  const createKindField = selectField('Kind', KINDS, { value: 'expense', name: 'kind' });
+  const createCategory = categoryPicker({
+    // The picker only needs the payload; a rejected fetch throws and degrades to the typed field.
+    listCategories: async () => (await context.api.financial.categories()).data,
+    kind: () => readInput(createForm, 'kind'),
+    fallbackPlaceholder: 'rent',
+  });
+
   const createForm = el('form', { class: 'stack' },
     field({ label: 'Title', name: 'title', required: true }),
-    selectField('Kind', KINDS, { value: 'expense', name: 'kind' }),
+    createKindField,
+    createCategory.node,
     field({ label: 'Expected amount (minor units)', name: 'expectedAmountMinor', required: true }),
     field({ label: 'Due on', name: 'dueOn', required: true, value: localDateToday() }),
-    field({ label: 'Category code', name: 'categoryCode', required: true, placeholder: 'rent', hint: 'Must be an active seeded code for the chosen direction; docs/development/LOCAL-DEVELOPMENT.md §7 lists them.' }),
     selectField('Expense class', SCHEDULE_EXPENSE_CLASSES, { includeEmpty: true, name: 'expenseClass', hint: 'A one-off outflow is planned, so only the fixed/variable classes are accepted.' }),
     el('div', { class: 'actions' }, el('button', { class: 'button', type: 'submit', text: 'Create one-off schedule' })),
   );
   const createOutput = el('div', { class: 'result' });
+  createKindField.addEventListener('change', () => createCategory.refresh());
+  void createCategory.load();
   createForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const expenseClass = readInput(createForm, 'expenseClass');

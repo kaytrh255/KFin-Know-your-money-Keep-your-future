@@ -54,7 +54,12 @@ async function startUpstream(): Promise<Upstream> {
     request.on('end', () => {
       const body = Buffer.concat(chunks).toString('utf8');
       requests.push({ method: request.method ?? 'GET', url: request.url ?? '/', body, headers: request.headers });
-      response.writeHead(200, { 'content-type': 'application/json' });
+      // The stub always sets one cookie so a case can prove the proxy passes
+      // `Set-Cookie` out and the browser's `Cookie` back, unchanged.
+      response.writeHead(200, {
+        'content-type': 'application/json',
+        'set-cookie': 'kfin_probe=1; Path=/; HttpOnly; Secure; SameSite=Lax',
+      });
       response.end(JSON.stringify({ method: request.method, url: request.url, body, csrf: request.headers['x-kfin-csrf'] ?? null }));
     });
   });
@@ -178,6 +183,35 @@ describe('local testing client dev server', () => {
     const readiness = await fetch(`${base}/health/ready`);
     expect(readiness.status).toBe(200);
     expect(upstream.requests[1]?.url).toBe('/health/ready');
+
+    await upstream.close();
+  }, 20_000);
+
+  it('passes Set-Cookie out to the browser and the browser Cookie back to the API unchanged', async () => {
+    // The 2026-10-13 sign-in bounce was *not* the proxy: a browser that keeps a
+    // cookie can sign in through this proxy. This case pins that property, so a
+    // future cookie-rewriting change cannot hide a real session loss behind a
+    // proxy defect.
+    const upstream = await startUpstream();
+    const port = await startDevServer({ KFIN_API_ORIGIN: upstream.origin, KFIN_WEB_SKIP_BUILD: '1' });
+    const base = `http://127.0.0.1:${port}`;
+
+    const login = await fetch(`${base}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: base, 'sec-fetch-site': 'same-origin' },
+      body: '{"email":"repro@example.invalid","password":"x"}',
+    });
+    expect(login.status).toBe(200);
+    // Attributes arrive exactly as the API wrote them: no Domain rewrite, no
+    // SameSite rewrite, HttpOnly intact.
+    expect(login.headers.getSetCookie()).toEqual(['kfin_probe=1; Path=/; HttpOnly; Secure; SameSite=Lax']);
+
+    const me = await fetch(`${base}/api/v1/auth/me`, {
+      headers: { cookie: 'kfin_probe=1', origin: base, 'sec-fetch-site': 'same-origin' },
+    });
+    expect(me.status).toBe(200);
+    expect(upstream.requests.at(-1)?.url).toBe('/api/v1/auth/me');
+    expect(upstream.requests.at(-1)?.headers.cookie).toBe('kfin_probe=1');
 
     await upstream.close();
   }, 20_000);

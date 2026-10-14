@@ -13,6 +13,7 @@
 import type { Api, ApiFailure } from '../api.js';
 import { card, el, field, notice, readInput, selectField, toast, wire } from '../dom.js';
 import { instantNow } from '../money.js';
+import { signInOutcome } from '../session-routing.js';
 
 const LOCALES = ['vi-VN', 'en-US', 'en-GB', 'ja-JP'];
 const TIMEZONES = ['Asia/Ho_Chi_Minh', 'Asia/Tokyo', 'Asia/Singapore', 'UTC'];
@@ -21,7 +22,8 @@ const CURRENCIES = ['VND', 'USD', 'EUR', 'JPY', 'SGD'];
 export interface AuthViewContext {
   readonly api: Api;
   readonly navigate: (route: string) => void;
-  readonly refreshSession: () => Promise<void>;
+  /** Resolves true only when `GET /api/v1/auth/me` confirms a live session. */
+  readonly refreshSession: () => Promise<boolean>;
 }
 
 function failureNotice(error: unknown): HTMLElement {
@@ -51,10 +53,18 @@ export function signInView(context: AuthViewContext): HTMLElement {
     result.replaceChildren(el('p', { class: 'hint', text: 'Signing in…' }));
     void context.api.auth.login({ email, password })
       .then(async (response) => {
-        result.replaceChildren(notice('ok', 'Signed in.'), wire('response', response.data));
-        await context.refreshSession();
+        // A 200 from /auth/login proves the API minted a session. It does not prove
+        // this browser kept the cookie, so the screen may only claim "signed in"
+        // once /auth/me has confirmed one (2026-10-13).
+        const outcome = signInOutcome({ sessionConfirmed: await context.refreshSession() });
+        result.replaceChildren(
+          notice(outcome.status === 'signed-in' ? 'ok' : 'error', outcome.headline),
+          ...(outcome.detail === null ? [] : [el('p', { class: 'hint', text: outcome.detail })]),
+          wire('response', response.data),
+        );
+        if (outcome.navigateTo === null) return;
         toast('Signed in');
-        context.navigate('#/money');
+        context.navigate(outcome.navigateTo);
       })
       .catch((error: unknown) => { result.replaceChildren(failureNotice(error)); });
   });

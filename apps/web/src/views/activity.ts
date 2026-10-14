@@ -9,6 +9,7 @@
 import type { Api, ApiFailure } from '../api.js';
 import { newIdempotencyKey } from '../api.js';
 import { card, el, field, notice, readCheckbox, readInput, selectField, toast, wire } from '../dom.js';
+import { categoryPicker } from './category-picker.js';
 import { formatMinor, localDateToday, localYearMonth } from '../money.js';
 
 export interface ActivityViewContext {
@@ -64,6 +65,28 @@ function readSnapshotInclusion(root: ParentNode): Record<string, boolean> {
 }
 
 export function activityView(context: ActivityViewContext, account: FinancialContext): HTMLElement {
+  /**
+   * The optimistic-concurrency values a write must carry.
+   *
+   * Held in a mutable object instead of being taken from the parameter once: a
+   * successful write advances the account's financial state version, so a second
+   * write from this same form was rejected with `409 FINANCIAL_STATE_STALE` until
+   * the whole screen was reloaded (demonstrated 2026-10-13). The values are
+   * re-read from the API rather than guessed, and a failed refresh keeps the last
+   * known values so the API still refuses a stale write instead of the client
+   * inventing one.
+   */
+  const writeContext = { ...account };
+  async function refreshWriteContext(): Promise<void> {
+    try {
+      const response = await context.api.financial.account();
+      writeContext.financialStateVersion = response.data.financialStateVersion;
+      writeContext.snapshotId = response.data.snapshot.id;
+    } catch {
+      // Keep what was last confirmed; the next write reports the API's refusal.
+    }
+  }
+
   const host = el('div', { class: 'stack' });
   const monthInput = field({ label: 'Month', name: 'month', value: localYearMonth(), placeholder: 'YYYY-MM' });
   const kindFilter = selectField('Kind filter', KINDS, { includeEmpty: true, name: 'kindFilter' });
@@ -193,17 +216,19 @@ export function activityView(context: ActivityViewContext, account: FinancialCon
     target.replaceChildren(card(`Void transaction ${transactionId}`, form, el('div', { class: 'actions' }, commitButton), previewOutput));
   }
 
+  const kindField = selectField('Kind', KINDS, { value: 'expense', name: 'kind' });
+  const category = categoryPicker({
+    // The picker only needs the payload; a rejected fetch throws and degrades to the typed field.
+    listCategories: async () => (await context.api.financial.categories()).data,
+    kind: () => readInput(addForm, 'kind'),
+    fallbackPlaceholder: 'food',
+  });
+
   const addForm = el('form', { class: 'stack' },
     field({ label: 'Amount (minor units)', name: 'amountMinor', required: true, hint: `${context.currency}. Signed-minor rules: positive minor string here; direction comes from the kind.` }),
-    selectField('Kind', KINDS, { value: 'expense', name: 'kind' }),
+    kindField,
+    category.node,
     field({ label: 'Occurred on', name: 'occurredOn', required: true, value: localDateToday() }),
-    field({
-      label: 'Category code',
-      name: 'categoryCode',
-      required: true,
-      placeholder: 'food',
-      hint: 'Lower-case, 2–63 characters, starts with a letter. Codes are rows in the seeded `categories` table and no endpoint lists them yet, so see docs/development/LOCAL-DEVELOPMENT.md §7 for the seeded values.',
-    }),
     selectField('Expense class', EXPENSE_CLASSES, { includeEmpty: true, name: 'expenseClass', hint: 'Required for expenses by the domain rules; leave empty for income.' }),
     labelledCheckbox('isUnexpected', 'Unexpected (needed for the "needs attention" signal)'),
     snapshotInclusionField(),
@@ -212,6 +237,8 @@ export function activityView(context: ActivityViewContext, account: FinancialCon
   );
   const addOutput = el('div', { class: 'result' });
   const addKey = { value: newIdempotencyKey() };
+  kindField.addEventListener('change', () => category.refresh());
+  void category.load();
   addForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const expenseClass = readInput(addForm, 'expenseClass');
@@ -225,8 +252,8 @@ export function activityView(context: ActivityViewContext, account: FinancialCon
       isUnexpected: readCheckbox(addForm, 'isUnexpected'),
       ...readSnapshotInclusion(addForm),
       ...(note.length === 0 ? {} : { note }),
-      expectedFinancialStateVersion: account.financialStateVersion,
-      reviewedLatestSnapshotId: account.snapshotId,
+      expectedFinancialStateVersion: writeContext.financialStateVersion,
+      reviewedLatestSnapshotId: writeContext.snapshotId,
     };
     addOutput.replaceChildren(wire('request (version/snapshot read from the API just now)', { ...body, idempotencyKey: addKey.value }));
     void context.api.financial.createTransaction(body, addKey.value)
@@ -234,6 +261,7 @@ export function activityView(context: ActivityViewContext, account: FinancialCon
         addOutput.replaceChildren(notice('ok', 'Transaction recorded.'), wire('response', response.data));
         toast('Transaction recorded');
         addKey.value = newIdempotencyKey();
+        await refreshWriteContext();
         await load();
       })
       .catch((error: unknown) => { addOutput.replaceChildren(failureNotice(error)); });

@@ -15,6 +15,7 @@ import {
   correctionPreviewResponseSchema,
   confirmOccurrenceBodySchema,
   confirmOccurrenceResponseSchema,
+  categoryListResponseSchema,
   createOneOffScheduleBodySchema,
   createOneOffScheduleResponseSchema,
   createSnapshotBodySchema,
@@ -58,6 +59,7 @@ import type {
   CreateTransactionInput,
   CreateTransactionResult,
   CurrentBalanceView,
+  CategoryList,
   FinancialAccountList,
   MonthlyActualsView,
   OccurrenceView,
@@ -94,6 +96,11 @@ export interface FinancialApiService {
     correlationId: string,
   ): Promise<OpenFinancialAccountResult>;
   listFinancialAccounts(ownerUserId: string): Promise<FinancialAccountList>;
+  /**
+   * The categories a caller may use. Shared seeded rows plus the caller's own,
+   * never another owner's (see `PostgresFinancialRepository.listCategories`).
+   */
+  listCategories(ownerUserId: string): Promise<CategoryList>;
   getCurrentBalance(ownerUserId: string): Promise<CurrentBalanceView>;
   createSnapshot(
     ownerUserId: string,
@@ -329,6 +336,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       response: { 200: financialAccountListResponseSchema, 401: errorResponseSchema },
     },
   }, async (request) => options.financialService.listFinancialAccounts(requireUserId(request)));
+
+  /**
+   * Categories (MVP-SCOPE §2.4 "default categories"). Read-only reference data
+   * behind session authentication, next to the money routes that consume a
+   * `categoryCode`, so a client can offer the valid codes instead of asking a
+   * person to type one blind.
+   */
+  app.get('/api/v1/categories', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-foundation'],
+      response: { 200: categoryListResponseSchema, 401: errorResponseSchema },
+    },
+  }, async (request) => options.financialService.listCategories(requireUserId(request)));
 
   app.get('/api/v1/financial-account', {
     preHandler: requireAuthentication,

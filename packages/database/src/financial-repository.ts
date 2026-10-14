@@ -72,6 +72,19 @@ export interface FinancialAccountList {
   readonly items: FinancialAccountSummaryView[];
 }
 
+/** One selectable transaction category (MVP-SCOPE §2.4 "default categories"). */
+export interface CategoryView {
+  readonly code: string;
+  readonly transactionKind: 'income' | 'expense';
+  readonly messageKey: string;
+  readonly defaultExpenseClass: 'essential_fixed' | 'essential_variable' | 'daily' | null;
+  readonly displayOrder: number;
+}
+
+export interface CategoryList {
+  readonly items: CategoryView[];
+}
+
 export interface CreateSnapshotInput {
   readonly amountMinor: string;
   readonly effectiveAt: string;
@@ -264,6 +277,45 @@ export class PostgresFinancialRepository {
         ...mapBalance(row),
         name: row.name,
         accountType: row.account_type,
+      })),
+    };
+  }
+
+  /**
+   * Categories a caller may use for a transaction direction.
+   *
+   * Shared seeded rows (`owner_user_id IS NULL`) plus the caller's own rows, in
+   * `display_order` then `code` order so the client's list is deterministic and
+   * matches the seeded presentation order. Inactive rows are withheld: a
+   * category that is no longer offered must not be selectable, even though the
+   * write path would still accept it for an already-recorded transaction.
+   *
+   * This is reference data and reads no money state, so it takes no serializer
+   * lock and needs no policy guard. It is scoped by the authenticated owner and
+   * never returns another owner's custom category.
+   */
+  async listCategories(ownerUserId: string): Promise<CategoryList> {
+    const result = await this.pool.query<{
+      code: string;
+      transaction_kind: 'income' | 'expense';
+      message_key: string;
+      default_expense_class: 'essential_fixed' | 'essential_variable' | 'daily' | null;
+      display_order: number;
+    }>(`
+      SELECT code, transaction_kind, message_key, default_expense_class, display_order
+      FROM categories
+      WHERE active
+        AND (owner_user_id IS NULL OR owner_user_id = $1)
+      ORDER BY display_order ASC, code ASC
+      LIMIT 200
+    `, [ownerUserId]);
+    return {
+      items: result.rows.map((row) => ({
+        code: row.code,
+        transactionKind: row.transaction_kind,
+        messageKey: row.message_key,
+        defaultExpenseClass: row.default_expense_class,
+        displayOrder: row.display_order,
       })),
     };
   }
