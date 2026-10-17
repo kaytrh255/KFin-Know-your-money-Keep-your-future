@@ -128,8 +128,14 @@ development sandbox used on 2026-10-17, so the image itself is only proven by CI
 ## Measured
 
 - 2026-10-17, local PostgreSQL 18.6: smoke **12/12**, production-only install
-  (6 dependencies, `npm install --omit=dev`) **12/12**; artifact commit `5802b8c`.
-- The CI `verify` and `image` jobs repeat both against `postgres:17.6`.
+  (6 dependencies, `npm install --omit=dev`, `tsx` unresolvable) **12/12**;
+  artifact commit `5802b8c`.
+- CI run `39024067940` (commit `ac2c2a0`): both jobs green. `verify` ran the
+  production-only install; `image` built the image, applied the 11 migrations
+  with `migrate.bundle.mjs` from the image, then started the container and
+  confirmed `/health/ready`, the HTML entry point, `src/main.js` as
+  `text/javascript`, `401` on `/api/v1/auth/me`, `404` on an unknown API route,
+  and that `node_modules/tsx` does not exist in the image.
 
 ## Rollback
 
