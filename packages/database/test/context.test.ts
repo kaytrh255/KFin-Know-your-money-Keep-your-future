@@ -69,12 +69,14 @@ describe('application role guard', () => {
 
   const clean = {
     role: APPLICATION_DATABASE_ROLE,
+    session_role: APPLICATION_DATABASE_ROLE,
     rolsuper: false,
     rolbypassrls: false,
     rolcreatedb: false,
     rolcreaterole: false,
     owned_relations: '0',
     owned_schemas: '0',
+    memberships: '0',
   };
 
   it('accepts the dedicated application role', async () => {
@@ -83,6 +85,8 @@ describe('application role guard', () => {
 
   it.each([
     ['another role', { ...clean, role: 'postgres' }, /connected as postgres/],
+    ['a role entered with SET ROLE', { ...clean, session_role: 'postgres' }, /entered with SET ROLE/],
+    ['a role with a membership', { ...clean, memberships: '1' }, /member of 1 other role/],
     ['superuser', { ...clean, rolsuper: true }, /SUPERUSER/],
     ['bypassrls', { ...clean, rolbypassrls: true }, /BYPASSRLS/],
     ['createdb', { ...clean, rolcreatedb: true }, /CREATEDB/],

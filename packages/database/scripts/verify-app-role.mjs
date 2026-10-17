@@ -7,6 +7,9 @@
  * It connects with `DATABASE_URL` (the application role), never with the admin
  * or migration role, and prints no connection string or secret.
  *
+ * It also checks role membership: `NOINHERIT` does not prevent `SET ROLE`, so a
+ * membership in a privileged role is an escalation even when inheritance is off.
+ *
  * Required:
  *   DATABASE_URL           application connection (kfin_app)
  * Optional:
@@ -43,8 +46,13 @@ async function expectInsufficientPrivilege(sql, label) {
     await client.query(sql);
     failures.push(`${label}: unexpectedly succeeded`);
   } catch (error) {
-    if (error && error.code === '42501') return;
-    failures.push(`${label}: expected SQLSTATE 42501, got ${error?.code ?? 'unknown'}`);
+    if (error && error.code !== '42501') {
+      failures.push(`${label}: expected SQLSTATE 42501, got ${error?.code ?? 'unknown'}`);
+    }
+  } finally {
+    // A SET ROLE that unexpectedly succeeded must not turn later checks into
+    // migrator-privileged statements.
+    await client.query('RESET ROLE').catch(() => undefined);
   }
 }
 
@@ -52,11 +60,20 @@ try {
   await client.connect();
   const identity = (await client.query(`
     SELECT current_user AS role, current_database() AS database,
+           session_user::text AS session_role,
            r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolbypassrls, r.rolinherit, r.rolcanlogin
       FROM pg_roles r WHERE r.rolname = current_user
   `)).rows[0];
+  const membership = (await client.query(`
+    SELECT count(*)::int AS count
+      FROM pg_auth_members am
+      JOIN pg_roles m ON m.oid = am.member
+     WHERE m.rolname = current_user
+  `)).rows[0];
+  check(membership.count === 0, `kfin_app is a member of ${membership.count} role(s); SET ROLE would be possible`);
 
   check(identity.role === 'kfin_app', `connected as ${identity.role}, expected kfin_app`);
+  check(identity.session_role === 'kfin_app', `session user is ${identity.session_role}; kfin_app was entered with SET ROLE`);
   check(identity.rolsuper === false, 'role must not be SUPERUSER');
   check(identity.rolcreatedb === false, 'role must not have CREATEDB');
   check(identity.rolcreaterole === false, 'role must not have CREATEROLE');
@@ -197,6 +214,8 @@ try {
   }
 
   await expectInsufficientPrivilege(`SELECT count(*) FROM ${schemaId}.kfin_migrations`, 'read kfin_migrations');
+  await expectInsufficientPrivilege('SET ROLE kfin_migrator', 'SET ROLE kfin_migrator');
+  await expectInsufficientPrivilege('SET ROLE kfin_operator', 'SET ROLE kfin_operator');
   await expectInsufficientPrivilege(`SELECT count(*) FROM ${schemaId}.beta_invitations`, 'read beta_invitations');
   await expectInsufficientPrivilege(`INSERT INTO ${schemaId}.beta_invitations (id) VALUES (gen_random_uuid())`, 'insert beta_invitations');
   await expectInsufficientPrivilege(`CREATE TABLE ${schemaId}.kfin_privilege_probe (id integer)`, 'CREATE TABLE');

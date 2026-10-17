@@ -7,8 +7,8 @@ SPEC-SEC-01.
 ## 1. What this protects against — and what it does not
 
 RLS here is a **second line of defence against application bugs**. Every tenant statement
-runs under `kfin_app`, a `NOLOGIN`-capable-but-LOGIN role that owns nothing, has no
-`BYPASSRLS`, and holds only the reviewed DML allowlist. A repository query that forgets
+runs under `kfin_app`, a dedicated LOGIN role that owns nothing, has no `BYPASSRLS`, holds
+no role membership, and holds only the reviewed DML allowlist. A repository query that forgets
 `WHERE user_id = $1` still returns only the caller's rows; an insert that names another
 owner is rejected by the `WITH CHECK` clause.
 
@@ -26,6 +26,23 @@ Two further boundaries are deliberate:
   used by the API, and `assertApplicationDatabaseRole` refuses to start on it. FORCE would
   also disable the owner-bypass that the five `SECURITY DEFINER` functions rely on.
 - `kfin_migrations` and backups are not covered by these policies.
+
+### 1.1 Role membership and `SET ROLE`
+
+`NOINHERIT` does **not** prevent `SET ROLE`. It only stops automatic privilege
+inheritance; a role that is a member of another role can still switch to it in a single
+statement. Membership, not the `INHERIT` attribute, is the control that matters.
+
+Three independent controls keep the application role from becoming a privileged one:
+
+1. `db:provision-roles` revokes every role granted to `kfin_app`, `kfin_operator` and
+   `kfin_migrator`, then fails provisioning if any membership remains.
+2. `assertApplicationDatabaseRole` / `assertOperatorDatabaseRole` refuse to start when the
+   connected role has any membership, or when `session_user` differs from `current_user`
+   (a privileged session that entered the app role with `SET ROLE` could leave it again).
+3. `db:verify-app-role` and the integration suites assert the same catalog state against
+   the real roles and that `SET ROLE kfin_migrator` / `SET ROLE kfin_operator` are denied
+   with SQLSTATE 42501.
 
 ## 2. How identity reaches a policy
 
@@ -116,10 +133,12 @@ connection.
 ## 6. Verification
 
 - `packages/database/test/rls-owner-isolation.integration.test.ts` drives the shipped
-  migrations under `kfin_app` and `kfin_operator`: catalog shape, missing/malformed context,
-  cross-owner reads and writes by direct SQL and by repository, connection reuse A → B,
-  view scoping, all pre-login flows, invitation replay and concurrent replay, the operator
-  CLI, brute-force counters, and the migration role's owner bypass.
+  migrations under `kfin_app` and `kfin_operator`: catalog shape, policy/privilege
+  coverage, missing/malformed context, cross-owner reads and writes by direct SQL and by
+  repository, connection reuse A → B, view scoping, `security_events` visibility and insert
+  scoping, role membership and `SET ROLE` denial, all pre-login flows, invitation replay and
+  concurrent replay, the operator CLI, brute-force counters, and the migration role's owner
+  bypass.
 - `packages/database/test/least-privilege.integration.test.ts` pins the DML allowlist for
   both deployment paths (fresh database, migrations as `kfin_migrator`; existing database,
   migrations as the object owner).
@@ -139,7 +158,20 @@ connection.
 2. The owner/migration role bypasses RLS (no FORCE). Enforced by the startup guard, CI
    verification, and code review rather than by the database.
 3. `auth_attempt_counters` is global (see §3).
-4. `security_events` accepts `user_id IS NULL` for pre-identity failures and allows the app
-   to name any owner on insert; inserts are write-only for the app and cannot be read back.
+4. `security_events` has two distinct properties that must not be conflated:
+
+   - the INSERT policy is `user_id IS NULL OR user_id = kfin_current_user_id()`. The app
+     cannot name a different owner in a normal statement, and a NULL owner is accepted for
+     pre-identity failures. The SELECT policy returns only rows whose `user_id` is the
+     current context and whose `visibility` is `user` or `both`; operator-only rows stay
+     invisible. There is no UPDATE or DELETE privilege, so app-recorded events are
+     append-only.
+   - an attacker who can already execute arbitrary SQL as `kfin_app` can set `kfin.user_id`
+     to another user and then insert as that user. That is residual 1 (the setting is
+     role-settable), not a weakness in the INSERT policy. The two cases are not equivalent:
+     the policy stops an application bug, it does not stop arbitrary SQL under the role.
 5. RLS does not cover backups, replicas, or any other role the operator configures outside
    this repository.
+6. Membership is re-checked at startup and in CI, but a superuser can silently add a
+   membership to `kfin_app` between deploys. The verifier and the startup guard catch it at
+   the next run; prevention depends on keeping the admin credential out of normal operation.

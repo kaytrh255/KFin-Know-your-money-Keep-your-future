@@ -22,6 +22,11 @@
  *
  * The migration that follows (0008) refuses to run unless these roles exist and
  * the schema grants below are present.
+ *
+ * Role membership is removed from all three roles. `NOINHERIT` does NOT stop
+ * `SET ROLE`; only the absence of a membership does. A role that is a member of
+ * a privileged role can switch to it, so provisioning strips every grant held
+ * by these roles and fails if any remain.
  */
 import pg from 'pg';
 
@@ -114,6 +119,35 @@ try {
     await ensureRole(role);
   }
 
+  // Membership is the only thing that enables SET ROLE, and NOINHERIT does not
+  // remove it. Revoke every role granted to a KFin role (in any direction where
+  // the KFin role is the member). If the admin connection cannot revoke one,
+  // provisioning fails instead of leaving an escalation path in place.
+  const memberships = (await client.query(
+    `SELECT r.rolname AS role, m.rolname AS member
+       FROM pg_auth_members am
+       JOIN pg_roles r ON r.oid = am.roleid
+       JOIN pg_roles m ON m.oid = am.member
+      WHERE m.rolname = ANY($1::text[])
+      ORDER BY 1, 2`,
+    [ROLE_NAMES],
+  )).rows;
+  for (const row of memberships) {
+    await client.query(
+      `REVOKE ${client.escapeIdentifier(row.role)} FROM ${client.escapeIdentifier(row.member)}`,
+    );
+  }
+  const remainingMemberships = (await client.query(
+    `SELECT count(*)::int AS count
+       FROM pg_auth_members am
+       JOIN pg_roles m ON m.oid = am.member
+      WHERE m.rolname = ANY($1::text[])`,
+    [ROLE_NAMES],
+  )).rows[0].count;
+  if (remainingMemberships !== 0) {
+    throw new Error(`KFin roles still hold ${remainingMemberships} role membership(s); SET ROLE would be possible.`);
+  }
+
   // The application may use the schema but never create objects in it. The
   // migration role owns new objects, so it needs CREATE on the schema (not on
   // the database) and no role-creation rights.
@@ -153,6 +187,7 @@ try {
       `  ${row.rolname}: schema USAGE=${row.has_usage ? 'yes' : 'no'}, CREATE=${row.has_create ? 'yes' : 'no'}`,
     );
   }
+  console.log(`  role memberships removed: ${memberships.length}; remaining: ${remainingMemberships}`);
   console.log('Passwords: not printed; set only when the corresponding environment variable was provided.');
 } catch (error) {
   console.error(`Role provisioning failed: ${error instanceof Error ? error.message : String(error)}`);

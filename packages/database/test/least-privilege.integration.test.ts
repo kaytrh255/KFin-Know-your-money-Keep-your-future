@@ -422,6 +422,9 @@ function leastPrivilegeSuite(label: string, mode: 'migrator' | 'owner'): void {
       const suffix = randomUUID().replaceAll('-', '').slice(0, 8);
       const denied = async (sql: string): Promise<void> => {
         await expect(s.app.query(sql)).rejects.toMatchObject({ code: '42501' });
+        // A SET ROLE that unexpectedly succeeded would change the role for every
+        // later statement on this pooled connection.
+        await s.app.query('RESET ROLE').catch(() => undefined);
       };
 
       await denied(`CREATE TABLE ${quoteIdentifier(s.schema)}.kfin_probe_${suffix} (id integer)`);
@@ -431,6 +434,11 @@ function leastPrivilegeSuite(label: string, mode: 'migrator' | 'owner'): void {
       await denied(`DROP TABLE ${quoteIdentifier(s.schema)}.transactions`);
       await denied(`TRUNCATE ${quoteIdentifier(s.schema)}.transactions`);
       await denied('SET ROLE kfin_migrator');
+      await denied('SET ROLE kfin_operator');
+      const identity = (await s.app.query<{ current_user: string; session_user: string }>(
+        'SELECT current_user, session_user',
+      )).rows[0]!;
+      expect(identity).toEqual({ current_user: 'kfin_app', session_user: 'kfin_app' });
       await denied(`SELECT count(*) FROM ${quoteIdentifier(s.schema)}.kfin_migrations`);
 
       const probe = (await s.administration.query<{ name: string | null }>(`

@@ -272,6 +272,65 @@ integration('row level security under kfin_app', () => {
       }
     });
 
+    it('gives every granted operation a policy and keeps policies scoped to the KFin roles', async () => {
+      const rows = (await administration.query<{
+        relname: string; sel: boolean; ins: boolean; upd: boolean; del: boolean; commands: string[];
+      }>(`
+        SELECT c.relname,
+               has_table_privilege('kfin_app', c.oid, 'SELECT') AS sel,
+               has_table_privilege('kfin_app', c.oid, 'INSERT') AS ins,
+               has_table_privilege('kfin_app', c.oid, 'UPDATE') AS upd,
+               has_table_privilege('kfin_app', c.oid, 'DELETE') AS del,
+               COALESCE((
+                 SELECT array_agg(DISTINCT p.polcmd::text)
+                   FROM pg_policy p
+                  WHERE p.polrelid = c.oid
+               ), ARRAY[]::text[]) AS commands
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = $1::text AND c.relkind = 'r' AND c.relrowsecurity
+         ORDER BY c.relname
+      `, [schema])).rows;
+
+      // Every operation the role actually holds must be constrained by a
+      // policy; an enabled table with a missing policy would silently return
+      // nothing instead of enforcing a rule.
+      const missing: string[] = [];
+      for (const row of rows) {
+        const required: string[] = [];
+        if (row.sel) required.push('r');
+        if (row.ins) required.push('a');
+        if (row.upd) required.push('w');
+        if (row.del) required.push('d');
+        for (const command of required) {
+          if (!row.commands.includes(command) && !row.commands.includes('*')) {
+            missing.push(`${row.relname}:${command}`);
+          }
+        }
+      }
+      expect(missing).toEqual([]);
+
+      const policies = (await administration.query<{
+        tablename: string; policyname: string; permissive: string; roles: string; cmd: string;
+        qual: string | null; with_check: string | null;
+      }>(`SELECT tablename, policyname, permissive,
+                array_to_string(roles, ',') AS roles, cmd, qual, with_check
+           FROM pg_policies WHERE schemaname = $1::text`, [schema])).rows;
+      expect(policies.length).toBeGreaterThan(0);
+      const allowedRoles = new Set(['kfin_app', 'kfin_operator']);
+      for (const policy of policies) {
+        expect(policy.permissive, policy.policyname).toBe('PERMISSIVE');
+        expect(policy.cmd, policy.policyname).not.toBe('ALL');
+        for (const role of policy.roles.split(',').filter(Boolean)) {
+          expect(allowedRoles.has(role.trim()), `${policy.policyname}: role ${role}`).toBe(true);
+        }
+        // The only unconstrained predicate is the operator's invitation INSERT.
+        if (policy.tablename !== 'beta_invitations') {
+          expect(policy.with_check, `${policy.policyname}: WITH CHECK`).not.toBe('true');
+        }
+      }
+    });
+
     it('keeps the balance view security_invoker', async () => {
       const options = (await administration.query<{ reloptions: string[] | null }>(`
         SELECT reloptions FROM pg_class
@@ -436,6 +495,44 @@ integration('row level security under kfin_app', () => {
       expect(none.rowCount).toBe(0);
     });
 
+    it('exposes only user-visible security events and scopes inserts to the current context', async () => {
+      const userVisible = randomUUID();
+      const operatorOnly = randomUUID();
+      const systemEvent = randomUUID();
+      await administration.query(
+        `INSERT INTO ${quoteIdentifier(schema)}.security_events
+           (id, user_id, event_type, outcome, visibility, correlation_id)
+         VALUES ($1, $2, 'login_succeeded', 'success', 'user', $3),
+                ($4, $2, 'login_failed', 'failure', 'operator', $5)`,
+        [userVisible, tenantA.userId, randomUUID(), operatorOnly, randomUUID()],
+      );
+
+      const visible = await withUserContext(app, tenantA.userId, (client) => client.query<{ id: string }>(
+        `SELECT id FROM ${quoteIdentifier(schema)}.security_events ORDER BY id`,
+      ));
+      expect(visible.rows.map((row) => row.id)).toEqual([userVisible]);
+
+      // The INSERT policy is `user_id IS NULL OR user_id = kfin_current_user_id()`.
+      // It never lets the app name a different owner, whatever the payload says.
+      await expect(withUserContext(app, tenantA.userId, (client) => client.query(
+        `INSERT INTO ${quoteIdentifier(schema)}.security_events
+           (id, user_id, event_type, outcome, visibility, correlation_id)
+         VALUES ($1, $2, 'login_failed', 'failure', 'operator', $3)`,
+        [randomUUID(), tenantB.userId, randomUUID()],
+      ))).rejects.toMatchObject({ code: '42501' });
+
+      await withUserContext(app, null, (client) => client.query(
+        `INSERT INTO ${quoteIdentifier(schema)}.security_events
+           (id, user_id, event_type, outcome, visibility, correlation_id)
+         VALUES ($1, NULL, 'login_failed', 'failure', 'operator', $2)`,
+        [systemEvent, randomUUID()],
+      ));
+      const afterSystemEvent = await withUserContext(app, tenantA.userId, (client) => client.query<{ id: string }>(
+        `SELECT id FROM ${quoteIdentifier(schema)}.security_events ORDER BY id`,
+      ));
+      expect(afterSystemEvent.rows.map((row) => row.id)).toEqual([userVisible]);
+    });
+
     it('keeps audit events insert-only and invisible to the application role', async () => {
       await expect(app.query(`SELECT count(*) FROM ${quoteIdentifier(schema)}.audit_events`))
         .rejects.toMatchObject({ code: '42501' });
@@ -547,6 +644,49 @@ integration('row level security under kfin_app', () => {
          VALUES ($1, $2, now() + interval '1 day', $3)`,
         [randomUUID(), Buffer.alloc(32), randomUUID()],
       )).rejects.toMatchObject({ code: '42501' });
+    });
+  });
+
+  describe('role membership', () => {
+    it('keeps kfin_app, kfin_operator and kfin_migrator free of memberships', async () => {
+      const rows = (await administration.query<{ member: string; role: string }>(`
+        SELECT m.rolname AS member, r.rolname AS role
+          FROM pg_auth_members am
+          JOIN pg_roles m ON m.oid = am.member
+          JOIN pg_roles r ON r.oid = am.roleid
+         WHERE m.rolname = ANY($1::text[])
+         ORDER BY 1, 2
+      `, [['kfin_app', 'kfin_operator', 'kfin_migrator']])).rows;
+      expect(rows).toEqual([]);
+    });
+
+    it('denies SET ROLE from the application and operator roles', async () => {
+      for (const target of ['kfin_migrator', 'kfin_operator']) {
+        await expect(app.query(`SET ROLE ${target}`)).rejects.toMatchObject({ code: '42501' });
+      }
+      for (const target of ['kfin_migrator', 'kfin_app']) {
+        await expect(operator.query(`SET ROLE ${target}`)).rejects.toMatchObject({ code: '42501' });
+      }
+      const appIdentity = (await app.query<{ current_user: string; session_user: string }>(
+        'SELECT current_user, session_user',
+      )).rows[0];
+      expect(appIdentity).toEqual({ current_user: 'kfin_app', session_user: 'kfin_app' });
+      const operatorIdentity = (await operator.query<{ current_user: string; session_user: string }>(
+        'SELECT current_user, session_user',
+      )).rows[0];
+      expect(operatorIdentity).toEqual({ current_user: 'kfin_operator', session_user: 'kfin_operator' });
+    });
+
+    it('refuses a privileged session that entered kfin_app with SET ROLE', async () => {
+      // The administration pool holds a single connection, so SET ROLE and the
+      // guard run on the same backend.
+      await administration.query('SET ROLE kfin_app');
+      try {
+        await expect(assertApplicationDatabaseRole(administration)).rejects.toThrow(/SET ROLE/);
+      } finally {
+        await administration.query('RESET ROLE');
+      }
+      await expect(assertApplicationDatabaseRole(administration)).rejects.toThrow(/connected as postgres/);
     });
   });
 

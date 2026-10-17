@@ -88,12 +88,14 @@ export async function withUserContext<T>(
 
 interface RoleRow {
   role: string;
+  session_role: string;
   rolsuper: boolean;
   rolbypassrls: boolean;
   rolcreatedb: boolean;
   rolcreaterole: boolean;
   owned_relations: string;
   owned_schemas: string;
+  memberships: string;
 }
 
 /**
@@ -103,6 +105,13 @@ interface RoleRow {
  * This is deliberately an explicit query at startup rather than a check on a
  * URL string: the role is whatever PostgreSQL reports for `current_user`, and
  * a pooled/via-proxy connection may rewrite the URL without changing the role.
+ *
+ * Membership is checked explicitly. `NOINHERIT` only stops automatic privilege
+ * inheritance; it does NOT stop `SET ROLE`. A role that is a member of a more
+ * privileged role can switch to it in one statement, so the app role must have
+ * no memberships at all. `session_user = current_user` additionally rejects a
+ * privileged session that merely entered the app role with `SET ROLE` and could
+ * leave it again.
  */
 async function assertDatabaseRole(
   pool: Queryable,
@@ -111,6 +120,7 @@ async function assertDatabaseRole(
 ): Promise<void> {
   const result = await pool.query<RoleRow>(`
     SELECT r.rolname AS role,
+           session_user::text AS session_role,
            r.rolsuper,
            r.rolbypassrls,
            r.rolcreatedb,
@@ -131,7 +141,12 @@ async function assertDatabaseRole(
                 AND n.nspname NOT IN ('pg_catalog', 'information_schema')
                 AND n.nspname NOT LIKE 'pg\\_toast%'
                 AND n.nspname NOT LIKE 'pg\\_temp%'
-           ) AS owned_schemas
+           ) AS owned_schemas,
+           (
+             SELECT count(*)::text
+               FROM pg_auth_members am
+              WHERE am.member = r.oid
+           ) AS memberships
       FROM pg_roles r
      WHERE r.rolname = current_user
   `);
@@ -142,6 +157,12 @@ async function assertDatabaseRole(
   const problems: string[] = [];
   if (row.role !== expectedRole) {
     problems.push(`connected as ${row.role}, expected ${expectedRole}`);
+  }
+  if (row.session_role !== expectedRole) {
+    problems.push(`session user is ${row.session_role}, so ${row.role} was entered with SET ROLE`);
+  }
+  if (Number(row.memberships) > 0) {
+    problems.push(`role is a member of ${row.memberships} other role(s), so it can SET ROLE`);
   }
   if (row.rolsuper) problems.push('role is SUPERUSER');
   if (row.rolbypassrls) problems.push('role has BYPASSRLS');
