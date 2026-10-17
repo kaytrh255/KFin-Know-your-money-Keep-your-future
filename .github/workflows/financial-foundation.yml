@@ -65,7 +65,34 @@ jobs:
           corepack pnpm run sqlguard:test
       - name: Typecheck application and tests
         run: corepack pnpm run typecheck
+      - name: Build the production artifact
+        run: corepack pnpm run build
+      - name: Smoke test the production artifact
+        run: |
+          DATABASE_URL="$TEST_APP_DATABASE_URL" \
+          DATABASE_SSL_MODE=disable \
+          AUTH_SECRET="$(openssl rand -hex 32)" \
+          FINANCIAL_PREVIEW_SIGNING_KEY="$(openssl rand -hex 32)" \
+          IDEMPOTENCY_RETENTION_HOURS=24 \
+            corepack pnpm run smoke:production
       - name: Run credential-free unit and API tests
         run: corepack pnpm run test:unit
       - name: Run isolated real-PostgreSQL integration test
         run: corepack pnpm run test:integration
+      # The service container is postgres:17, so a newer client is required;
+      # Ubuntu's bundled pg_dump (16) refuses to dump a 17 server.
+      - name: Install PostgreSQL 17 client tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+      - name: Backup and restore drill
+        run: |
+          ADMIN_DATABASE_URL="$TEST_DATABASE_URL" \
+          MIGRATION_DATABASE_URL="$TEST_MIGRATION_DATABASE_URL" \
+          APP_DATABASE_URL="$TEST_APP_DATABASE_URL" \
+          DATABASE_SSL_MODE=disable \
+            corepack pnpm run backup:drill

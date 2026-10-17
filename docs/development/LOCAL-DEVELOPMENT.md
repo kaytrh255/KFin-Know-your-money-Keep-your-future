@@ -42,8 +42,10 @@ connection strings, no secrets:
 | `AUTH_SECRET` | 32 random bytes as 64 hex characters, never reused for anything else |
 | `AUTH_ALLOWED_ORIGINS` | **empty** — a non-empty value is refused at startup |
 | `AUTH_COOKIE_SECURE` | `true`; `false` is accepted only outside production and only for plain-HTTP local development |
-| `EMAIL_DELIVERY_ADAPTER` | `file` to make local email flows completable (see §4) |
+| `EMAIL_DELIVERY_ADAPTER` | `file` to make local email flows completable (see §4); `resend` only when rehearsing the production path |
 | `EMAIL_OUTBOX_DIR` | a directory on this machine, used only when the adapter is `file` |
+| `RESEND_API_KEY` / `EMAIL_FROM_ADDRESS` | required together when the adapter is `resend`; never committed |
+| `WEB_CLIENT_ROOT` | only when a production artifact's `web/` directory is relocated |
 | `KFIN_WEB_PORT` | dev server port, default `5173` |
 | `KFIN_API_ORIGIN` | where the dev server proxies; default `http://127.0.0.1:$PORT` |
 
@@ -304,3 +306,38 @@ Known gaps, stated rather than hidden:
 - the design system and screen inventory remain Draft proposals: the client uses
   the proposed tokens and route names, but no visual or accessibility acceptance
   exists.
+
+## 8. Production artifact (staging rehearsal)
+
+The API no longer starts from TypeScript source in a deploy. `corepack pnpm run build`
+typechecks, then assembles `apps/api/dist`:
+
+```
+server.bundle.mjs                 node apps/api/dist/server.bundle.mjs
+migrate.bundle.mjs                node apps/api/dist/migrate.bundle.mjs
+provision-invitation.bundle.mjs   node apps/api/dist/provision-invitation.bundle.mjs
+migrations/                       applied by the bundle above
+web/                              index.html + src/*.js + src/styles.css
+BUILD-INFO.json                   commit, build time, Node version
+```
+
+`corepack pnpm run start` runs the bundle with `NODE_ENV=production`, serving the
+client and the API on one origin (no `tsx`, no dev server). `corepack pnpm run api:dev`
+still watches the TypeScript sources for normal development; the dev server at
+`5173` is unchanged.
+
+Before claiming an artifact works, run these two against a non-production database:
+
+```bash
+DATABASE_URL=... AUTH_SECRET=... FINANCIAL_PREVIEW_SIGNING_KEY=... \
+IDEMPOTENCY_RETENTION_HOURS=24 corepack pnpm run smoke:production
+
+ADMIN_DATABASE_URL=... MIGRATION_DATABASE_URL=... APP_DATABASE_URL=... \
+  corepack pnpm run backup:drill
+```
+
+The smoke test starts the real bundle and checks the deployment contract; the
+drill creates two disposable databases, migrates with the artifact, dumps,
+restores and verifies. Both print JSON and exit non-zero on failure. See
+`docs/operations/PRODUCTION-RUNTIME.md`, `BACKUP-AND-RESTORE.md` and
+`MIGRATION-FAILURE.md`.
