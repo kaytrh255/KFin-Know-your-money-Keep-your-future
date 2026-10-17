@@ -10,7 +10,7 @@
     "pnpm": ">=10.34.0 <11"
   },
   "scripts": {
-    "build": "tsc -b --pretty false",
+    "build": "tsc -b --pretty false && node scripts/build-production.mjs",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.tests.json --pretty false",
     "test": "vitest run",
     "test:unit": "vitest run --exclude '**/*.integration.test.ts'",
@@ -19,8 +19,10 @@
     "api:dev": "corepack pnpm --filter @kfin/api dev",
     "api:start": "corepack pnpm --filter @kfin/api start",
     "db:migrate": "corepack pnpm --filter @kfin/database migrate",
+    "db:migrate:artifact": "node apps/api/dist/migrate.bundle.mjs",
     "db:provision-roles": "corepack pnpm --filter @kfin/database provision-roles",
     "db:verify-app-role": "corepack pnpm --filter @kfin/database verify-app-role",
+    "backup:drill": "node scripts/operations/backup-restore-drill.mjs",
     "evidence:check": "node evidence/spec-fin-02/scripts/check.mjs",
     "evidence:test": "node --test evidence/spec-fin-02/test/*.test.mjs",
     "sqlguard": "node tools/sql-guard/guard.mjs",
@@ -32,7 +34,10 @@
     "evidence:case": "node evidence/spec-fin-02/src/cli.mjs run",
     "web:dev": "corepack pnpm --filter @kfin/web dev",
     "invite:provision": "tsx apps/api/tools/provision-invitation.ts",
-    "web:build": "corepack pnpm --filter @kfin/web build"
+    "invite:provision:artifact": "node apps/api/dist/provision-invitation.bundle.mjs",
+    "web:build": "corepack pnpm --filter @kfin/web build",
+    "start": "corepack pnpm --filter @kfin/api start",
+    "smoke:production": "node scripts/smoke/production-smoke.mjs"
   },
   "dependencies": {
     "pg": "8.23.1"
@@ -41,6 +46,7 @@
     "@babel/parser": "7.29.9",
     "@types/node": "22.20.5",
     "@types/pg": "8.23.1",
+    "esbuild": "0.28.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
     "vitest": "5.0.3"

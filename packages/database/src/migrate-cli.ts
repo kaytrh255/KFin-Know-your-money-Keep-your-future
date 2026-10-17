@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createDatabaseRuntime } from './pool.js';
 import { migrateDatabase } from './migrations.js';
 
@@ -17,7 +20,16 @@ try {
   if (identity.rows[0]?.current_user === 'kfin_app') {
     throw new Error('Refusing to run migrations as the application role kfin_app.');
   }
-  const applied = await migrateDatabase(runtime.pool);
+  // Two layouts run this file: the TypeScript source (`tsx`, migrations one
+  // level up) and the bundled production artifact (`dist/migrate.bundle.mjs`,
+  // migrations alongside it). `MIGRATIONS_DIR` overrides both for an operator
+  // who ships reviewed SQL separately from the bundle.
+  const beside = fileURLToPath(new URL('./migrations', import.meta.url));
+  const above = fileURLToPath(new URL('../migrations', import.meta.url));
+  const directory = process.env.MIGRATIONS_DIR
+    ? path.resolve(process.env.MIGRATIONS_DIR)
+    : existsSync(beside) ? beside : above;
+  const applied = await migrateDatabase(runtime.pool, directory);
   console.log(`Applied ${applied.length} KFin migration(s).`);
 } finally {
   await runtime.pool.end();

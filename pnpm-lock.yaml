@@ -21,6 +21,9 @@ importers:
       '@types/pg':
         specifier: 8.23.1
         version: 8.23.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       tsx:
         specifier: 4.23.15
         version: 4.23.15
@@ -48,6 +51,9 @@ importers:
       '@kfin/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@node-rs/argon2':
+        specifier: 2.0.2
+        version: 2.0.2
       fastify:
         specifier: 5.12.5
         version: 5.12.5

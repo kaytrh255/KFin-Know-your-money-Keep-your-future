@@ -1,3 +1,6 @@
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { authPolicy, loadApiConfig } from '@kfin/config';
 import {
   PostgresAuthRepository,
@@ -43,7 +46,27 @@ const authService = new PostgresAuthRepository(runtime.pool, {
 });
 const emailDelivery = createEmailDeliveryAdapter(config.emailDeliveryAdapter, {
   directory: config.emailOutboxDir,
+  apiKey: config.resendApiKey,
+  from: config.emailFromAddress,
+  replyTo: config.emailReplyTo,
+  baseUrl: config.emailProviderBaseUrl,
+  timeoutMs: config.emailProviderTimeoutMs,
 });
+
+// Production runs one origin: this process serves the compiled client it was
+// built with (`scripts/build-production.mjs` puts it next to this bundle).
+// A production start without that directory is a broken artifact, not a
+// configuration the API can improvise around.
+const webRoot = config.webClientRoot
+  ? path.resolve(config.webClientRoot)
+  : fileURLToPath(new URL('./web', import.meta.url));
+const staticSite = existsSync(path.join(webRoot, 'index.html')) ? { root: webRoot } : undefined;
+if (config.environment === 'production' && !staticSite) {
+  throw new Error(
+    `The production artifact is incomplete: ${path.join(webRoot, 'index.html')} is missing. `
+    + 'Build it with `corepack pnpm run build` instead of starting a source checkout.',
+  );
+}
 
 // Sessions are opaque server-side records. The API resolves the bearer token
 // from the host cookie only; no trusted user-ID header shortcut exists.
@@ -63,6 +86,7 @@ const app = await buildApp({
   },
   readinessPool: runtime.pool,
   logger: true,
+  ...(staticSite ? { staticSite } : {}),
 });
 
 runtime.pool.on('error', (error) => {

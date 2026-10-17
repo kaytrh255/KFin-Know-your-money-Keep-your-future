@@ -78,6 +78,7 @@ import { registerAuthRoutes, type AuthApiService } from './auth-routes.js';
 import { registerSavingsRoutes, type SavingsApiService } from './savings-routes.js';
 import { UnavailableEmailAdapter, type EmailDeliveryAdapter } from './email-delivery.js';
 import { describeRejectedContractRules, type RejectedContractField } from './validation-detail.js';
+import { registerStaticSite, type StaticSiteOptions } from './static-site.js';
 import {
   isBrowserSafeRequest,
   readCsrfHeader,
@@ -207,6 +208,8 @@ export interface BuildAppOptions {
   readonly emailDelivery?: EmailDeliveryAdapter;
   readonly authTransport?: SessionTransportOptions;
   readonly authAbsoluteLifetimeSeconds?: number;
+  /** Production topology: serve the compiled client from this API process. */
+  readonly staticSite?: StaticSiteOptions;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -797,6 +800,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       request.id,
     ));
   });
+
+  if (options.staticSite) await registerStaticSite(app, options.staticSite);
 
   await app.ready();
   return app;
