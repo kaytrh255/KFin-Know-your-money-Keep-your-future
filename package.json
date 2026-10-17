@@ -37,7 +37,9 @@
     "invite:provision:artifact": "node apps/api/dist/provision-invitation.bundle.mjs",
     "web:build": "corepack pnpm --filter @kfin/web build",
     "start": "corepack pnpm --filter @kfin/api start",
-    "smoke:production": "node scripts/smoke/production-smoke.mjs"
+    "smoke:production": "node scripts/smoke/production-smoke.mjs",
+    "verify:production-install": "node scripts/verify-production-install.mjs",
+    "image:build": "docker build --build-arg GIT_COMMIT=$(git rev-parse HEAD) -t kfin-runtime:local ."
   },
   "dependencies": {
     "pg": "8.23.1"

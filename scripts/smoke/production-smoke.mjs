@@ -22,6 +22,10 @@
  * credentials: it never sends a message.
  *
  * Run: corepack pnpm run build && corepack pnpm run smoke:production
+ *
+ * The same script verifies a production-only install: set SMOKE_ENTRYPOINT to
+ * the artifact inside that install and SMOKE_CWD to its directory (see
+ * `scripts/verify-production-install.mjs`).
  */
 
 import { spawn } from 'node:child_process';
@@ -29,7 +33,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const entrypoint = path.join(repoRoot, 'apps', 'api', 'dist', 'server.bundle.mjs');
+const entrypoint = process.env.SMOKE_ENTRYPOINT
+  ? path.resolve(process.env.SMOKE_ENTRYPOINT)
+  : path.join(repoRoot, 'apps', 'api', 'dist', 'server.bundle.mjs');
+/** Where the process starts. A production install runs from its own directory. */
+const runCwd = process.env.SMOKE_CWD ? path.resolve(process.env.SMOKE_CWD) : repoRoot;
 
 const REQUIRED = ['DATABASE_URL', 'AUTH_SECRET', 'FINANCIAL_PREVIEW_SIGNING_KEY', 'IDEMPOTENCY_RETENTION_HOURS'];
 const missing = REQUIRED.filter((name) => !process.env[name]);
@@ -60,7 +68,7 @@ function baseEnv(overrides = {}) {
 
 function startServer(overrides = {}) {
   const child = spawn(process.execPath, [entrypoint], {
-    cwd: repoRoot,
+    cwd: runCwd,
     env: baseEnv(overrides),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -200,7 +208,7 @@ async function main() {
     await stop(server.child);
   }
 
-  process.stdout.write(`${JSON.stringify({ status: 'pass', entrypoint: 'apps/api/dist/server.bundle.mjs', checks }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ status: 'pass', entrypoint, cwd: runCwd, checks }, null, 2)}\n`);
 }
 
 main().catch((error) => {
