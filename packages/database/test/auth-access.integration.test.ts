@@ -789,7 +789,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
       correlationId: randomUUID(),
       ipAddress: source(21),
     });
-    expect(await repo.logout(relogin.session.session.id, {
+    expect(await repo.logout(relogin.userId, relogin.session.session.id, {
       correlationId: randomUUID(),
       ipAddress: source(21),
     })).toBe(true);

@@ -48,6 +48,7 @@ function authService(overrides: Partial<AuthApiService> = {}): AuthApiService {
       accepted: true as const,
       issued: true,
       delivery: {
+        userId: USER_ID,
         challengeId: '00000000-0000-4000-8000-00000000000b',
         oneTimeCode: '123456',
         expiresAt: '2026-10-08T02:30:00.000Z',
@@ -199,6 +200,7 @@ describe('trusted beta access routes', () => {
       oneTimeSecret: '123456',
     });
     expect(service.recordChallengeDelivery).toHaveBeenCalledWith(
+      USER_ID,
       '00000000-0000-4000-8000-00000000000b',
       'delivered',
       'memory-1',
@@ -218,6 +220,7 @@ describe('trusted beta access routes', () => {
     expect(failed.statusCode).toBe(200);
     expect(failed.json()).toEqual({ accepted: true });
     expect(second.service.recordChallengeDelivery).toHaveBeenCalledWith(
+      USER_ID,
       '00000000-0000-4000-8000-00000000000b',
       'failed',
       'memory-failure',

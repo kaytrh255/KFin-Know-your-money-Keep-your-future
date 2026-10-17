@@ -8,6 +8,7 @@ import {
   validationError,
 } from '@kfin/domain';
 import { digestCanonicalRequest, digestSecret } from './canonical.js';
+import { USER_CONTEXT_SETTING, assertUserId, withUserContext } from './context.js';
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -32,7 +33,7 @@ export interface UserRecord {
 
 export class PostgresUserRepository {
   constructor(
-    private readonly pool: Pick<Pool, 'query'>,
+    private readonly pool: Pick<Pool, 'connect'>,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -61,7 +62,10 @@ export class PostgresUserRepository {
     const status = 'active';
     const emailVerificationState = input.emailVerifiedAt ? 'verified' : 'unverified';
     try {
-      await this.pool.query(`
+      // The row is created under its own owner context: the `users` INSERT
+      // policy requires `id = kfin.user_id`, and the same transaction-local
+      // setting lets a later read of the row inside the same unit of work work.
+      await withUserContext(this.pool, id, (client) => client.query(`
         INSERT INTO users (
           id, email, email_normalized, email_verified_at, display_name,
           locale, timezone, base_currency, status, email_verification_state
@@ -77,7 +81,7 @@ export class PostgresUserRepository {
         input.baseCurrency,
         status,
         emailVerificationState,
-      ]);
+      ]));
     } catch (error) {
       if (sqlstateOf(error) === '23505') {
         throw new FinancialError({
@@ -195,6 +199,10 @@ export class FinancialAccountBootstrapService {
     ) => queryBefore<Row>(client, text, values, deadline, this.now);
     try {
       await query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await query('SELECT set_config($1, $2, true)', [
+        USER_CONTEXT_SETTING,
+        assertUserId(input.ownerUserId),
+      ]);
       await query("SELECT set_config('lock_timeout', $1, true)", [`${recovery ? 1_900 : 2_000}ms`]);
       await query("SELECT set_config('statement_timeout', $1, true)", [`${recovery ? 1_900 : 5_000}ms`]);
       const userResult = await query<BootstrapUserRow>(`

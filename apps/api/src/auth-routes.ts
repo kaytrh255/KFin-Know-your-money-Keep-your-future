@@ -86,7 +86,11 @@ export interface AuthApiService {
     ipAddress: string | null;
     userAgent: string | null;
   }): Promise<LoginResult>;
-  logout(sessionId: string, input: { correlationId: string; ipAddress: string | null; userAgent: string | null }): Promise<boolean>;
+  logout(
+    userId: string,
+    sessionId: string,
+    input: { correlationId: string; ipAddress: string | null; userAgent: string | null },
+  ): Promise<boolean>;
   /** Revokes every session of the user, including the requesting one. */
   logoutAll(
     userId: string,
@@ -128,6 +132,7 @@ export interface AuthApiService {
   getProfile(userId: string): Promise<ProfileView | null>;
   verifyCsrfToken(presented: string | null | undefined, expectedDigest: string): boolean;
   recordChallengeDelivery(
+    userId: string,
     challengeId: string,
     status: 'delivered' | 'failed',
     reference?: string,
@@ -236,7 +241,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
 
   const deliver = async (
     request: FastifyRequest,
-    input: { to: string; template: 'password_reset'; challengeId: string; secret: string },
+    input: { to: string; template: 'password_reset'; userId: string; challengeId: string; secret: string },
   ): Promise<void> => {
     try {
       const result = await emailDelivery.send({
@@ -246,6 +251,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
         oneTimeSecret: input.secret,
       });
       await authService.recordChallengeDelivery(
+        input.userId,
         input.challengeId,
         result.status,
         result.reference,
@@ -322,7 +328,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
     },
   }, async (request, reply) => {
     const principal = requirePrincipal(request);
-    const revoked = await authService.logout(principal.sessionId, requestContext(request));
+    const revoked = await authService.logout(principal.userId, principal.sessionId, requestContext(request));
     clearSessionCookies(reply);
     return { revoked: revoked as true };
   });
@@ -428,6 +434,7 @@ export async function registerAuthRoutes(options: RegisterAuthRoutesOptions): Pr
       await deliver(request, {
         to: body.email,
         template: 'password_reset',
+        userId: result.delivery.userId,
         challengeId: result.delivery.challengeId,
         secret: result.delivery.oneTimeCode,
       });

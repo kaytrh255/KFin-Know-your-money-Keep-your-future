@@ -4,6 +4,7 @@ import {
   PostgresFinancialRepository,
   PostgresSavingsGoalRepository,
   PostgresScheduleRepository,
+  assertApplicationDatabaseRole,
   createDatabaseRuntime,
 } from '@kfin/database';
 import { buildApp } from './app.js';
@@ -12,6 +13,9 @@ import { readCookie, sessionCookieName } from './session-transport.js';
 
 const config = loadApiConfig();
 const runtime = createDatabaseRuntime(config.database);
+// Fail closed before serving any request: RLS and the grant boundary only work
+// when the API is the dedicated, non-owner, non-BYPASSRLS application role.
+await assertApplicationDatabaseRole(runtime.pool);
 const financialService = new PostgresFinancialRepository(
   runtime.pool,
   config.idempotencyRetentionMs,

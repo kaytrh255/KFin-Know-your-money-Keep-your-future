@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   FinancialAccountBootstrapService,
+  assertApplicationDatabaseRole,
   PostgresAuthRepository,
   PostgresFinancialRepository,
   PostgresSavingsGoalRepository,
@@ -396,6 +397,12 @@ function leastPrivilegeSuite(label: string, mode: 'migrator' | 'owner'): void {
       expect(notExecutable).toEqual([]);
     });
 
+    it('refuses to start as an owner or superuser connection', async () => {
+      const s = current();
+      await expect(assertApplicationDatabaseRole(s.administration)).rejects.toThrow(/Refusing to start/);
+      await expect(assertApplicationDatabaseRole(s.app)).resolves.toBeUndefined();
+    });
+
     it('cannot administer the schema, read migration state, or escalate', async () => {
       const s = current();
       const suffix = randomUUID().replaceAll('-', '').slice(0, 8);
@@ -487,7 +494,7 @@ function leastPrivilegeSuite(label: string, mode: 'migrator' | 'owner'): void {
       });
       expect(changed.session.sessionToken).toBeTruthy();
 
-      await auth.logout(changed.session.session.id, {
+      await auth.logout(userId, changed.session.session.id, {
         correlationId: randomUUID(),
         ipAddress: '198.51.100.14',
         userAgent: AGENT,

@@ -1,5 +1,6 @@
 export * from './auth-repository.js';
 export * from './canonical.js';
+export * from './context.js';
 export * from './financial-repository.js';
 export * from './identity.js';
 export * from './migrations.js';

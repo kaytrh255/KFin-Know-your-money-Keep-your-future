@@ -21,6 +21,7 @@ import {
 import { assertFinancialAggregateBounds } from './aggregate-bounds.js';
 import { digestCanonicalRequest } from './canonical.js';
 import { FinancialAccountBootstrapService } from './identity.js';
+import { withUserContext } from './context.js';
 import { AccountFinancialSerializer } from './serialization.js';
 import {
   PostgresTransactionCorrectionService,
@@ -257,7 +258,7 @@ export class PostgresFinancialRepository {
    * current segment), never recomputed from whole history.
    */
   async listFinancialAccounts(ownerUserId: string): Promise<FinancialAccountList> {
-    const result = await this.pool.query<AccountSummaryRow>(`
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<AccountSummaryRow>(`
       SELECT balance.account_id, balance.currency, balance.financial_state_version,
              balance.snapshot_id, balance.snapshot_amount_minor, balance.snapshot_effective_at,
              balance.snapshot_effective_local_date::text AS snapshot_effective_local_date,
@@ -271,7 +272,7 @@ export class PostgresFinancialRepository {
       WHERE balance.user_id = $1
       ORDER BY account.created_at ASC, account.id ASC
       LIMIT 100
-    `, [ownerUserId]);
+    `, [ownerUserId]));
     return {
       items: result.rows.map((row) => ({
         ...mapBalance(row),
@@ -295,7 +296,7 @@ export class PostgresFinancialRepository {
    * never returns another owner's custom category.
    */
   async listCategories(ownerUserId: string): Promise<CategoryList> {
-    const result = await this.pool.query<{
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<{
       code: string;
       transaction_kind: 'income' | 'expense';
       message_key: string;
@@ -308,7 +309,7 @@ export class PostgresFinancialRepository {
         AND (owner_user_id IS NULL OR owner_user_id = $1)
       ORDER BY display_order ASC, code ASC
       LIMIT 200
-    `, [ownerUserId]);
+    `, [ownerUserId]));
     return {
       items: result.rows.map((row) => ({
         code: row.code,
@@ -321,14 +322,14 @@ export class PostgresFinancialRepository {
   }
 
   async getCurrentBalance(ownerUserId: string): Promise<CurrentBalanceView> {
-    const result = await this.pool.query<BalanceRow>(`
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<BalanceRow>(`
       SELECT account_id, currency, financial_state_version, snapshot_id,
              snapshot_amount_minor, snapshot_effective_at,
              snapshot_effective_local_date::text AS snapshot_effective_local_date,
              posted_current_income_minor, posted_current_expense_minor, current_balance_minor
       FROM financial_current_balances
       WHERE user_id = $1
-    `, [ownerUserId]);
+    `, [ownerUserId]));
     const row = result.rows[0];
     if (!row) throw unavailableError();
     return mapBalance(row);
@@ -526,9 +527,9 @@ export class PostgresFinancialRepository {
   }
 
   async getTransaction(ownerUserId: string, transactionId: string): Promise<TransactionView> {
-    const result = await this.pool.query<TransactionRow>(`${transactionSelect}
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<TransactionRow>(`${transactionSelect}
       WHERE txn.user_id = $1 AND txn.id = $2
-    `, [ownerUserId, transactionId]);
+    `, [ownerUserId, transactionId]));
     const row = result.rows[0];
     if (!row) throw unavailableError();
     return mapTransaction(row);
@@ -542,10 +543,7 @@ export class PostgresFinancialRepository {
     if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > 100) {
       throw validationError('Correction history page limit must be between 1 and 100.');
     }
-    const target = await this.pool.query(
-      'SELECT 1 FROM transactions WHERE user_id = $1 AND id = $2',
-      [ownerUserId, transactionId],
-    );
+    const target = await withUserContext(this.pool, ownerUserId, (client) => client.query('SELECT 1 FROM transactions WHERE user_id = $1 AND id = $2', [ownerUserId, transactionId]));
     if (target.rowCount !== 1) throw unavailableError();
     const cursor = options.cursor ? decodeHistoryCursor(options.cursor) : null;
     const values: unknown[] = [ownerUserId, transactionId];
@@ -555,7 +553,7 @@ export class PostgresFinancialRepository {
       cursorClause = `AND (txn.created_at, txn.id) > ($${values.length - 1}::timestamptz, $${values.length}::uuid)`;
     }
     values.push(options.limit + 1);
-    const result = await this.pool.query<TransactionRow>(`
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<TransactionRow>(`
       WITH RECURSIVE ancestors AS (
         SELECT id, supersedes_transaction_id
         FROM transactions
@@ -581,7 +579,7 @@ export class PostgresFinancialRepository {
       ${cursorClause}
       ORDER BY txn.created_at ASC, txn.id ASC
       LIMIT $${values.length}
-    `, values);
+    `, values));
     const hasMore = result.rows.length > options.limit;
     const rows = result.rows.slice(0, options.limit);
     const last = rows.at(-1);
@@ -631,12 +629,12 @@ export class PostgresFinancialRepository {
     }
     values.push(options.limit + 1);
     const limitParameter = `$${values.length}`;
-    const result = await this.pool.query<TransactionRow>(`${transactionSelect}
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<TransactionRow>(`${transactionSelect}
       WHERE txn.user_id = $1
       ${filters.length === 0 ? '' : `AND ${filters.join(' AND ')}`}
       ORDER BY txn.occurred_on DESC, txn.id DESC
       LIMIT ${limitParameter}
-    `, values);
+    `, values));
     const hasMore = result.rows.length > options.limit;
     const rows = result.rows.slice(0, options.limit);
     const items = rows.map(mapTransaction);
@@ -700,10 +698,7 @@ export class PostgresFinancialRepository {
   }
 
   private async resolveOwnedAccountId(ownerUserId: string): Promise<string> {
-    const result = await this.pool.query<{ id: string }>(
-      'SELECT id FROM financial_accounts WHERE user_id = $1',
-      [ownerUserId],
-    );
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<{ id: string }>('SELECT id FROM financial_accounts WHERE user_id = $1', [ownerUserId]));
     const account = result.rows[0];
     if (!account) throw unavailableError();
     return account.id;

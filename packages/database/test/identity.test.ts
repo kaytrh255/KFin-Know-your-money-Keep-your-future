@@ -82,15 +82,15 @@ describe('authoritative preview provenance', () => {
 
 describe('user persistence validation', () => {
   it('rejects invalid owner context before querying PostgreSQL', async () => {
-    const query = vi.fn();
-    const repository = new PostgresUserRepository({ query } as unknown as Pick<Pool, 'query'>);
+    const connect = vi.fn();
+    const repository = new PostgresUserRepository({ connect } as unknown as Pick<Pool, 'connect'>);
     await expect(repository.create({
       email: 'owner@example.invalid',
       locale: 'en-VN',
       timezone: 'not/a-timezone',
       baseCurrency: 'VND',
     })).rejects.toMatchObject({ code: 'FINANCIAL_VALIDATION_FAILED' });
-    expect(query).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 });
 

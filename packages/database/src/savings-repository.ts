@@ -21,6 +21,7 @@ import {
   type SavingsProgress,
 } from '@kfin/domain';
 import { digestCanonicalRequest, digestSecret } from './canonical.js';
+import { USER_CONTEXT_SETTING, assertUserId, withUserContext } from './context.js';
 
 /**
  * Milestone 06 — savings goals (PRD-SAV-01..07, DATABASE §9, UF-SAV-01).
@@ -222,7 +223,7 @@ export class PostgresSavingsGoalRepository {
       name, target, current, asOf, targetDate, contribution, frequency,
     });
 
-    return this.runIdempotent(async (query) => {
+    return this.runIdempotent(ownerUserId, async (query) => {
       const userResult = await query<{ timezone: string; base_currency: string }>(`
         SELECT timezone, base_currency
         FROM users
@@ -291,7 +292,7 @@ export class PostgresSavingsGoalRepository {
     const keyDigest = digestSecret(idempotencyKey);
     const requestDigest = digestCanonicalRequest({ goalId, expectedVersion, next, asOf, reason });
 
-    return this.runIdempotent(async (query) => {
+    return this.runIdempotent(ownerUserId, async (query) => {
       const goal = await lockGoal(query, ownerUserId, goalId);
       const replay = await this.findReceipt(
         query, ownerUserId, OPERATION.updateAmount, keyDigest, requestDigest,
@@ -368,7 +369,7 @@ export class PostgresSavingsGoalRepository {
     const keyDigest = digestSecret(idempotencyKey);
     const requestDigest = digestCanonicalRequest({ goalId, expectedVersion, ...patch });
 
-    return this.runIdempotent(async (query) => {
+    return this.runIdempotent(ownerUserId, async (query) => {
       const goal = await lockGoal(query, ownerUserId, goalId);
       const replay = await this.findReceipt(
         query, ownerUserId, OPERATION.updatePlan, keyDigest, requestDigest,
@@ -430,7 +431,7 @@ export class PostgresSavingsGoalRepository {
     const keyDigest = digestSecret(idempotencyKey);
     const requestDigest = digestCanonicalRequest({ goalId, expectedVersion });
 
-    return this.runIdempotent(async (query) => {
+    return this.runIdempotent(ownerUserId, async (query) => {
       const goal = await lockGoal(query, ownerUserId, goalId);
       const replay = await this.findReceipt(query, ownerUserId, OPERATION.archive, keyDigest, requestDigest);
       if (replay) return receipt(replay);
@@ -460,11 +461,11 @@ export class PostgresSavingsGoalRepository {
 
   async getGoal(ownerUserId: string, goalId: string): Promise<SavingsGoalView> {
     assertGoalId(goalId);
-    const result = await this.read(() => this.pool.query<GoalRow>(`
+    const result = await this.read(() => withUserContext(this.pool, ownerUserId, (client) => client.query<GoalRow>(`
       SELECT ${GOAL_COLUMNS}
       FROM savings_goals AS g
       WHERE g.user_id = $1 AND g.id = $2
-    `, [ownerUserId, goalId]));
+    `, [ownerUserId, goalId])));
     const row = result.rows[0];
     if (!row) throw unavailableError();
     return goalView(row);
@@ -492,13 +493,13 @@ export class PostgresSavingsGoalRepository {
       where.push(`(g.created_at, g.id) > ($${values.length - 1}::timestamptz, $${values.length}::uuid)`);
     }
     values.push(limit + 1);
-    const result = await this.read(() => this.pool.query<GoalRow>(`
+    const result = await this.read(() => withUserContext(this.pool, ownerUserId, (client) => client.query<GoalRow>(`
       SELECT ${GOAL_COLUMNS}
       FROM savings_goals AS g
       WHERE ${where.join(' AND ')}
       ORDER BY g.created_at ASC, g.id ASC
       LIMIT $${values.length}
-    `, values));
+    `, values)));
     const rows = result.rows.slice(0, limit);
     const last = rows.at(-1);
     return {
@@ -517,10 +518,7 @@ export class PostgresSavingsGoalRepository {
   ): Promise<SavingsAmountChangePage> {
     assertGoalId(goalId);
     const limit = boundedLimit(options.limit);
-    const owned = await this.read(() => this.pool.query(
-      'SELECT 1 FROM savings_goals WHERE user_id = $1 AND id = $2',
-      [ownerUserId, goalId],
-    ));
+    const owned = await this.read(() => withUserContext(this.pool, ownerUserId, (client) => client.query('SELECT 1 FROM savings_goals WHERE user_id = $1 AND id = $2', [ownerUserId, goalId])));
     if (!owned.rowCount) throw unavailableError();
     const values: unknown[] = [ownerUserId, goalId];
     let cursorClause = '';
@@ -529,14 +527,14 @@ export class PostgresSavingsGoalRepository {
       cursorClause = `AND c.goal_version < $${values.length}`;
     }
     values.push(limit + 1);
-    const result = await this.read(() => this.pool.query<ChangeRow>(`
+    const result = await this.read(() => withUserContext(this.pool, ownerUserId, (client) => client.query<ChangeRow>(`
       SELECT c.id, c.goal_version, c.previous_amount_minor, c.new_amount_minor,
              c.as_of::text AS as_of, c.source, c.reason, c.actor_user_id, c.created_at
       FROM savings_amount_changes AS c
       WHERE c.user_id = $1 AND c.savings_goal_id = $2 ${cursorClause}
       ORDER BY c.goal_version DESC
       LIMIT $${values.length}
-    `, values));
+    `, values)));
     const rows = result.rows.slice(0, limit);
     const last = rows.at(-1);
     return {
@@ -623,13 +621,13 @@ export class PostgresSavingsGoalRepository {
    * performs the write if it never committed) before reporting
    * FINANCIAL_RESULT_UNKNOWN.
    */
-  private async runIdempotent<T>(work: (query: Query) => Promise<T>): Promise<T> {
+  private async runIdempotent<T>(ownerUserId: string, work: (query: Query) => Promise<T>): Promise<T> {
     try {
-      return await this.attempt(work);
+      return await this.attempt(ownerUserId, work);
     } catch (error) {
       if (!(error instanceof CommitOutcomeUnknown)) throw error;
       try {
-        return await this.attempt(work);
+        return await this.attempt(ownerUserId, work);
       } catch (recoveryError) {
         if (recoveryError instanceof FinancialError && recoveryError.statusCode < 500) {
           throw recoveryError;
@@ -645,7 +643,7 @@ export class PostgresSavingsGoalRepository {
     }
   }
 
-  private async attempt<T>(work: (query: Query) => Promise<T>): Promise<T> {
+  private async attempt<T>(ownerUserId: string, work: (query: Query) => Promise<T>): Promise<T> {
     let client: PoolClient;
     try {
       client = await this.pool.connect();
@@ -657,6 +655,10 @@ export class PostgresSavingsGoalRepository {
     const query: Query = (text, values = []) => client.query(text, [...values]);
     try {
       await query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await query('SELECT set_config($1, $2, true)', [
+        USER_CONTEXT_SETTING,
+        assertUserId(ownerUserId),
+      ]);
       await query("SELECT set_config('lock_timeout', '2000ms', true)");
       await query("SELECT set_config('statement_timeout', '5000ms', true)");
       const value = await work(query);

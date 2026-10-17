@@ -32,6 +32,7 @@ import {
   type NormalizedEmail,
 } from '@kfin/domain';
 import { constantTimeBufferEqual, keyedDigest } from './canonical.js';
+import { applyUserContext, withUserContext } from './context.js';
 import { decoyVerification, hashPassword, verifyPassword } from './passwords.js';
 
 /**
@@ -220,7 +221,12 @@ export interface RequestPasswordResetInput extends AccessRequestContext {
 export interface RequestPasswordResetResult {
   readonly accepted: true;
   readonly issued: boolean;
-  readonly delivery: { readonly challengeId: string; readonly oneTimeCode: string; readonly expiresAt: string } | null;
+  readonly delivery: {
+    readonly userId: string;
+    readonly challengeId: string;
+    readonly oneTimeCode: string;
+    readonly expiresAt: string;
+  } | null;
 }
 
 export interface ResetPasswordInput extends AccessRequestContext {
@@ -404,6 +410,9 @@ export class PostgresAuthRepository {
 
       const userId = randomUUID();
       try {
+        // Registration creates the owner row under its own context: the
+        // `users` INSERT policy requires `id = kfin.user_id`.
+        await applyUserContext(client, userId);
         await client.query(
           `INSERT INTO users (
              id, email, email_normalized, display_name, locale, timezone, base_currency,
@@ -494,6 +503,7 @@ export class PostgresAuthRepository {
         [email.emailNormalized],
       );
       const user = userResult.rows[0];
+      if (user) await applyUserContext(client, user.id);
       if (!user || !user.password_hash) {
         // Equalize work for unknown accounts without revealing existence.
         await decoyVerification(normalizePassword(input.password), this.hashPolicy);
@@ -588,65 +598,93 @@ export class PostgresAuthRepository {
   async authenticate(token: string | null | undefined): Promise<AccessPrincipal | null> {
     if (!token || token.length < 16) return null;
     const now = this.now();
-    const result = await this.pool.query<SessionRow>(
-      `SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
-              s.absolute_expires_at, s.device_label, s.revoked_at, s.csrf_digest,
-              t.retired_at AS token_retired_at, t.grace_expires_at AS token_grace_expires_at,
-              t.generation, u.status AS user_status, u.email_verified_at
-         FROM session_tokens t
-         JOIN sessions s ON s.id = t.session_id
-         JOIN users u ON u.id = s.user_id
-        WHERE t.token_digest = $1
-        LIMIT 1`,
-      [this.digest('session-token', token)],
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-
-    if (row.revoked_at !== null) return null;
-
-    if (row.token_retired_at !== null) {
-      const withinGrace = row.token_grace_expires_at !== null
-        && row.token_grace_expires_at.getTime() > now;
-      if (!withinGrace) {
-        await this.containReplay(row.id, now);
+    const client = await this.pool.connect();
+    let began = false;
+    try {
+      await client.query('BEGIN');
+      began = true;
+      const result = await client.query<SessionRow>(
+        `SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
+                s.absolute_expires_at, s.device_label, s.revoked_at, s.csrf_digest,
+                t.retired_at AS token_retired_at, t.grace_expires_at AS token_grace_expires_at,
+                t.generation, u.status AS user_status, u.email_verified_at
+           FROM session_tokens t
+           JOIN sessions s ON s.id = t.session_id
+           JOIN users u ON u.id = s.user_id
+          WHERE t.token_digest = $1
+          LIMIT 1`,
+        [this.digest('session-token', token)],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        await client.query('COMMIT');
         return null;
       }
-    }
-    if (row.absolute_expires_at.getTime() <= now || row.idle_expires_at.getTime() <= now) {
-      await this.expireSession(row.id, now);
-      return null;
-    }
-    // OQ-20: verification state is not a session gate. Sessions are granted by
-    // sign-in, reused while the account is active, and dropped the moment the
-    // account leaves `active` (SEC-SES-04/05, SEC-AUTH-19).
-    if (row.user_status !== 'active') return null;
+      // The token lookup is the only pre-identity read in this method. Every
+      // later statement runs under the resolved owner's context.
+      await applyUserContext(client, row.user_id);
 
-    if (now - row.last_seen_at.getTime() >= this.options.policy.session.lastSeenThrottleMs) {
-      await this.pool.query(
-        `UPDATE sessions
-            SET last_seen_at = $2,
-                idle_expires_at = $3,
-                version = version + 1
-          WHERE id = $1 AND revoked_at IS NULL`,
-        [
-          row.id,
-          new Date(now),
-          new Date(clampIdleExpiry(
-            now,
-            this.options.policy.session.idleLifetimeMs,
-            row.absolute_expires_at,
-          )),
-        ],
-      );
-    }
+      if (row.revoked_at !== null) {
+        await client.query('COMMIT');
+        return null;
+      }
 
-    return {
-      userId: row.user_id,
-      sessionId: row.id,
-      sessionGeneration: row.generation,
-      csrfDigest: row.csrf_digest.toString('hex'),
-    };
+      if (row.token_retired_at !== null) {
+        const withinGrace = row.token_grace_expires_at !== null
+          && row.token_grace_expires_at.getTime() > now;
+        if (!withinGrace) {
+          await client.query('COMMIT');
+          await this.containReplay(row.id, row.user_id, now);
+          return null;
+        }
+      }
+      if (row.absolute_expires_at.getTime() <= now || row.idle_expires_at.getTime() <= now) {
+        await client.query('COMMIT');
+        await this.expireSession(row.id, row.user_id, now);
+        return null;
+      }
+      // OQ-20: verification state is not a session gate. Sessions are granted by
+      // sign-in, reused while the account is active, and dropped the moment the
+      // account leaves `active` (SEC-SES-04/05, SEC-AUTH-19).
+      if (row.user_status !== 'active') {
+        await client.query('COMMIT');
+        return null;
+      }
+
+      if (now - row.last_seen_at.getTime() >= this.options.policy.session.lastSeenThrottleMs) {
+        await client.query(
+          `UPDATE sessions
+              SET last_seen_at = $2,
+                  idle_expires_at = $3,
+                  version = version + 1
+            WHERE id = $1 AND revoked_at IS NULL`,
+          [
+            row.id,
+            new Date(now),
+            new Date(clampIdleExpiry(
+              now,
+              this.options.policy.session.idleLifetimeMs,
+              row.absolute_expires_at,
+            )),
+          ],
+        );
+      }
+
+      await client.query('COMMIT');
+      return {
+        userId: row.user_id,
+        sessionId: row.id,
+        sessionGeneration: row.generation,
+        csrfDigest: row.csrf_digest.toString('hex'),
+      };
+    } catch (error) {
+      if (began) {
+        try { await client.query('ROLLBACK'); } catch { /* preserve the original failure */ }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   /** Verifies a presented CSRF token against the digest bound to a session. */
@@ -658,9 +696,8 @@ export class PostgresAuthRepository {
     );
   }
 
-  async logout(sessionId: string, input: AccessRequestContext): Promise<boolean> {
-    return this.withTransaction(async (client) => {
-      const userId = await this.userIdForSession(sessionId, client);
+  async logout(userId: string, sessionId: string, input: AccessRequestContext): Promise<boolean> {
+    return this.withTransaction(userId, async (client) => {
       const revoked = await this.revokeSessionRows(client, {
         userId,
         exceptSessionId: null,
@@ -692,7 +729,7 @@ export class PostgresAuthRepository {
    * sessions actually revoked, current one included (SEC-SES-06/08).
    */
   async logoutAll(userId: string, input: AccessRequestContext): Promise<number> {
-    return this.withTransaction(async (client) => {
+    return this.withTransaction(userId, async (client) => {
       const revoked = await this.revokeSessionRows(client, {
         userId,
         exceptSessionId: null,
@@ -719,8 +756,8 @@ export class PostgresAuthRepository {
   ): Promise<SessionPage> {
     const limit = Math.min(Math.max(options.limit, 1), 100);
     const cursor = decodeSessionCursor(options.cursor);
-    const result = await this.pool.query<SessionRow>(
-      `SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
+    const result = await withUserContext(this.pool, userId, (client) => client.query<SessionRow>(`
+      SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
               s.absolute_expires_at, s.device_label, s.revoked_at, s.csrf_digest,
               NULL::timestamptz AS token_retired_at, NULL::timestamptz AS token_grace_expires_at,
               0 AS generation, u.status AS user_status, u.email_verified_at
@@ -730,14 +767,12 @@ export class PostgresAuthRepository {
           AND s.revoked_at IS NULL
           AND (s.created_at, s.id) < ($2::timestamptz, $3::uuid)
         ORDER BY s.created_at DESC, s.id DESC
-        LIMIT $4`,
-      [
+        LIMIT $4`, [
         userId,
         cursor ? new Date(cursor.createdAt) : 'infinity',
         cursor ? cursor.id : 'ffffffff-ffff-4fff-bfff-ffffffffffff',
         limit + 1,
-      ],
-    );
+      ]));
     const rows = result.rows.slice(0, limit);
     const hasMore = result.rows.length > limit;
     const last = rows.at(-1);
@@ -763,7 +798,7 @@ export class PostgresAuthRepository {
     sessionId: string,
     input: AccessRequestContext,
   ): Promise<boolean> {
-    return this.withTransaction(async (client) => {
+    return this.withTransaction(userId, async (client) => {
       const revoked = await this.revokeSessionRows(client, {
         userId,
         exceptSessionId: null,
@@ -790,7 +825,7 @@ export class PostgresAuthRepository {
     const email = await this.emailForUser(input.userId);
     this.assertPassword(input.newPassword, email ?? undefined);
     const now = this.now();
-    return this.withTransaction(async (client) => {
+    return this.withTransaction(input.userId, async (client) => {
       const credential = await client.query<UserAuthRow>(
         `SELECT u.id, u.status, u.email_verified_at, c.password_hash
            FROM users u
@@ -904,6 +939,7 @@ export class PostgresAuthRepository {
         await client.query('COMMIT');
         return { accepted: true, issued: false, delivery: null };
       }
+      await applyUserContext(client, user.id);
 
       const active = await client.query<ChallengeRow>(
         `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
@@ -965,7 +1001,7 @@ export class PostgresAuthRepository {
       return {
         accepted: true,
         issued: true,
-        delivery: { challengeId, oneTimeCode, expiresAt: expiresAt.toISOString() },
+        delivery: { userId: user.id, challengeId, oneTimeCode, expiresAt: expiresAt.toISOString() },
       };
     } catch (error) {
       await this.safeRollback(client, error);
@@ -1031,6 +1067,9 @@ export class PostgresAuthRepository {
         [this.digest('challenge-target:password_reset', target)],
       );
       const challenge = challengeResult.rows[0];
+      // The target-digest lookup is the only pre-identity read. Every update
+      // and challenge row after it runs under the account's context.
+      if (challenge?.user_id) await applyUserContext(client, challenge.user_id);
       if (!challenge) {
         await this.recordFailureAndCommit(client, {
           userId: null,
@@ -1152,27 +1191,25 @@ export class PostgresAuthRepository {
   ): Promise<SecurityEventPage> {
     const limit = Math.min(Math.max(options.limit, 1), 100);
     const cursor = decodeEventCursor(options.cursor);
-    const result = await this.pool.query<{
+    const result = await withUserContext(this.pool, userId, (client) => client.query<{
       id: string;
       event_type: AuthEventType;
       outcome: AuthEventOutcome;
       occurred_at: Date;
       session_id: string | null;
-    }>(
-      `SELECT id, event_type, outcome, occurred_at, session_id
+    }>(`
+      SELECT id, event_type, outcome, occurred_at, session_id
          FROM security_events
         WHERE user_id = $1
           AND visibility IN ('user', 'both')
           AND (occurred_at, id) < ($2::timestamptz, $3::uuid)
         ORDER BY occurred_at DESC, id DESC
-        LIMIT $4`,
-      [
+        LIMIT $4`, [
         userId,
         cursor ? new Date(cursor.occurredAt) : 'infinity',
         cursor ? cursor.id : 'ffffffff-ffff-4fff-bfff-ffffffffffff',
         limit + 1,
-      ],
-    );
+      ]));
     const rows = result.rows.slice(0, limit);
     const hasMore = result.rows.length > limit;
     const last = rows.at(-1);
@@ -1192,12 +1229,9 @@ export class PostgresAuthRepository {
 
   /** Minimal owner-scoped profile projection for the authenticated principal. */
   async getProfile(userId: string): Promise<ProfileView | null> {
-    const result = await this.pool.query<ProfileRow>(
-      `SELECT id, email, status, email_verified_at, display_name, locale, timezone, base_currency
+    const result = await withUserContext(this.pool, userId, (client) => client.query<ProfileRow>(`SELECT id, email, status, email_verified_at, display_name, locale, timezone, base_currency
          FROM users
-        WHERE id = $1`,
-      [userId],
-    );
+        WHERE id = $1`, [userId]));
     const row = result.rows[0];
     if (!row) return null;
     return {
@@ -1214,18 +1248,16 @@ export class PostgresAuthRepository {
 
   /** Records the sanitized outcome of an immediate secret-bearing delivery. */
   async recordChallengeDelivery(
+    userId: string,
     challengeId: string,
     status: 'delivered' | 'failed',
     reference?: string,
   ): Promise<void> {
-    await this.pool.query(
-      `UPDATE auth_challenges
+    await withUserContext(this.pool, userId, (client) => client.query(`UPDATE auth_challenges
           SET delivery_status = $2,
               last_delivery_attempt_at = $3,
               last_delivery_status = $4
-        WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`,
-      [challengeId, status, new Date(this.now()), sanitizeReference(reference)],
-    );
+        WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`, [challengeId, status, new Date(this.now()), sanitizeReference(reference)]));
   }
 
   /** Bounded pruning keeps fixed-window counters from growing without bound. */
@@ -1545,10 +1577,11 @@ export class PostgresAuthRepository {
     return result.rowCount ?? 0;
   }
 
-  private async containReplay(sessionId: string, now: number): Promise<void> {
+  private async containReplay(sessionId: string, userId: string, now: number): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await applyUserContext(client, userId);
       const session = await client.query<{ user_id: string; family_id: string }>(
         `SELECT user_id, family_id FROM sessions WHERE id = $1 FOR UPDATE`,
         [sessionId],
@@ -1587,10 +1620,11 @@ export class PostgresAuthRepository {
     }
   }
 
-  private async expireSession(sessionId: string, now: number): Promise<void> {
+  private async expireSession(sessionId: string, userId: string, now: number): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await applyUserContext(client, userId);
       const session = await client.query<{ user_id: string }>(
         `SELECT user_id FROM sessions WHERE id = $1 FOR UPDATE`,
         [sessionId],
@@ -1805,41 +1839,25 @@ export class PostgresAuthRepository {
     }
   }
 
-  private async userIdForSession(sessionId: string, client?: PoolClient): Promise<string> {
-    const runner: Pick<Pool, 'query'> = client ?? this.pool;
-    const result = await runner.query<{ user_id: string }>(
-      `SELECT user_id FROM sessions WHERE id = $1`,
-      [sessionId],
-    );
-    const row = result.rows[0];
-    if (!row) throw accountUnavailableError();
-    return row.user_id;
-  }
-
-  private async emailForUser(userId: string | null, client?: PoolClient): Promise<NormalizedEmail | null> {
+  private async emailForUser(
+    userId: string | null,
+    client?: PoolClient,
+  ): Promise<NormalizedEmail | null> {
     if (!userId) return null;
-    const runner: Pick<Pool, 'query'> = client ?? this.pool;
-    const result = await runner.query<{ email: string }>(
-      `SELECT email FROM users WHERE id = $1`,
-      [userId],
-    );
+    // Inside an open transaction the caller has already applied the owner
+    // context; use its client so the read sees the same snapshot.
+    const result = client
+      ? await client.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId])
+      : await withUserContext(this.pool, userId, (client) => client.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]));
     const row = result.rows[0];
     return row ? normalizeEmail(row.email) : null;
   }
 
-  private async withTransaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const value = await operation(client);
-      await client.query('COMMIT');
-      return value;
-    } catch (error) {
-      await this.safeRollback(client, error);
-      throw error;
-    } finally {
-      client.release();
-    }
+  private async withTransaction<T>(
+    userId: string,
+    operation: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    return withUserContext(this.pool, userId, operation);
   }
 
   private async rollback(client: PoolClient): Promise<void> {
