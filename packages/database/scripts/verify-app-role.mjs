@@ -134,12 +134,71 @@ try {
   `, [schema])).rows;
   check(notExecutableFunctions.length === 0, `application role cannot EXECUTE: ${notExecutableFunctions.map((row) => row.proname).join(', ')}`);
 
+  // SPEC-SEC-01 phase 2: RLS must be on for every tenant table and the view must
+  // stay security_invoker. `auth_attempt_counters` is deliberately global.
+  const rlsTables = (await client.query(`
+    SELECT c.relname, c.relrowsecurity
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = $1::text
+       AND c.relkind = 'r'
+       AND c.relname <> 'kfin_migrations'
+  `, [schema])).rows;
+  const rlsOn = new Set(rlsTables.filter((row) => row.relrowsecurity).map((row) => row.relname));
+  const expectedRls = [
+    'users', 'password_credentials', 'sessions', 'session_tokens', 'auth_challenges',
+    'security_events', 'beta_invitations', 'categories', 'financial_accounts',
+    'balance_snapshots', 'transactions', 'idempotency_results', 'scheduled_items',
+    'scheduled_occurrences', 'savings_goals', 'savings_amount_changes', 'audit_events',
+  ];
+  for (const table of expectedRls) check(rlsOn.has(table), `RLS is not enabled on ${table}`);
+  check(!rlsOn.has('auth_attempt_counters'), 'RLS must stay off on auth_attempt_counters');
+
+  const policyCoverage = (await client.query(`
+    SELECT c.relname, count(p.polname)::int AS policies
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_policy p ON p.polrelid = c.oid
+     WHERE n.nspname = $1::text
+       AND c.relkind = 'r'
+       AND c.relname = ANY($2::text[])
+     GROUP BY c.relname
+  `, [schema, expectedRls])).rows;
+  for (const row of policyCoverage) check(row.policies > 0, `${row.relname}: RLS enabled with no policy`);
+
+  const viewOptions = (await client.query(`
+    SELECT c.reloptions
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = $1::text AND c.relname = 'financial_current_balances'
+  `, [schema])).rows[0]?.reloptions ?? [];
+  check(viewOptions.includes('security_invoker=true'), 'financial_current_balances is not security_invoker');
+
+  const definerFunctions = (await client.query(`
+    SELECT p.proname, p.prosecdef, p.proconfig
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = $1::text
+       AND p.proname = ANY($2::text[])
+  `, [schema, [
+    'kfin_account_lookup', 'kfin_token_lookup', 'kfin_reset_challenge_lookup',
+    'kfin_invitation_lookup', 'kfin_consume_invitation',
+  ]])).rows;
+  check(definerFunctions.length === 5, `expected 5 SECURITY DEFINER functions, found ${definerFunctions.length}`);
+  for (const row of definerFunctions) {
+    check(row.prosecdef === true, `${row.proname}: not SECURITY DEFINER`);
+    const pinned = (row.proconfig ?? []).some((entry) => entry.startsWith('search_path=pg_catalog, '));
+    check(pinned, `${row.proname}: search_path is not pinned to pg_catalog + schema`);
+  }
+
   for (const table of ['users', 'transactions', 'financial_accounts', 'financial_current_balances']) {
     const result = await client.query(`SELECT count(*)::int AS rows FROM ${schemaId}.${client.escapeIdentifier(table)}`);
     check(Number.isInteger(result.rows[0].rows), `${table}: SELECT failed`);
   }
 
   await expectInsufficientPrivilege(`SELECT count(*) FROM ${schemaId}.kfin_migrations`, 'read kfin_migrations');
+  await expectInsufficientPrivilege(`SELECT count(*) FROM ${schemaId}.beta_invitations`, 'read beta_invitations');
+  await expectInsufficientPrivilege(`INSERT INTO ${schemaId}.beta_invitations (id) VALUES (gen_random_uuid())`, 'insert beta_invitations');
   await expectInsufficientPrivilege(`CREATE TABLE ${schemaId}.kfin_privilege_probe (id integer)`, 'CREATE TABLE');
   await expectInsufficientPrivilege(`TRUNCATE ${schemaId}.transactions`, 'TRUNCATE transactions');
   await expectInsufficientPrivilege(`ALTER TABLE ${schemaId}.transactions ADD COLUMN kfin_privilege_probe integer`, 'ALTER TABLE transactions');

@@ -6,10 +6,12 @@ import {
   assertApplicationDatabaseRole,
   PostgresAuthRepository,
   PostgresFinancialRepository,
+  PostgresInvitationRepository,
   PostgresSavingsGoalRepository,
   PostgresScheduleRepository,
   PostgresUserRepository,
   migrateDatabase,
+  withUserContext,
   type AuthAccessPolicy,
 } from '../src/index.js';
 
@@ -43,6 +45,7 @@ const integrationEnabled = Boolean(
   process.env.TEST_DATABASE_URL
   && process.env.TEST_APP_DATABASE_URL
   && process.env.TEST_MIGRATION_DATABASE_URL
+  && process.env.TEST_OPERATOR_DATABASE_URL
   && process.env.KFIN_INTEGRATION_TARGET === 'non-production',
 );
 const integration = describe.skipIf(!integrationEnabled);
@@ -105,7 +108,8 @@ const EXPECTED_PRIVILEGES: Readonly<Record<string, readonly string[]>> = {
   savings_amount_changes: ['SELECT', 'INSERT'],
   auth_attempt_counters: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
   auth_challenges: ['SELECT', 'INSERT', 'UPDATE'],
-  beta_invitations: ['SELECT', 'INSERT', 'UPDATE'],
+  // SPEC-SEC-01 phase 2: the API role holds no invitation privilege at all.
+  beta_invitations: [],
   password_credentials: ['SELECT', 'INSERT', 'UPDATE'],
   security_events: ['SELECT', 'INSERT'],
   sessions: ['SELECT', 'INSERT', 'UPDATE'],
@@ -119,6 +123,7 @@ interface Scenario {
   readonly administration: Pool;
   readonly migration: Pool;
   readonly app: Pool;
+  readonly operator: Pool;
 }
 
 interface MatrixRow {
@@ -165,15 +170,17 @@ function normalizeMatrix(matrix: Readonly<Record<string, readonly string[]>>): R
 async function setupScenario(mode: 'migrator' | 'owner'): Promise<Scenario> {
   const adminUrl = requireEnv('TEST_DATABASE_URL');
   const appUrl = requireEnv('TEST_APP_DATABASE_URL');
+  const operatorUrl = requireEnv('TEST_OPERATOR_DATABASE_URL');
   const migrationUrl = mode === 'migrator' ? requireEnv('TEST_MIGRATION_DATABASE_URL') : adminUrl;
   const schema = `kfin_lp_${randomUUID().replaceAll('-', '')}`;
   const administration = new Pool({ connectionString: adminUrl, max: 1 });
   let migration: Pool | undefined;
   let app: Pool | undefined;
+  let operator: Pool | undefined;
   try {
     await administration.query(`CREATE SCHEMA ${quoteIdentifier(schema)}`);
     await administration.query(`REVOKE ALL ON SCHEMA ${quoteIdentifier(schema)} FROM PUBLIC`);
-    await administration.query(`GRANT USAGE ON SCHEMA ${quoteIdentifier(schema)} TO kfin_app`);
+    await administration.query(`GRANT USAGE ON SCHEMA ${quoteIdentifier(schema)} TO kfin_app, kfin_operator`);
     await administration.query(`GRANT CREATE, USAGE ON SCHEMA ${quoteIdentifier(schema)} TO kfin_migrator`);
     migration = new Pool({
       connectionString: migrationUrl,
@@ -186,8 +193,14 @@ async function setupScenario(mode: 'migrator' | 'owner'): Promise<Scenario> {
       max: 6,
       options: `-c search_path=${schema},public`,
     });
-    return { schema, administration, migration, app };
+    operator = new Pool({
+      connectionString: operatorUrl,
+      max: 2,
+      options: `-c search_path=${schema},public`,
+    });
+    return { schema, administration, migration, app, operator };
   } catch (error) {
+    if (operator) await operator.end().catch(() => undefined);
     if (app) await app.end().catch(() => undefined);
     if (migration) await migration.end().catch(() => undefined);
     await administration.query(`DROP SCHEMA IF EXISTS ${quoteIdentifier(schema)} CASCADE`).catch(() => undefined);
@@ -198,6 +211,7 @@ async function setupScenario(mode: 'migrator' | 'owner'): Promise<Scenario> {
 
 async function teardownScenario(scenario: Scenario | undefined): Promise<void> {
   if (!scenario) return;
+  await scenario.operator.end().catch(() => undefined);
   await scenario.app.end().catch(() => undefined);
   await scenario.migration.end().catch(() => undefined);
   await scenario.administration
@@ -430,7 +444,15 @@ function leastPrivilegeSuite(label: string, mode: 'migrator' | 'owner'): void {
       const auth = new PostgresAuthRepository(s.app, { secret: AUTH_SECRET, policy: AUTH_POLICY });
       const email = `lp-auth-${randomUUID()}@example.invalid`;
 
-      const invitation = await auth.issueInvitation({
+      const invitations = new PostgresInvitationRepository(s.operator, {
+        secret: AUTH_SECRET,
+        policy: {
+          codeEntropyBytes: AUTH_POLICY.invitation.codeEntropyBytes,
+          codeGroupLength: AUTH_POLICY.invitation.codeGroupLength,
+          defaultLifetimeMs: AUTH_POLICY.invitation.defaultLifetimeMs,
+        },
+      });
+      const invitation = await invitations.issueInvitation({
         invitedEmail: email,
         createdByOperatorId: randomUUID(),
         correlationId: randomUUID(),
@@ -603,11 +625,11 @@ function leastPrivilegeSuite(label: string, mode: 'migrator' | 'owner'): void {
       const changes = await savings.listAmountChanges(owner.userId, goal.goalId, { limit: 10 });
       expect(changes.items.length).toBeGreaterThan(0);
 
-      const view = await s.app.query<{ current_balance_minor: string }>(`
+      const view = await withUserContext(s.app, owner.userId, (client) => client.query<{ current_balance_minor: string }>(`
         SELECT current_balance_minor
           FROM ${quoteIdentifier(s.schema)}.financial_current_balances
          WHERE user_id = $1
-      `, [owner.userId]);
+      `, [owner.userId]));
       expect(view.rows[0]?.current_balance_minor).toBe('450000');
     }, 30_000);
 
@@ -651,11 +673,11 @@ function leastPrivilegeSuite(label: string, mode: 'migrator' | 'owner'): void {
       expect(metadata.reloptions).toContain('security_invoker=true');
 
       const owner = await createOwner(s.app, 'lp-view');
-      const view = await s.app.query<{ current_balance_minor: string }>(`
+      const view = await withUserContext(s.app, owner.userId, (client) => client.query<{ current_balance_minor: string }>(`
         SELECT current_balance_minor
           FROM ${quoteIdentifier(s.schema)}.financial_current_balances
          WHERE user_id = $1
-      `, [owner.userId]);
+      `, [owner.userId]));
       expect(view.rows[0]?.current_balance_minor).toBe('1000000');
     });
   });

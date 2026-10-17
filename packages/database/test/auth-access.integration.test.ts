@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   PostgresAuthRepository,
+  PostgresInvitationRepository,
   keyedDigest,
   migrateDatabase,
   type AuthAccessPolicy,
@@ -82,6 +83,7 @@ const integration = describe.skipIf(!integrationEnabled);
 integration('trusted private beta access on real PostgreSQL', () => {
   let administration: Pool;
   let database: Pool;
+  let invitations: PostgresInvitationRepository;
   let schema: string;
   let clock: number;
   const now = () => clock;
@@ -96,6 +98,18 @@ integration('trusted private beta access on real PostgreSQL', () => {
       options: `-c search_path=${schema},public`,
     });
     await migrateDatabase(database);
+    // Invitations are the operator path; this suite keeps owner rights only for
+    // the fixture connection. `least-privilege` and `rls-owner-isolation` prove
+    // the real `kfin_operator` grant.
+    invitations = new PostgresInvitationRepository(database, {
+      secret: SECRET,
+      policy: {
+        codeEntropyBytes: BASE_POLICY.invitation.codeEntropyBytes,
+        codeGroupLength: BASE_POLICY.invitation.codeGroupLength,
+        defaultLifetimeMs: BASE_POLICY.invitation.defaultLifetimeMs,
+      },
+      now,
+    });
     clock = Date.UTC(2026, 9, 8, 2, 0, 0);
   }, 60_000);
 
@@ -119,7 +133,7 @@ integration('trusted private beta access on real PostgreSQL', () => {
   const AGENT = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)';
 
   async function invite(email?: string) {
-    return repository().issueInvitation({
+    return invitations.issueInvitation({
       ...(email === undefined ? {} : { invitedEmail: email }),
       createdByOperatorId: randomUUID(),
       correlationId: randomUUID(),

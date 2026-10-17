@@ -4,6 +4,8 @@
  *
  *   kfin_migrator  owns the schema objects and runs `db:migrate`
  *   kfin_app       the application: LOGIN, no ownership, no DDL, DML only
+ *   kfin_operator  the invitation CLI: LOGIN, no ownership, no table DML until
+ *                  migration 0009 grants INSERT on beta_invitations only
  *
  * This is an operator-only step. It needs an owner/admin connection that can
  * create roles and manage the schema; that credential must never be given to
@@ -15,6 +17,7 @@
  *   ROLE_ADMIN_DATABASE_URL   required, admin/owner connection
  *   KFIN_APP_PASSWORD         optional, applied with ALTER ROLE
  *   KFIN_MIGRATOR_PASSWORD    optional, applied with ALTER ROLE
+ *   KFIN_OPERATOR_PASSWORD    optional, applied with ALTER ROLE
  *   KFIN_DATABASE_SCHEMA      optional, default `public`
  *
  * The migration that follows (0008) refuses to run unless these roles exist and
@@ -26,7 +29,8 @@ const { Client } = pg;
 
 const ROLE_APP = 'kfin_app';
 const ROLE_MIGRATOR = 'kfin_migrator';
-const ROLE_NAMES = [ROLE_MIGRATOR, ROLE_APP];
+const ROLE_OPERATOR = 'kfin_operator';
+const ROLE_NAMES = [ROLE_MIGRATOR, ROLE_APP, ROLE_OPERATOR];
 
 const adminUrl = process.env.ROLE_ADMIN_DATABASE_URL?.trim();
 if (!adminUrl) {
@@ -43,6 +47,7 @@ if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
 const passwords = new Map([
   [ROLE_MIGRATOR, process.env.KFIN_MIGRATOR_PASSWORD ?? ''],
   [ROLE_APP, process.env.KFIN_APP_PASSWORD ?? ''],
+  [ROLE_OPERATOR, process.env.KFIN_OPERATOR_PASSWORD ?? ''],
 ]);
 
 const client = new Client({ connectionString: adminUrl });
@@ -103,6 +108,7 @@ try {
   const schemaIdentifier = client.escapeIdentifier(schema);
   const appIdentifier = client.escapeIdentifier(ROLE_APP);
   const migratorIdentifier = client.escapeIdentifier(ROLE_MIGRATOR);
+  const operatorIdentifier = client.escapeIdentifier(ROLE_OPERATOR);
 
   for (const role of ROLE_NAMES) {
     await ensureRole(role);
@@ -114,12 +120,14 @@ try {
   await client.query(`REVOKE ALL ON SCHEMA ${schemaIdentifier} FROM ${appIdentifier}`);
   await client.query(`GRANT USAGE ON SCHEMA ${schemaIdentifier} TO ${appIdentifier}`);
   await client.query(`GRANT CREATE, USAGE ON SCHEMA ${schemaIdentifier} TO ${migratorIdentifier}`);
+  await client.query(`GRANT USAGE ON SCHEMA ${schemaIdentifier} TO ${operatorIdentifier}`);
   await client.query(`REVOKE CREATE ON SCHEMA ${schemaIdentifier} FROM PUBLIC`);
 
   // Database-level CREATE/TEMP: remove the direct CREATE grant from the app
   // role. CONNECT/TEMP remain through PUBLIC; that is a documented residual in
   // phase 1 (revoking them from PUBLIC could affect platform roles).
   await client.query(`REVOKE CREATE ON DATABASE ${databaseIdentifier} FROM ${appIdentifier}`);
+  await client.query(`REVOKE CREATE ON DATABASE ${databaseIdentifier} FROM ${operatorIdentifier}`);
 
   const roles = await client.query(
     `SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolinherit, rolcanlogin

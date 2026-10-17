@@ -8,7 +8,6 @@ import {
   challengeAttemptsExhaustedError,
   eventVisibility,
   expiredChallengeError,
-  generateInvitationCode,
   generateNumericOtp,
   generateUrlToken,
   invalidChallengeError,
@@ -148,20 +147,6 @@ export interface AccessPrincipal {
   readonly sessionGeneration: number;
   /** Hex digest of the CSRF token bound to this session. */
   readonly csrfDigest: string;
-}
-
-export interface IssueInvitationInput {
-  readonly invitedEmail?: string | null;
-  readonly createdByOperatorId: string;
-  readonly correlationId: string;
-  readonly lifetimeMs?: number;
-}
-
-export interface IssuedInvitation {
-  readonly invitationId: string;
-  /** Plaintext single-use code. Never persisted; returned once for delivery. */
-  readonly code: string;
-  readonly expiresAt: string;
 }
 
 export interface RegisterInput extends AccessRequestContext {
@@ -329,36 +314,6 @@ export class PostgresAuthRepository {
   }
 
   /**
-   * Operator-audited invitation provisioning. There is deliberately no HTTP
-   * route: codes reach users through the reviewed operator channel only
-   * (DATABASE §4.2, SEC-AUTH-14).
-   */
-  async issueInvitation(input: IssueInvitationInput): Promise<IssuedInvitation> {
-    const invitationId = randomUUID();
-    const code = generateInvitationCode(
-      this.options.policy.invitation.codeEntropyBytes,
-      this.options.policy.invitation.codeGroupLength,
-    );
-    const expiresAt = new Date(this.now() + (input.lifetimeMs ?? this.options.policy.invitation.defaultLifetimeMs));
-    const invitedEmail = input.invitedEmail ? normalizeEmail(input.invitedEmail) : null;
-    if (input.invitedEmail && !invitedEmail) throw authValidationError('The invited email address is invalid.');
-    await this.pool.query(
-      `INSERT INTO beta_invitations (
-         id, code_digest, invited_email_normalized, expires_at, created_by_operator_id, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        invitationId,
-        this.digest('invitation-code', normalizeInvitationCode(code)),
-        invitedEmail?.emailNormalized ?? null,
-        expiresAt,
-        input.createdByOperatorId,
-        new Date(this.now()),
-      ],
-    );
-    return { invitationId, code, expiresAt: expiresAt.toISOString() };
-  }
-
-  /**
    * Registration admits an account on the invitation code alone (OQ-20, SEC-AUTH-18).
    *
    * The account is created usable — `status = 'active'` — while its email stays
@@ -386,9 +341,7 @@ export class PostgresAuthRepository {
 
       const invitation = await client.query<{ id: string; status: string; expires_at: Date; invited_email_normalized: string | null }>(
         `SELECT id, status, expires_at, invited_email_normalized
-           FROM beta_invitations
-          WHERE code_digest = $1
-          FOR UPDATE`,
+           FROM kfin_invitation_lookup($1)`,
         [this.digest('invitation-code', normalizeInvitationCode(input.invitationCode))],
       );
       const invitationRow = invitation.rows[0];
@@ -438,12 +391,13 @@ export class PostgresAuthRepository {
       }
 
       const consumedAt = new Date(now);
-      await client.query(
-        `UPDATE beta_invitations
-            SET status = 'consumed', consumed_at = $2, consumed_by_user_id = $3
-          WHERE id = $1`,
-        [invitationRow.id, consumedAt, userId],
+      const consumed = await client.query<{ consumed: boolean }>(
+        'SELECT kfin_consume_invitation($1, $2, $3, $4) AS consumed',
+        [invitationRow.id, userId, email.emailNormalized, consumedAt],
       );
+      // Concurrent or replayed use loses the conditional UPDATE; the whole
+      // registration (including the user row) then rolls back.
+      if (consumed.rows[0]?.consumed !== true) throw invalidInvitationError();
 
       await client.query(
         `INSERT INTO password_credentials (
@@ -495,16 +449,16 @@ export class PostgresAuthRepository {
     try {
       await client.query('BEGIN');
 
-      const userResult = await client.query<UserAuthRow>(
-        `SELECT u.id, u.status, u.email_verified_at, c.password_hash
-           FROM users u
-           LEFT JOIN password_credentials c ON c.user_id = u.id
-          WHERE u.email_normalized = $1`,
+      const accountResult = await client.query<{
+        user_id: string;
+        status: string;
+        email_verified_at: Date | null;
+      }>(
+        'SELECT user_id, status, email_verified_at FROM kfin_account_lookup($1)',
         [email.emailNormalized],
       );
-      const user = userResult.rows[0];
-      if (user) await applyUserContext(client, user.id);
-      if (!user || !user.password_hash) {
+      const account = accountResult.rows[0];
+      if (!account) {
         // Equalize work for unknown accounts without revealing existence.
         await decoyVerification(normalizePassword(input.password), this.hashPolicy);
         await this.recordFailureAndCommit(client, {
@@ -518,6 +472,33 @@ export class PostgresAuthRepository {
         });
         throw invalidCredentialsError();
       }
+      // The lookup returns no secret. Once the owner is known the credential is
+      // read under the `password_credentials` owner policy.
+      await applyUserContext(client, account.user_id);
+      const credentialResult = await client.query<{ password_hash: string }>(
+        'SELECT password_hash FROM password_credentials WHERE user_id = $1',
+        [account.user_id],
+      );
+      const passwordHash = credentialResult.rows[0]?.password_hash;
+      if (!passwordHash) {
+        await decoyVerification(normalizePassword(input.password), this.hashPolicy);
+        await this.recordFailureAndCommit(client, {
+          userId: account.user_id,
+          eventType: 'login_failed',
+          correlationId: input.correlationId,
+          context: input,
+          occurredAt: new Date(now),
+          target: email.emailNormalized,
+          metadata: { reason: 'invalid_credentials' },
+        });
+        throw invalidCredentialsError();
+      }
+      const user = {
+        id: account.user_id,
+        status: account.status,
+        email_verified_at: account.email_verified_at,
+        password_hash: passwordHash,
+      };
 
       const verification = await verifyPassword(
         user.password_hash,
@@ -604,15 +585,11 @@ export class PostgresAuthRepository {
       await client.query('BEGIN');
       began = true;
       const result = await client.query<SessionRow>(
-        `SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
-                s.absolute_expires_at, s.device_label, s.revoked_at, s.csrf_digest,
-                t.retired_at AS token_retired_at, t.grace_expires_at AS token_grace_expires_at,
-                t.generation, u.status AS user_status, u.email_verified_at
-           FROM session_tokens t
-           JOIN sessions s ON s.id = t.session_id
-           JOIN users u ON u.id = s.user_id
-          WHERE t.token_digest = $1
-          LIMIT 1`,
+        `SELECT id, user_id, client_type, created_at, last_seen_at, idle_expires_at,
+                absolute_expires_at, device_label, revoked_at, csrf_digest,
+                token_retired_at, token_grace_expires_at, generation,
+                user_status, email_verified_at
+           FROM kfin_token_lookup($1)`,
         [this.digest('session-token', token)],
       );
       const row = result.rows[0];
@@ -931,7 +908,7 @@ export class PostgresAuthRepository {
         return { accepted: true, issued: false, delivery: null };
       }
       const userResult = await client.query<{ id: string; status: string }>(
-        `SELECT id, status FROM users WHERE email_normalized = $1`,
+        `SELECT user_id AS id, status FROM kfin_account_lookup($1)`,
         [email.emailNormalized],
       );
       const user = userResult.rows[0];
@@ -1056,23 +1033,38 @@ export class PostgresAuthRepository {
       const challengeResult = await client.query<ChallengeRow>(
         `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
                 consumed_at, superseded_at, attempt_count, max_attempts
-           FROM auth_challenges
-          WHERE purpose = 'password_reset'
-            AND target_digest = $1
-            AND consumed_at IS NULL
-            AND superseded_at IS NULL
-          ORDER BY issued_at DESC
-          LIMIT 1
-          FOR UPDATE`,
+           FROM kfin_reset_challenge_lookup($1)`,
         [this.digest('challenge-target:password_reset', target)],
       );
-      const challenge = challengeResult.rows[0];
-      // The target-digest lookup is the only pre-identity read. Every update
-      // and challenge row after it runs under the account's context.
-      if (challenge?.user_id) await applyUserContext(client, challenge.user_id);
-      if (!challenge) {
+      const lookup = challengeResult.rows[0];
+      if (!lookup?.user_id) {
         await this.recordFailureAndCommit(client, {
           userId: null,
+          eventType: 'password_reset_failed',
+          correlationId: input.correlationId,
+          context: input,
+          occurredAt: new Date(now),
+          target,
+          metadata: { reason: 'no_active_challenge' },
+        });
+        throw invalidChallengeError();
+      }
+      // The digest lookup is the only pre-identity read. The real row is then
+      // locked under the account's context so attempt accounting stays
+      // serialized; a row consumed between the two reads is treated as absent.
+      await applyUserContext(client, lookup.user_id);
+      const lockedResult = await client.query<ChallengeRow>(
+        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
+                consumed_at, superseded_at, attempt_count, max_attempts
+           FROM auth_challenges
+          WHERE id = $1 AND user_id = $2
+          FOR UPDATE`,
+        [lookup.id, lookup.user_id],
+      );
+      const challenge = lockedResult.rows[0];
+      if (!challenge) {
+        await this.recordFailureAndCommit(client, {
+          userId: lookup.user_id,
           eventType: 'password_reset_failed',
           correlationId: input.correlationId,
           context: input,

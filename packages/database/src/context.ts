@@ -19,6 +19,8 @@ export const USER_CONTEXT_SETTING = 'kfin.user_id';
 
 /** The only role the API may run as. Provisioned by `db:provision-roles`. */
 export const APPLICATION_DATABASE_ROLE = 'kfin_app';
+/** The invitation CLI role: INSERT on beta_invitations only, never the API. */
+export const OPERATOR_DATABASE_ROLE = 'kfin_operator';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -102,7 +104,11 @@ interface RoleRow {
  * URL string: the role is whatever PostgreSQL reports for `current_user`, and
  * a pooled/via-proxy connection may rewrite the URL without changing the role.
  */
-export async function assertApplicationDatabaseRole(pool: Queryable): Promise<void> {
+async function assertDatabaseRole(
+  pool: Queryable,
+  expectedRole: string,
+  failurePrefix: string,
+): Promise<void> {
   const result = await pool.query<RoleRow>(`
     SELECT r.rolname AS role,
            r.rolsuper,
@@ -134,8 +140,8 @@ export async function assertApplicationDatabaseRole(pool: Queryable): Promise<vo
     throw new DatabaseRoleError('The application role could not be resolved.');
   }
   const problems: string[] = [];
-  if (row.role !== APPLICATION_DATABASE_ROLE) {
-    problems.push(`connected as ${row.role}, expected ${APPLICATION_DATABASE_ROLE}`);
+  if (row.role !== expectedRole) {
+    problems.push(`connected as ${row.role}, expected ${expectedRole}`);
   }
   if (row.rolsuper) problems.push('role is SUPERUSER');
   if (row.rolbypassrls) problems.push('role has BYPASSRLS');
@@ -144,6 +150,18 @@ export async function assertApplicationDatabaseRole(pool: Queryable): Promise<vo
   if (Number(row.owned_relations) > 0) problems.push(`role owns ${row.owned_relations} relation(s)`);
   if (Number(row.owned_schemas) > 0) problems.push(`role owns ${row.owned_schemas} schema(s)`);
   if (problems.length > 0) {
-    throw new DatabaseRoleError(`Refusing to start: ${problems.join('; ')}.`);
+    throw new DatabaseRoleError(`${failurePrefix}: ${problems.join('; ')}.`);
   }
+}
+
+export async function assertApplicationDatabaseRole(pool: Queryable): Promise<void> {
+  await assertDatabaseRole(pool, APPLICATION_DATABASE_ROLE, 'Refusing to start');
+}
+
+/**
+ * The operator CLI must never run as the API role or an owner. It may be
+ * `kfin_operator` only; the invitation INSERT is granted to that role alone.
+ */
+export async function assertOperatorDatabaseRole(pool: Queryable): Promise<void> {
+  await assertDatabaseRole(pool, OPERATOR_DATABASE_ROLE, 'Refusing to run');
 }

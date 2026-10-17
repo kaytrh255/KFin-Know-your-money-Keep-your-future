@@ -3,6 +3,7 @@ export * from './canonical.js';
 export * from './context.js';
 export * from './financial-repository.js';
 export * from './identity.js';
+export * from './invitation-repository.js';
 export * from './migrations.js';
 export * from './passwords.js';
 export * from './pool.js';

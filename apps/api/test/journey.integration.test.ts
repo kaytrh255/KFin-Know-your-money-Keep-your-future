@@ -6,6 +6,7 @@ import { authPolicy } from '@kfin/config';
 import {
   PostgresAuthRepository,
   PostgresFinancialRepository,
+  PostgresInvitationRepository,
   PostgresSavingsGoalRepository,
   PostgresScheduleRepository,
   migrateDatabase,
@@ -44,15 +45,19 @@ import {
  * Each step asserts the HTTP answer **and** the persisted row, so a passing test
  * means "the database really contains this", not "a fake agreed with the handler".
  *
- * Safety: it runs only when `TEST_DATABASE_URL` and
- * `KFIN_INTEGRATION_TARGET=non-production` are both set, exactly like the
+ * Safety: it runs only when the `TEST_*_DATABASE_URL` variables and
+ * `KFIN_INTEGRATION_TARGET=non-production` are set, exactly like the
  * `packages/database` suites, and it confines itself to a schema it creates and
- * drops. Nothing here is a mock, and nothing here is skipped silently in CI: the
+ * drops. Since SPEC-SEC-01 phase 2 the API side of the journey runs as
+ * `kfin_app` under RLS; only the fixture/assertion connection keeps owner
+ * rights. Nothing here is a mock, and nothing here is skipped silently in CI: the
  * `assert-integration-ran.mjs` guard fails the job if any case in this file skips.
  */
 
 const integrationEnabled = Boolean(
   process.env.TEST_DATABASE_URL
+  && process.env.TEST_APP_DATABASE_URL
+  && process.env.TEST_OPERATOR_DATABASE_URL
   && process.env.KFIN_INTEGRATION_TARGET === 'non-production',
 );
 
@@ -91,9 +96,12 @@ function cookieHeader(jar: CookieJar): string {
 journey('a complete user journey over HTTP and real PostgreSQL', () => {
   let administration: Pool;
   let pool: Pool;
+  let appPool: Pool;
+  let operatorPool: Pool;
   let schema: string;
   let app: FastifyInstance;
   let authService: PostgresAuthRepository;
+  let invitations: PostgresInvitationRepository;
   let email: RecordingEmailAdapter;
 
   const cookieName = sessionCookieName({ secure: false, prefixHost: authPolicy.session.cookiePrefixHost });
@@ -109,7 +117,7 @@ journey('a complete user journey over HTTP and real PostgreSQL', () => {
   }
 
   async function register(invitedEmail: string): Promise<{ userId: string; email: string; password: string }> {
-    const issued = await authService.issueInvitation({
+    const issued = await invitations.issueInvitation({
       invitedEmail,
       createdByOperatorId: '00000000-0000-4000-8000-0000000000aa',
       correlationId: randomUUID(),
@@ -170,6 +178,8 @@ journey('a complete user journey over HTTP and real PostgreSQL', () => {
 
   afterAll(async () => {
     await app?.close();
+    await appPool?.end();
+    await operatorPool?.end();
     await pool?.end();
     if (administration && schema) await administration.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
     await administration?.end();
@@ -185,18 +195,37 @@ journey('a complete user journey over HTTP and real PostgreSQL', () => {
       options: `-c search_path=${schema},public`,
     });
     await migrateDatabase(pool);
+    await administration.query(`GRANT USAGE ON SCHEMA ${schema} TO kfin_app, kfin_operator`);
 
     const transport = { secure: false, prefixHost: authPolicy.session.cookiePrefixHost };
-    authService = new PostgresAuthRepository(pool, { secret: AUTH_SECRET, policy: authPolicy });
+    appPool = new Pool({
+      connectionString: process.env.TEST_APP_DATABASE_URL,
+      max: 6,
+      options: `-c search_path=${schema},public`,
+    });
+    operatorPool = new Pool({
+      connectionString: process.env.TEST_OPERATOR_DATABASE_URL,
+      max: 2,
+      options: `-c search_path=${schema},public`,
+    });
+    authService = new PostgresAuthRepository(appPool, { secret: AUTH_SECRET, policy: authPolicy });
+    invitations = new PostgresInvitationRepository(operatorPool, {
+      secret: AUTH_SECRET,
+      policy: {
+        codeEntropyBytes: authPolicy.invitation.codeEntropyBytes,
+        codeGroupLength: authPolicy.invitation.codeGroupLength,
+        defaultLifetimeMs: authPolicy.invitation.defaultLifetimeMs,
+      },
+    });
     email = new RecordingEmailAdapter();
 
     // The wiring below mirrors `apps/api/src/server.ts` line for line, minus the
     // environment loading and the network listener. If production wiring drifts,
     // this suite stops being evidence, so it is deliberately explicit.
     app = await buildApp({
-      financialService: new PostgresFinancialRepository(pool, IDEMPOTENCY_RETENTION_MS, PREVIEW_SIGNING_KEY),
-      scheduleService: new PostgresScheduleRepository(pool, IDEMPOTENCY_RETENTION_MS),
-      savingsService: new PostgresSavingsGoalRepository(pool, { idempotencyRetentionMs: IDEMPOTENCY_RETENTION_MS }),
+      financialService: new PostgresFinancialRepository(appPool, IDEMPOTENCY_RETENTION_MS, PREVIEW_SIGNING_KEY),
+      scheduleService: new PostgresScheduleRepository(appPool, IDEMPOTENCY_RETENTION_MS),
+      savingsService: new PostgresSavingsGoalRepository(appPool, { idempotencyRetentionMs: IDEMPOTENCY_RETENTION_MS }),
       authService,
       emailDelivery: email,
       authTransport: transport,
@@ -206,7 +235,7 @@ journey('a complete user journey over HTTP and real PostgreSQL', () => {
         if (!token) return null;
         return authService.authenticate(token);
       },
-      readinessPool: pool,
+      readinessPool: appPool,
     });
     await app.ready();
   }, 60_000);

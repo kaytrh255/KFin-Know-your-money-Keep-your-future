@@ -262,12 +262,12 @@ export class PostgresTransactionCorrectionService {
       undefined,
       source.current_timezone,
     );
-    await assertCorrectionAggregateProjection(
-      this.pool,
+    await withUserContext(this.pool, ownerUserId, (client) => assertCorrectionAggregateProjection(
+      client,
       ownerUserId,
       source.account_id,
       aggregateProjection(source, source.latest_snapshot_id, replacement),
-    );
+    ));
     return buildPreview('correction', source, replacement, reason, this.previewSigningKey);
   }
 
@@ -278,12 +278,12 @@ export class PostgresTransactionCorrectionService {
   ): Promise<CorrectionPreviewView> {
     const reason = assertReason(input.reason);
     const source = await this.loadPreviewSource(ownerUserId, sourceTransactionId);
-    await assertCorrectionAggregateProjection(
-      this.pool,
+    await withUserContext(this.pool, ownerUserId, (client) => assertCorrectionAggregateProjection(
+      client,
       ownerUserId,
       source.account_id,
       aggregateProjection(source, source.latest_snapshot_id, null),
-    );
+    ));
     return buildPreview('void', source, null, reason, this.previewSigningKey);
   }
 
