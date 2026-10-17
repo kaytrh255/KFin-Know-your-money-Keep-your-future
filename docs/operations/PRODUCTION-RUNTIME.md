@@ -185,7 +185,10 @@ Cookie values are never printed; only names and attributes are.
 - 2026-10-17, local PostgreSQL 18.6, artifact `df1f03f`: production smoke
   **18/18** (headers added), HTTPS proxy smoke **16/16** including the
   `__Host-` cookie and an authenticated read through the TLS proxy.
-- CI run `39024067940` (commit `ac2c2a0`): both jobs green. `verify` ran the
+- CI run `39025829097` (commit `cbc6a8f`): `verify` green including *Smoke test the
+  production artifact*, *Run the artifact behind a TLS-terminating proxy* and
+  *Verify a production-only install*; `image` green including the container
+  header assertions. `verify` ran the
   production-only install; `image` built the image, applied the 11 migrations
   with `migrate.bundle.mjs` from the image, then started the container and
   confirmed `/health/ready`, the HTML entry point, `src/main.js` as

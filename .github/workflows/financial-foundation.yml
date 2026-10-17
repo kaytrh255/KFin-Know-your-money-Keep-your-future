@@ -194,6 +194,9 @@ jobs:
           curl -fsS http://127.0.0.1:3000/health/ready
           curl -fsS http://127.0.0.1:3000/ | grep -q 'id="app"'
           curl -fsSI http://127.0.0.1:3000/src/main.js | grep -qi 'content-type: text/javascript'
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi 'strict-transport-security: max-age='
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi "content-security-policy: .*frame-ancestors 'none'"
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi 'x-content-type-options: nosniff'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/v1/auth/me)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/v1/does-not-exist)" = 404
           docker run --rm --entrypoint sh kfin-runtime:ci -c 'test ! -e node_modules/tsx && test ! -e node_modules/.bin/tsx'
