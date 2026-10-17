@@ -120,8 +120,11 @@ corepack pnpm run image:build            # docker build -t kfin-runtime:local .
 docker run --env-file /run/kfin.env -p 3000:3000 kfin-runtime:local
 ```
 
-TLS, the public hostname, the secret store and log shipping belong to the host in front of the
-container. See [`docs/operations/PRODUCTION-RUNTIME.md`](docs/operations/PRODUCTION-RUNTIME.md).
+TLS terminates at the proxy in front of the container; the app emits HSTS, a strict CSP,
+`nosniff`, `Referrer-Policy: no-referrer` and framing denial on every response, and `TRUST_PROXY`
+names the only peers whose `X-Forwarded-For` is believed. `pnpm run smoke:https` runs the artifact
+behind a real TLS proxy and checks those headers, the same-origin write path and the `__Host-`
+session cookie. The public hostname, the secret store and log shipping belong to the host. See [`docs/operations/PRODUCTION-RUNTIME.md`](docs/operations/PRODUCTION-RUNTIME.md).
 There is still no staging environment, and none of this has been deployed.
 
 ## Specification areas

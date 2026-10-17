@@ -78,6 +78,15 @@ jobs:
           FINANCIAL_PREVIEW_SIGNING_KEY="$(openssl rand -hex 32)" \
           IDEMPOTENCY_RETENTION_HOURS=24 \
             corepack pnpm run smoke:production
+      - name: Run the artifact behind a TLS-terminating proxy
+        run: |
+          DATABASE_URL="$TEST_APP_DATABASE_URL" \
+          DATABASE_SSL_MODE=disable \
+          AUTH_SECRET="$(openssl rand -hex 32)" \
+          FINANCIAL_PREVIEW_SIGNING_KEY="$(openssl rand -hex 32)" \
+          IDEMPOTENCY_RETENTION_HOURS=24 \
+          OPERATOR_DATABASE_URL="$TEST_OPERATOR_DATABASE_URL" \
+            corepack pnpm run smoke:https
       - name: Verify a production-only install of the artifact
         run: |
           DATABASE_URL="$TEST_APP_DATABASE_URL" \
