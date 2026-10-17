@@ -37,8 +37,10 @@ browser ──HTTPS──> Caddy :80/:443 ──HTTP──> kfin-runtime :3000 �
 
 1. **Rehearsal (every pull request).** Build the image from the commit, start
    the stack with `docker-compose.rehearsal.yml` (internal CA, ephemeral
-   secrets), provision roles, migrate as `kfin_migrator`, wait for HTTPS, run
-   `scripts/smoke/staging-smoke.mjs` with `STAGING_CA_FILE`, then tear down.
+   secrets), provision roles, migrate as `kfin_migrator`, wait for HTTPS, mint
+   an invitation as `kfin_operator`, then run `scripts/smoke/staging-smoke.mjs`
+   with `STAGING_CA_FILE` and the invitation code — so the rehearsal registers a
+   user and signs it in over real TLS — and tear down.
 2. **Publish (`workflow_dispatch`).** Build and push the image for the
    dispatched commit.
 3. **Deploy.**
@@ -71,9 +73,11 @@ proxy trust and the app together:
 - an unauthenticated protected route (401) and an unknown API route (JSON 404);
 - a same-origin login attempt that is processed (not 403) and a cross-origin
   attempt that is refused;
-- optionally, a real login with `STAGING_SMOKE_EMAIL/PASSWORD`, asserting the
-  `__Host-` session cookie flags and an authenticated read (cookie values are
-  never printed);
+- with an invitation (`STAGING_INVITATION_CODE`): registration with a fresh
+  address, sign-in, the `__Host-` session cookie flags and an authenticated read
+  — the invite-only journey end to end;
+- optionally, a real login with `STAGING_SMOKE_EMAIL/PASSWORD` for an existing
+  account (cookie values are never printed);
 - an HTTP→HTTPS redirect when `STAGING_HTTP_URL` is set.
 
 ## Staging-specific configuration
@@ -93,7 +97,7 @@ provider is configured and no backup is part of this environment.
 | `bash -n` on the deploy script | A real image pull from GHCR |
 | YAML parse of the workflow | GitHub Environment secrets |
 | CI rehearsal of the Compose stack (runs on GitHub's Docker) | Reaching a public HTTPS URL |
-| Staging smoke test against a real TLS proxy | Let's Encrypt issuance |
+| Staging smoke test against a real TLS proxy, including registration + sign-in | Let's Encrypt issuance |
 | `pnpm run check` | Rollback against a real host |
 
 The CI rehearsal is the strongest evidence available without a host: it starts

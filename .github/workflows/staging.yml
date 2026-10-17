@@ -28,6 +28,10 @@ on:
         description: Deploy after publishing the image
         type: boolean
         default: true
+      verify_register_login:
+        description: Mint an invitation on the host and verify registration + sign-in
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -134,10 +138,29 @@ jobs:
             -f deploy/staging/docker-compose.rehearsal.yml \
             logs --tail=120
           exit 1
+      - name: Mint a rehearsal invitation
+        run: |
+          umask 077
+          {
+            echo "AUTH_SECRET=${REHEARSAL_AUTH_SECRET}"
+            echo "DATABASE_SSL_MODE=disable"
+            echo "OPERATOR_DATABASE_URL=postgresql://kfin_operator:${KFIN_OPERATOR_PASSWORD}@db:5432/kfin_staging"
+          } > deploy/staging/operator.env
+          code="$(docker run --rm --env-file deploy/staging/operator.env \
+            --network kfin-staging-edge "$KFIN_IMAGE" node provision-invitation.bundle.mjs \
+            | sed -n 's/^ *code *: *//p' | tail -1)"
+          if [ -z "$code" ]; then
+            echo "::error::the operator CLI did not print an invitation code"
+            exit 1
+          fi
+          echo "::add-mask::$code"
+          echo "REHEARSAL_INVITATION_CODE=$code" >> "$GITHUB_ENV"
+          echo "invitation minted; the code is masked"
       - name: Run the staging smoke test over HTTPS
         env:
           STAGING_URL: https://localhost
           STAGING_CA_FILE: ./caddy-root.crt
+          STAGING_INVITATION_CODE: ${{ env.REHEARSAL_INVITATION_CODE }}
         run: node scripts/smoke/staging-smoke.mjs
       - name: Publish stack logs on failure
         if: failure()
@@ -222,6 +245,8 @@ jobs:
           STAGING_DB_ADMIN_PASSWORD: ${{ secrets.STAGING_DB_ADMIN_PASSWORD }}
           KFIN_APP_PASSWORD: ${{ secrets.KFIN_APP_PASSWORD }}
           KFIN_MIGRATOR_PASSWORD: ${{ secrets.KFIN_MIGRATOR_PASSWORD }}
+          KFIN_OPERATOR_PASSWORD: ${{ secrets.KFIN_OPERATOR_PASSWORD }}
+          STAGING_OPERATOR_DATABASE_URL: ${{ secrets.STAGING_OPERATOR_DATABASE_URL }}
         run: |
           missing=()
           for name in STAGING_HOST STAGING_USER STAGING_SSH_KEY STAGING_KNOWN_HOSTS \
@@ -237,6 +262,13 @@ jobs:
             for name in STAGING_DATABASE_URL STAGING_MIGRATION_DATABASE_URL; do
               [ -n "${!name}" ] || missing+=("$name")
             done
+          fi
+          if [ "${{ inputs.verify_register_login }}" = "true" ]; then
+            if [ "$STAGING_DB_MODE" = "container" ]; then
+              [ -n "${KFIN_OPERATOR_PASSWORD}" ] || missing+=("KFIN_OPERATOR_PASSWORD")
+            else
+              [ -n "${STAGING_OPERATOR_DATABASE_URL}" ] || missing+=("STAGING_OPERATOR_DATABASE_URL")
+            fi
           fi
           if [ "${#missing[@]}" -gt 0 ]; then
             echo "::error::Missing GitHub Environment 'staging' secret(s): ${missing[*]}"
@@ -284,6 +316,7 @@ jobs:
           STAGING_EMAIL_FROM_ADDRESS: ${{ secrets.STAGING_EMAIL_FROM_ADDRESS }}
           STAGING_IDEMPOTENCY_RETENTION_HOURS: ${{ secrets.STAGING_IDEMPOTENCY_RETENTION_HOURS }}
           STAGING_HSTS_MAX_AGE_SECONDS: ${{ secrets.STAGING_HSTS_MAX_AGE_SECONDS }}
+          STAGING_OPERATOR_DATABASE_URL: ${{ secrets.STAGING_OPERATOR_DATABASE_URL }}
         run: |
           target="$STAGING_USER@$STAGING_HOST"
           work="$(mktemp -d)"
@@ -327,17 +360,23 @@ jobs:
           if [ "$STAGING_DB_MODE" = "managed" ]; then
             printf 'MIGRATION_DATABASE_URL=%s\nDATABASE_SSL_MODE=%s\n' \
               "$STAGING_MIGRATION_DATABASE_URL" "${STAGING_DATABASE_SSL_MODE:-verify-full}" > "$work/migration.env"
+            printf 'OPERATOR_DATABASE_URL=%s\nDATABASE_SSL_MODE=%s\nAUTH_SECRET=%s\n' \
+              "$STAGING_OPERATOR_DATABASE_URL" "${STAGING_DATABASE_SSL_MODE:-verify-full}" \
+              "$STAGING_AUTH_SECRET" > "$work/operator.env"
           else
             printf 'MIGRATION_DATABASE_URL=postgresql://kfin_migrator:%s@db:5432/kfin_staging\nDATABASE_SSL_MODE=disable\n' \
               "$KFIN_MIGRATOR_PASSWORD" > "$work/migration.env"
+            printf 'OPERATOR_DATABASE_URL=postgresql://kfin_operator:%s@db:5432/kfin_staging\nDATABASE_SSL_MODE=disable\nAUTH_SECRET=%s\n' \
+              "$KFIN_OPERATOR_PASSWORD" "$STAGING_AUTH_SECRET" > "$work/operator.env"
           fi
 
           # Streamed over stdin: values never appear in a process argument list.
           ssh "$target" 'umask 077; cat > /opt/kfin-staging/staging.env' < "$work/staging.env"
           ssh "$target" 'umask 077; cat > /opt/kfin-staging/db.env' < "$work/db.env"
           ssh "$target" 'umask 077; cat > /opt/kfin-staging/migration.env' < "$work/migration.env"
+          ssh "$target" 'umask 077; cat > /opt/kfin-staging/operator.env' < "$work/operator.env"
           rm -rf "$work"
-          echo "wrote staging.env, db.env and migration.env on the host (0600, contents not printed)"
+          echo "wrote staging.env, db.env, migration.env and operator.env on the host (0600, contents not printed)"
       - name: Provision database roles (one-time)
         if: inputs.provision_roles
         env:
@@ -394,11 +433,32 @@ jobs:
             rm -f caddy-root.crt
             echo "no internal CA on the host; the public CA chain is used"
           fi
+      - name: Mint a staging invitation
+        if: inputs.verify_register_login
+        env:
+          STAGING_HOST: ${{ secrets.STAGING_HOST }}
+          STAGING_USER: ${{ secrets.STAGING_USER }}
+        run: |
+          # The API has no route that mints invitations (SEC-AUTH-14): the
+          # operator role is the only channel, and this is it.
+          ssh "$STAGING_USER@$STAGING_HOST" \
+            "docker run --rm --env-file /opt/kfin-staging/operator.env --network kfin-staging-edge '$KFIN_IMAGE' node provision-invitation.bundle.mjs" \
+            > invitation.txt
+          code="$(sed -n 's/^ *code *: *//p' invitation.txt | tail -1)"
+          rm -f invitation.txt
+          if [ -z "$code" ]; then
+            echo "::error::the operator CLI did not print an invitation code"
+            exit 1
+          fi
+          echo "::add-mask::$code"
+          echo "STAGING_INVITATION_CODE=$code" >> "$GITHUB_ENV"
+          echo "invitation minted on the host; the code is masked"
       - name: Post-deploy smoke test over HTTPS
         env:
           STAGING_SITE_ADDRESS: ${{ secrets.STAGING_SITE_ADDRESS }}
           STAGING_SMOKE_EMAIL: ${{ secrets.STAGING_SMOKE_EMAIL }}
           STAGING_SMOKE_PASSWORD: ${{ secrets.STAGING_SMOKE_PASSWORD }}
+          STAGING_INVITATION_CODE: ${{ env.STAGING_INVITATION_CODE }}
         run: |
           if [ -s caddy-root.crt ]; then export STAGING_CA_FILE=./caddy-root.crt; fi
           STAGING_URL="https://${STAGING_SITE_ADDRESS}" \

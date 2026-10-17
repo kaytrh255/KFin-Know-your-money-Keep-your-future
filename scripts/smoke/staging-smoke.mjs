@@ -14,7 +14,13 @@
  *   STAGING_CA_FILE                optional PEM to trust (Caddy internal CA)
  *   STAGING_ALLOW_INSECURE_TLS=1   optional, disable verification (local only)
  *   STAGING_EXPECT_HSTS=false      optional, skip the HSTS assertion (HTTP-only host)
- *   STAGING_SMOKE_EMAIL/PASSWORD   optional, adds an authenticated read
+ *   STAGING_INVITATION_CODE        optional, registers a new user and signs it in
+ *   STAGING_SMOKE_EMAIL/PASSWORD   optional, signs in an existing account
+ *
+ * STAGING_INVITATION_CODE is how a staging deployment proves the full journey:
+ * the operator mints one invitation on the host (the only channel that can),
+ * and this script redeems it with a fresh address, then logs in and reads the
+ * session. The generated address is printed; the invitation code never is.
  *
  * Prints one JSON report and exits non-zero on the first failure. Cookie values
  * are never printed, only names and attributes.
@@ -159,6 +165,54 @@ async function main() {
     sameOrigin.status !== 403,
     `status=${sameOrigin.status} (403 = the origin check refused a same-origin write)`,
   );
+
+  const invitationCode = process.env.STAGING_INVITATION_CODE;
+  if (!invitationCode) {
+    record('auth.registration', true, 'skipped: STAGING_INVITATION_CODE not set');
+  } else {
+    const email = process.env.STAGING_REGISTER_EMAIL
+      ?? `staging.smoke.${Date.now()}@example.invalid`;
+    const password = `staging smoke passphrase ${Math.random().toString(36).slice(2)}`;
+    const registration = await call(url, '/api/v1/auth/register', {
+      method: 'POST',
+      body: {
+        email,
+        password,
+        invitationCode,
+        locale: 'vi',
+        timezone: 'Asia/Ho_Chi_Minh',
+        baseCurrency: 'VND',
+      },
+      headers: { origin, 'sec-fetch-site': 'same-origin' },
+    });
+    record('auth.registration', registration.status === 202, `status=${registration.status} email=${email}`);
+
+    const signIn = await call(url, '/api/v1/auth/login', {
+      method: 'POST',
+      body: { email, password },
+      headers: { origin, 'sec-fetch-site': 'same-origin' },
+    });
+    record('auth.registration-login', signIn.status === 200, `status=${signIn.status}`);
+
+    const cookies = Array.isArray(signIn.headers['set-cookie']) ? signIn.headers['set-cookie'] : [];
+    const sessionLine = cookies.find((line) => line.startsWith('__Host-kfin_session=')) ?? '';
+    const session = sessionLine.split(';')[0];
+    record(
+      'auth.registration-session-cookie',
+      sessionLine !== ''
+        && /;\s*HttpOnly/.test(sessionLine)
+        && /;\s*Secure/.test(sessionLine)
+        && /;\s*Path=\/(?:;|$)/.test(sessionLine)
+        && !/;\s*Domain=/i.test(sessionLine),
+      `cookies=${cookies.map((line) => line.split('=')[0]).join(', ')}`,
+    );
+    const me = await call(url, '/api/v1/auth/me', { headers: { cookie: session } });
+    record(
+      'auth.registration-read',
+      me.status === 200 && me.body.includes(email),
+      `status=${me.status} email=${email}`,
+    );
+  }
 
   const email = process.env.STAGING_SMOKE_EMAIL;
   const password = process.env.STAGING_SMOKE_PASSWORD;

@@ -75,18 +75,22 @@ optionally with required reviewers) and add these **secrets**:
 | `STAGING_DB_ADMIN_PASSWORD` | `openssl rand -hex 24` (container database, superuser) |
 | `KFIN_APP_PASSWORD` | `openssl rand -hex 24` |
 | `KFIN_MIGRATOR_PASSWORD` | `openssl rand -hex 24` |
-| `KFIN_OPERATOR_PASSWORD` | `openssl rand -hex 24` (optional; invitation CLI) |
+| `KFIN_OPERATOR_PASSWORD` | `openssl rand -hex 24` (required for the register/sign-in check) |
 
 Optional secrets: `STAGING_EMAIL_ADAPTER` (`none` by default), `RESEND_API_KEY`,
 `STAGING_EMAIL_FROM_ADDRESS` (only when a provider exists), and
-`STAGING_SMOKE_EMAIL`/`STAGING_SMOKE_PASSWORD` to add an authenticated read to
-the post-deploy smoke test.
+`STAGING_SMOKE_EMAIL`/`STAGING_SMOKE_PASSWORD` to additionally sign in an
+existing account.
+
+With `managed` mode add `STAGING_OPERATOR_DATABASE_URL` (the `kfin_operator`
+connection) instead of `KFIN_OPERATOR_PASSWORD`; the workflow then uses it for
+the invitation step.
 
 Optional repository **variable** `STAGING_DB_MODE` — `container` (default) or
 `managed`. For `managed`, instead of the three database passwords provide
 `STAGING_DATABASE_URL`, `STAGING_MIGRATION_DATABASE_URL`,
-`STAGING_DATABASE_SSL_MODE` (default `verify-full`) and, for the one-time
-provisioning run, `STAGING_DATABASE_ADMIN_URL`.
+`STAGING_DATABASE_SSL_MODE` (default `verify-full`), `STAGING_OPERATOR_DATABASE_URL`,
+and for the one-time provisioning run, `STAGING_DATABASE_ADMIN_URL`.
 
 Notes:
 
@@ -112,7 +116,12 @@ Notes:
 3. The workflow publishes `ghcr.io/<owner>/<repo>/kfin-runtime:sha-<commit>` and
    the moving `:staging` tag, logs the host into GHCR, applies migrations as
    `kfin_migrator` from the same image, restarts the stack, waits for the
-   health check, and runs the staging smoke test over the public HTTPS URL.
+   health check, mints one invitation as `kfin_operator`, and runs the staging
+   smoke test over the public HTTPS URL. That smoke test redeems the invitation
+   with a fresh address, signs the new user in and reads the session, so a
+   successful run is a real registration and sign-in on staging. Set
+   `verify_register_login = false` only to skip it (the operator credential is
+   then not required).
 
 Dispatch requires the workflow on the default branch. Until this change is
 merged, merge it (or cherry-pick only the workflow) before the first dispatch;
@@ -133,6 +142,17 @@ STAGING_TLS_ARGS=ops@example.com \
 Migrations are forward-only: rolling back the image does not undo a migration.
 Check `packages/database/migrations` for a reversible change before rolling
 back across one.
+
+## What a successful run proves
+
+`scripts/smoke/staging-smoke.mjs` with an invitation prints
+`auth.registration`, `auth.registration-login`, `auth.registration-session-cookie`
+and `auth.registration-read` as passing checks. Together they mean: the public
+HTTPS URL served the invite-only registration form, the invitation was accepted,
+the new account signed in, the `__Host-` session cookie carries
+`HttpOnly; Secure; Path=/`, and an authenticated read returned that account.
+The code is minted on the host and masked in the log; the generated address is
+`staging.smoke.<timestamp>@example.invalid` and is safe to delete.
 
 ## What is deliberately not here
 
