@@ -45,6 +45,10 @@ jobs:
         run: |
           corepack pnpm run evidence:check
           corepack pnpm run evidence:test
+      - name: Enforce the static SQL guard
+        run: |
+          corepack pnpm run sqlguard
+          corepack pnpm run sqlguard:test
       - name: Typecheck application and tests
         run: corepack pnpm run typecheck
       - name: Run credential-free unit and API tests
