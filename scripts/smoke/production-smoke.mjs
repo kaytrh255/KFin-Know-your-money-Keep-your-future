@@ -13,6 +13,8 @@
  *   - an unknown client route falls back to the entry point;
  *   - an unknown API route stays a JSON 404;
  *   - a protected API route answers 401 with `Cache-Control: no-store`;
+ *   - the deployed-path security headers are present (HSTS, CSP, nosniff,
+ *     referrer policy, framing denial) on HTML, assets and JSON alike;
  *   - the production guards still refuse insecure cookies and a mail-less boot.
  *
  * Required environment (the same values a deploy supplies):
@@ -193,6 +195,36 @@ async function main() {
       protectedRoute.status === 401 && protectedRoute.headers.get('cache-control') === 'no-store',
       `status=${protectedRoute.status} cache-control=${protectedRoute.headers.get('cache-control')}`,
     );
+
+    const hsts = index.headers.get('strict-transport-security') ?? '';
+    record('headers.hsts', hsts.startsWith('max-age=') && hsts.includes('includeSubDomains'), hsts);
+
+    const htmlCsp = index.headers.get('content-security-policy') ?? '';
+    record(
+      'headers.document-csp',
+      htmlCsp.includes("default-src 'self'")
+        && htmlCsp.includes("frame-ancestors 'none'")
+        && htmlCsp.includes("object-src 'none'")
+        && !htmlCsp.includes('unsafe-inline'),
+      htmlCsp,
+    );
+
+    const apiCsp = protectedRoute.headers.get('content-security-policy') ?? '';
+    record('headers.api-csp', apiCsp.includes("default-src 'none'") && apiCsp.includes("frame-ancestors 'none'"), apiCsp);
+
+    for (const [name, headers] of [['html', index.headers], ['module', module.headers], ['api', protectedRoute.headers]]) {
+      record(`headers.hardening.${name}`,
+        headers.get('x-content-type-options') === 'nosniff'
+          && headers.get('referrer-policy') === 'no-referrer'
+          && headers.get('x-frame-options') === 'DENY'
+          && headers.get('cross-origin-opener-policy') === 'same-origin',
+        JSON.stringify({
+          nosniff: headers.get('x-content-type-options'),
+          referrer: headers.get('referrer-policy'),
+          frame: headers.get('x-frame-options'),
+          coop: headers.get('cross-origin-opener-policy'),
+        }));
+    }
 
     await expectBootRefused(
       'guard.insecure-cookie-refused',

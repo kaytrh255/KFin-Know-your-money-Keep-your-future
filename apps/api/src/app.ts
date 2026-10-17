@@ -79,6 +79,7 @@ import { registerSavingsRoutes, type SavingsApiService } from './savings-routes.
 import { UnavailableEmailAdapter, type EmailDeliveryAdapter } from './email-delivery.js';
 import { describeRejectedContractRules, type RejectedContractField } from './validation-detail.js';
 import { registerStaticSite, type StaticSiteOptions } from './static-site.js';
+import { registerSecurityHeaders, type SecurityHeaderOptions } from './security-headers.js';
 import {
   isBrowserSafeRequest,
   readCsrfHeader,
@@ -196,6 +197,10 @@ export interface ScheduleApiService {
 export type { SavingsApiService } from './savings-routes.js';
 
 export interface BuildAppOptions {
+  /** Peers trusted to set `X-Forwarded-For`; empty trusts nobody. */
+  readonly trustProxy?: readonly string[];
+  /** Response headers for the deployed path. Absent leaves the API header-free. */
+  readonly securityHeaders?: SecurityHeaderOptions;
   readonly financialService: FinancialApiService;
   readonly scheduleService?: ScheduleApiService;
   /** Milestone 06 savings goals. Absent means the savings routes stay unregistered. */
@@ -224,7 +229,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         : randomUUID();
     },
     logController: new LogController({ disableRequestLogging: true }),
+    ...(options.trustProxy && options.trustProxy.length > 0 ? { trustProxy: [...options.trustProxy] } : {}),
   }).withTypeProvider<ZodTypeProvider>();
+
+  if (options.securityHeaders) registerSecurityHeaders(app, options.securityHeaders);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);

@@ -162,6 +162,52 @@ describe('configuration', () => {
     })).toThrow(/EMAIL_DELIVERY_ADAPTER/);
   });
 
+  it('trusts no proxy unless one is named explicitly', () => {
+    const config = loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+    });
+    expect(config.trustedProxies).toEqual([]);
+    expect(config.hstsMaxAgeSeconds).toBe(31_536_000);
+  });
+
+  it('accepts explicit proxy addresses and CIDR blocks', () => {
+    const config = loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      TRUST_PROXY: ' 127.0.0.1 , 10.0.0.0/8 ,::1',
+    });
+    expect(config.trustedProxies).toEqual(['127.0.0.1', '10.0.0.0/8', '::1']);
+  });
+
+  it.each(['*', 'true', 'proxy.internal', '10.0.0.300', '127.0.0.1; DROP TABLE users'])(
+    'refuses an untrusted proxy value %s instead of trusting every peer',
+    (value) => {
+      expect(() => loadApiConfig({
+        DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+        IDEMPOTENCY_RETENTION_HOURS: '24',
+        FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+        AUTH_SECRET,
+        TRUST_PROXY: value,
+      })).toThrow(/TRUST_PROXY/);
+    },
+  );
+
+  it('accepts disabling HSTS on a host that is not yet behind TLS', () => {
+    const config = loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      HSTS_MAX_AGE_SECONDS: '0',
+    });
+    expect(config.hstsMaxAgeSeconds).toBe(0);
+  });
+
   it('leaves the outbox unset for the provider-less default', () => {
     const config = loadApiConfig({
       DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',

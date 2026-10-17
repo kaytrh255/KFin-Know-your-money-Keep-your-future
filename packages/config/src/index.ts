@@ -143,6 +143,18 @@ const environmentSchema = z.object({
   // Production serving topology: the compiled client directory. Defaults to
   // `apps/api/dist/web` next to the running bundle.
   WEB_CLIENT_ROOT: z.string().trim().min(1).max(4_096).optional(),
+  // Which peers may set `X-Forwarded-For` for `request.ip`. Empty (default)
+  // trusts nobody, which is correct when the API is reachable directly. Set it
+  // to the reverse proxy address(es)/CIDR(s) only, never to `*` or `true`: an
+  // untrusted client could otherwise forge the address written to the security
+  // audit trail.
+  TRUST_PROXY: z.string().trim().max(1_024).default('').refine(
+    (value) => value.split(',').every((entry) => entry.trim() === '' || isProxyAddress(entry.trim())),
+    { message: 'must be a comma-separated list of IP addresses or CIDR blocks' },
+  ),
+  // HSTS is only emitted in production, after TLS termination. `0` disables it
+  // (for example while a staging hostname is still plain HTTP behind a tunnel).
+  HSTS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).max(630_720_000).default(31_536_000),
 }).superRefine((value, ctx) => {
   if (value.EMAIL_DELIVERY_ADAPTER === 'file') {
     if (value.NODE_ENV === 'production') {
@@ -221,6 +233,10 @@ export interface ApiConfig {
   readonly emailProviderTimeoutMs: number;
   /** Static client directory for the single-origin production topology. */
   readonly webClientRoot: string | null;
+  /** Proxy addresses trusted to set `X-Forwarded-For`; empty trusts nobody. */
+  readonly trustedProxies: readonly string[];
+  /** HSTS lifetime sent in production; `0` disables the header. */
+  readonly hstsMaxAgeSeconds: number;
 }
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -253,7 +269,21 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): Api
     emailProviderBaseUrl: parsed.data.EMAIL_PROVIDER_BASE_URL,
     emailProviderTimeoutMs: parsed.data.EMAIL_PROVIDER_TIMEOUT_MS,
     webClientRoot: parsed.data.WEB_CLIENT_ROOT ?? null,
+    trustedProxies: Object.freeze(
+      parsed.data.TRUST_PROXY.split(',').map((entry) => entry.trim()).filter((entry) => entry !== ''),
+    ),
+    hstsMaxAgeSeconds: parsed.data.HSTS_MAX_AGE_SECONDS,
   });
+}
+
+/** Accepts an IPv4/IPv6 address or a CIDR block; nothing else. */
+function isProxyAddress(value: string): boolean {
+  if (/^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}(?:\/(?:3[0-2]|[12]?\d))?$/.test(value)) {
+    return true;
+  }
+  // IPv6, optionally with a prefix length. Deliberately strict: hex groups,
+  // `::` compression, and no zone or hostname.
+  return /^[0-9a-fA-F:]+(?:\/(?:12[0-8]|1[01]\d|[1-9]?\d))?$/.test(value) && value.includes(':');
 }
 
 function isPostgresUrl(value: string): boolean {

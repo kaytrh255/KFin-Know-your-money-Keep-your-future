@@ -86,8 +86,22 @@ const app = await buildApp({
   },
   readinessPool: runtime.pool,
   logger: true,
+  trustProxy: config.trustedProxies,
+  securityHeaders: {
+    // HSTS only in production, and only after TLS termination.
+    hstsMaxAgeSeconds: config.environment === 'production' ? config.hstsMaxAgeSeconds : 0,
+  },
   ...(staticSite ? { staticSite } : {}),
 });
+
+if (config.environment === 'production' && config.trustedProxies.length === 0) {
+  // Not fatal: a directly reachable API is a valid (if unusual) deployment.
+  // But behind a proxy the audit trail would record the proxy address.
+  app.log.warn(
+    'TRUST_PROXY is empty: request.ip records the direct peer, not the browser. '
+    + 'Set it to the reverse proxy address when a proxy terminates TLS.',
+  );
+}
 
 runtime.pool.on('error', (error) => {
   app.log.error({ errorName: error.name, code: (error as { code?: unknown }).code }, 'Idle database connection error');
