@@ -11,6 +11,12 @@ const runtime = createDatabaseRuntime({
 });
 
 try {
+  // The application role must never hold DDL privileges. This is a cheap
+  // early guard; migration 0008 repeats the assertion at the schema level.
+  const identity = await runtime.pool.query<{ current_user: string }>('SELECT current_user');
+  if (identity.rows[0]?.current_user === 'kfin_app') {
+    throw new Error('Refusing to run migrations as the application role kfin_app.');
+  }
   const applied = await migrateDatabase(runtime.pool);
   console.log(`Applied ${applied.length} KFin migration(s).`);
 } finally {

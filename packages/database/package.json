@@ -7,7 +7,9 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "migrate": "tsx src/migrate-cli.ts"
+    "migrate": "tsx src/migrate-cli.ts",
+    "provision-roles": "node scripts/provision-roles.mjs",
+    "verify-app-role": "node scripts/verify-app-role.mjs"
   },
   "dependencies": {
     "@kfin/domain": "workspace:*",

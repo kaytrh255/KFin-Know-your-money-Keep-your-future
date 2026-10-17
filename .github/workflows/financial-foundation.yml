@@ -27,6 +27,11 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_test
+      TEST_APP_DATABASE_URL: postgresql://kfin_app:kfin_synthetic_app_only@127.0.0.1:5432/kfin_test
+      TEST_MIGRATION_DATABASE_URL: postgresql://kfin_migrator:kfin_synthetic_migrator_only@127.0.0.1:5432/kfin_test
+      ROLE_ADMIN_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_test
+      KFIN_APP_PASSWORD: kfin_synthetic_app_only
+      KFIN_MIGRATOR_PASSWORD: kfin_synthetic_migrator_only
       KFIN_INTEGRATION_TARGET: non-production
     steps:
       - name: Check out source
@@ -41,6 +46,13 @@ jobs:
         run: corepack enable
       - name: Install locked dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Provision least-privilege database roles
+        run: corepack pnpm run db:provision-roles
+      - name: Apply migrations as the migration role
+        run: |
+          MIGRATION_DATABASE_URL="$TEST_MIGRATION_DATABASE_URL" DATABASE_SSL_MODE=disable corepack pnpm run db:migrate
+      - name: Verify the application role cannot administer the database
+        run: DATABASE_URL="$TEST_APP_DATABASE_URL" corepack pnpm run db:verify-app-role
       - name: Validate evidence harness
         run: |
           corepack pnpm run evidence:check

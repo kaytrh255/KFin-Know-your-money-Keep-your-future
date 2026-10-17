@@ -1,0 +1,154 @@
+#!/usr/bin/env node
+/**
+ * Provision the two least-privilege database roles used by SPEC-SEC-01 phase 1.
+ *
+ *   kfin_migrator  owns the schema objects and runs `db:migrate`
+ *   kfin_app       the application: LOGIN, no ownership, no DDL, DML only
+ *
+ * This is an operator-only step. It needs an owner/admin connection that can
+ * create roles and manage the schema; that credential must never be given to
+ * the API or to the migration job after this one-time setup.
+ *
+ * Passwords are optional here and are read from the environment. They are never
+ * written to the repository, printed, or included in an error message:
+ *
+ *   ROLE_ADMIN_DATABASE_URL   required, admin/owner connection
+ *   KFIN_APP_PASSWORD         optional, applied with ALTER ROLE
+ *   KFIN_MIGRATOR_PASSWORD    optional, applied with ALTER ROLE
+ *   KFIN_DATABASE_SCHEMA      optional, default `public`
+ *
+ * The migration that follows (0008) refuses to run unless these roles exist and
+ * the schema grants below are present.
+ */
+import pg from 'pg';
+
+const { Client } = pg;
+
+const ROLE_APP = 'kfin_app';
+const ROLE_MIGRATOR = 'kfin_migrator';
+const ROLE_NAMES = [ROLE_MIGRATOR, ROLE_APP];
+
+const adminUrl = process.env.ROLE_ADMIN_DATABASE_URL?.trim();
+if (!adminUrl) {
+  console.error('ROLE_ADMIN_DATABASE_URL is required: an owner/admin connection used only for provisioning.');
+  process.exit(1);
+}
+
+const schema = (process.env.KFIN_DATABASE_SCHEMA ?? 'public').trim();
+if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(schema)) {
+  console.error('KFIN_DATABASE_SCHEMA must be a single unquoted identifier.');
+  process.exit(1);
+}
+
+const passwords = new Map([
+  [ROLE_MIGRATOR, process.env.KFIN_MIGRATOR_PASSWORD ?? ''],
+  [ROLE_APP, process.env.KFIN_APP_PASSWORD ?? ''],
+]);
+
+const client = new Client({ connectionString: adminUrl });
+
+function attributeSummary(row) {
+  return [
+    row.rolcanlogin ? 'LOGIN' : 'NOLOGIN',
+    row.rolsuper ? 'SUPERUSER' : 'NOSUPERUSER',
+    row.rolcreatedb ? 'CREATEDB' : 'NOCREATEDB',
+    row.rolcreaterole ? 'CREATEROLE' : 'NOCREATEROLE',
+    row.rolbypassrls ? 'BYPASSRLS' : 'NOBYPASSRLS',
+    row.rolinherit ? 'INHERIT' : 'NOINHERIT',
+  ].join(' ');
+}
+
+async function ensureRole(name) {
+  const identifier = client.escapeIdentifier(name);
+  const existing = await client.query(
+    `SELECT rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolinherit, rolcanlogin, rolreplication
+       FROM pg_roles WHERE rolname = $1`,
+    [name],
+  );
+
+  if (existing.rowCount === 0) {
+    await client.query(
+      `CREATE ROLE ${identifier} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT`,
+    );
+  } else {
+    const row = existing.rows[0];
+    if (row.rolsuper || row.rolbypassrls || row.rolreplication) {
+      throw new Error(
+        `Role ${name} has SUPERUSER/BYPASSRLS/REPLICATION; a superuser must fix it before provisioning can continue.`,
+      );
+    }
+    const changes = [];
+    if (!row.rolcanlogin) changes.push('LOGIN');
+    if (row.rolinherit) changes.push('NOINHERIT');
+    if (row.rolcreatedb) changes.push('NOCREATEDB');
+    if (row.rolcreaterole) changes.push('NOCREATEROLE');
+    if (changes.length > 0) {
+      await client.query(`ALTER ROLE ${identifier} ${changes.join(' ')}`);
+    }
+  }
+
+  const password = passwords.get(name) ?? '';
+  if (password.length > 0) {
+    await client.query(`ALTER ROLE ${identifier} PASSWORD ${client.escapeLiteral(password)}`);
+  }
+}
+
+try {
+  await client.connect();
+  const database = (await client.query('SELECT current_database() AS name')).rows[0].name;
+  if (typeof database !== 'string' || database.length === 0) {
+    throw new Error('Could not determine the current database.');
+  }
+  const databaseIdentifier = client.escapeIdentifier(database);
+  const schemaIdentifier = client.escapeIdentifier(schema);
+  const appIdentifier = client.escapeIdentifier(ROLE_APP);
+  const migratorIdentifier = client.escapeIdentifier(ROLE_MIGRATOR);
+
+  for (const role of ROLE_NAMES) {
+    await ensureRole(role);
+  }
+
+  // The application may use the schema but never create objects in it. The
+  // migration role owns new objects, so it needs CREATE on the schema (not on
+  // the database) and no role-creation rights.
+  await client.query(`REVOKE ALL ON SCHEMA ${schemaIdentifier} FROM ${appIdentifier}`);
+  await client.query(`GRANT USAGE ON SCHEMA ${schemaIdentifier} TO ${appIdentifier}`);
+  await client.query(`GRANT CREATE, USAGE ON SCHEMA ${schemaIdentifier} TO ${migratorIdentifier}`);
+  await client.query(`REVOKE CREATE ON SCHEMA ${schemaIdentifier} FROM PUBLIC`);
+
+  // Database-level CREATE/TEMP: remove the direct CREATE grant from the app
+  // role. CONNECT/TEMP remain through PUBLIC; that is a documented residual in
+  // phase 1 (revoking them from PUBLIC could affect platform roles).
+  await client.query(`REVOKE CREATE ON DATABASE ${databaseIdentifier} FROM ${appIdentifier}`);
+
+  const roles = await client.query(
+    `SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls, rolinherit, rolcanlogin
+       FROM pg_roles WHERE rolname = ANY($1::text[]) ORDER BY rolname`,
+    [ROLE_NAMES],
+  );
+  const privileges = await client.query(
+    `SELECT r.rolname,
+            has_schema_privilege(r.rolname, $1, 'USAGE') AS has_usage,
+            has_schema_privilege(r.rolname, $1, 'CREATE') AS has_create
+       FROM pg_roles r
+      WHERE r.rolname = ANY($2::text[])
+      ORDER BY r.rolname`,
+    [schema, ROLE_NAMES],
+  );
+
+  console.log(`Provisioned roles on database ${database}, schema ${schema}:`);
+  for (const row of roles.rows) {
+    console.log(`  ${row.rolname}: ${attributeSummary(row)}`);
+  }
+  for (const row of privileges.rows) {
+    console.log(
+      `  ${row.rolname}: schema USAGE=${row.has_usage ? 'yes' : 'no'}, CREATE=${row.has_create ? 'yes' : 'no'}`,
+    );
+  }
+  console.log('Passwords: not printed; set only when the corresponding environment variable was provided.');
+} catch (error) {
+  console.error(`Role provisioning failed: ${error instanceof Error ? error.message : String(error)}`);
+  process.exitCode = 1;
+} finally {
+  await client.end().catch(() => undefined);
+}

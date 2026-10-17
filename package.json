@@ -19,6 +19,8 @@
     "api:dev": "corepack pnpm --filter @kfin/api dev",
     "api:start": "corepack pnpm --filter @kfin/api start",
     "db:migrate": "corepack pnpm --filter @kfin/database migrate",
+    "db:provision-roles": "corepack pnpm --filter @kfin/database provision-roles",
+    "db:verify-app-role": "corepack pnpm --filter @kfin/database verify-app-role",
     "evidence:check": "node evidence/spec-fin-02/scripts/check.mjs",
     "evidence:test": "node --test evidence/spec-fin-02/test/*.test.mjs",
     "sqlguard": "node tools/sql-guard/guard.mjs",

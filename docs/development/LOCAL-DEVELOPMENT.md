@@ -50,6 +50,38 @@ connection strings, no secrets:
 Generate the two 32-byte secrets locally, for example with
 `openssl rand -hex 32`, and keep them out of shell history, logs, and Git.
 
+### Least-privilege database roles (SPEC-SEC-01 phase 1)
+
+The API connects as `kfin_app`; migrations connect as `kfin_migrator`. Neither
+role is allowed to own the schema, and `kfin_app` has only the DML allowlist
+used by `packages/database/src`. Provision the roles once per database with an
+owner/admin connection, then run migrations as the migration role:
+
+```bash
+ROLE_ADMIN_DATABASE_URL='...' \
+KFIN_APP_PASSWORD='...' KFIN_MIGRATOR_PASSWORD='...' \
+corepack pnpm run db:provision-roles
+
+MIGRATION_DATABASE_URL='...' DATABASE_SSL_MODE=disable \
+corepack pnpm run db:migrate
+
+DATABASE_URL='...' corepack pnpm run db:verify-app-role
+```
+
+`ROLE_ADMIN_DATABASE_URL` and the two passwords are operator-only. Keep them out
+of the API environment, `.env`, Git, and logs; the provisioning script never
+prints a password. Migration 0008 refuses to run unless `kfin_app` exists with
+the safe attributes and schema grants, and it grants only the reviewed DML
+allowlist. If an existing schema is owned by the platform role (for example an
+already-migrated Supabase project), run `db:migrate` as that owner; do not
+transfer ownership in this phase. The application role must remain a non-owner.
+
+`db:verify-app-role` is a smoke check over `public`. The full table-by-table
+allowlist and both deployment paths (migration role or existing owner) are
+pinned by `packages/database/test/least-privilege.integration.test.ts`. Neither
+the roles nor these checks enable RLS: Row Level Security is phase 2 of
+SPEC-SEC-01 and remains an owner decision.
+
 ### Using Supabase PostgreSQL
 
 Supabase is compatible with the current configuration because the pool builds its
