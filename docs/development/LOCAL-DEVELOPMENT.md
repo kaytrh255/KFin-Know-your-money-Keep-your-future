@@ -72,7 +72,8 @@ DATABASE_URL='...' corepack pnpm run db:verify-app-role
 
 `ROLE_ADMIN_DATABASE_URL` and the three passwords are operator-only. Provisioning also
 removes every role membership from the three roles: `NOINHERIT` does not prevent
-`SET ROLE`, so a membership would let the application switch to a privileged role. Keep them out
+`SET ROLE`, and membership is transitive for it (`app → bridge → privileged`), so
+provisioning fails if any role remains reachable. Keep them out
 of the API environment, `.env`, Git, and logs; the provisioning script never
 prints a password. Migration 0008 refuses to run unless `kfin_app` exists with
 the safe attributes and schema grants, and it grants only the reviewed DML

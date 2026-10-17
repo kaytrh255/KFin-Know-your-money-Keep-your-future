@@ -147,6 +147,23 @@ try {
   if (remainingMemberships !== 0) {
     throw new Error(`KFin roles still hold ${remainingMemberships} role membership(s); SET ROLE would be possible.`);
   }
+  // SET ROLE also follows indirect chains (`app -> bridge -> privileged`), so
+  // assert that no role is reachable at all, not just that direct grants are gone.
+  const reachable = (await client.query(
+    `SELECT r.rolname,
+            (SELECT count(*)::int
+               FROM pg_roles t
+              WHERE t.oid <> r.oid
+                AND pg_has_role(r.oid, t.oid, 'MEMBER')) AS reachable
+       FROM pg_roles r
+      WHERE r.rolname = ANY($1::text[])`,
+    [ROLE_NAMES],
+  )).rows;
+  for (const row of reachable) {
+    if (row.reachable !== 0) {
+      throw new Error(`${row.rolname} can still SET ROLE into ${row.reachable} role(s) through a chain.`);
+    }
+  }
 
   // The application may use the schema but never create objects in it. The
   // migration role owns new objects, so it needs CREATE on the schema (not on

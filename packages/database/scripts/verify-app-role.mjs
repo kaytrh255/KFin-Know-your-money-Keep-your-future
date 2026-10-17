@@ -64,13 +64,15 @@ try {
            r.rolsuper, r.rolcreatedb, r.rolcreaterole, r.rolbypassrls, r.rolinherit, r.rolcanlogin
       FROM pg_roles r WHERE r.rolname = current_user
   `)).rows[0];
-  const membership = (await client.query(`
+  // SET ROLE is allowed for direct *and* chained membership, so count every
+  // role reachable through the membership graph, not just direct grants.
+  const reachable = (await client.query(`
     SELECT count(*)::int AS count
-      FROM pg_auth_members am
-      JOIN pg_roles m ON m.oid = am.member
-     WHERE m.rolname = current_user
+      FROM pg_roles target
+     WHERE target.oid <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
+       AND pg_has_role(current_user, target.oid, 'MEMBER')
   `)).rows[0];
-  check(membership.count === 0, `kfin_app is a member of ${membership.count} role(s); SET ROLE would be possible`);
+  check(reachable.count === 0, `kfin_app can SET ROLE into ${reachable.count} role(s) directly or via a chain`);
 
   check(identity.role === 'kfin_app', `connected as ${identity.role}, expected kfin_app`);
   check(identity.session_role === 'kfin_app', `session user is ${identity.session_role}; kfin_app was entered with SET ROLE`);

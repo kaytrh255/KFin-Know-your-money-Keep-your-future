@@ -31,18 +31,22 @@ Two further boundaries are deliberate:
 
 `NOINHERIT` does **not** prevent `SET ROLE`. It only stops automatic privilege
 inheritance; a role that is a member of another role can still switch to it in a single
-statement. Membership, not the `INHERIT` attribute, is the control that matters.
+statement. Membership, not the `INHERIT` attribute, is the control that matters — and
+PostgreSQL membership is **transitive** for `SET ROLE`: `app → bridge → privileged` is
+enough, so counting only direct grants would miss a real escalation path.
 
 Three independent controls keep the application role from becoming a privileged one:
 
 1. `db:provision-roles` revokes every role granted to `kfin_app`, `kfin_operator` and
-   `kfin_migrator`, then fails provisioning if any membership remains.
-2. `assertApplicationDatabaseRole` / `assertOperatorDatabaseRole` refuse to start when the
-   connected role has any membership, or when `session_user` differs from `current_user`
-   (a privileged session that entered the app role with `SET ROLE` could leave it again).
+   `kfin_migrator`, then fails provisioning if any direct membership remains or if any
+   other role is still reachable through a chain (`pg_has_role`).
+2. `assertApplicationDatabaseRole` / `assertOperatorDatabaseRole` refuse to start when any
+   role is reachable through the membership graph (direct or chained), or when
+   `session_user` differs from `current_user` (a privileged session that entered the app
+   role with `SET ROLE` could leave it again).
 3. `db:verify-app-role` and the integration suites assert the same catalog state against
-   the real roles and that `SET ROLE kfin_migrator` / `SET ROLE kfin_operator` are denied
-   with SQLSTATE 42501.
+   the real roles, that `SET ROLE kfin_migrator` / `SET ROLE kfin_operator` are denied with
+   SQLSTATE 42501, and that a chained grant is detected by the guard predicate.
 
 ## 2. How identity reaches a policy
 
@@ -173,5 +177,7 @@ connection.
 5. RLS does not cover backups, replicas, or any other role the operator configures outside
    this repository.
 6. Membership is re-checked at startup and in CI, but a superuser can silently add a
-   membership to `kfin_app` between deploys. The verifier and the startup guard catch it at
-   the next run; prevention depends on keeping the admin credential out of normal operation.
+   direct or chained membership to `kfin_app` between deploys. The verifier and the startup
+   guard catch it at the next run (including chains); prevention depends on keeping the
+   admin credential out of normal operation. A superuser could also set a role-level
+   `role` default for `kfin_app`, which is the same class of control-plane compromise.

@@ -86,16 +86,22 @@ export async function withUserContext<T>(
   }
 }
 
-interface RoleRow {
-  role: string;
-  session_role: string;
-  rolsuper: boolean;
-  rolbypassrls: boolean;
-  rolcreatedb: boolean;
-  rolcreaterole: boolean;
-  owned_relations: string;
-  owned_schemas: string;
-  memberships: string;
+/**
+ * Catalog snapshot for one role. `reachable_roles` counts every role the role
+ * can `SET ROLE` into, directly or through a chain: PostgreSQL role membership
+ * is transitive for `SET ROLE`, so counting only direct grants would miss
+ * `kfin_app -> bridge -> privileged`.
+ */
+export interface DatabaseRoleSnapshot {
+  readonly role: string;
+  readonly sessionRole: string;
+  readonly superuser: boolean;
+  readonly bypassRls: boolean;
+  readonly createDb: boolean;
+  readonly createRole: boolean;
+  readonly ownedRelations: string;
+  readonly ownedSchemas: string;
+  readonly reachableRoles: string;
 }
 
 /**
@@ -107,18 +113,28 @@ interface RoleRow {
  * a pooled/via-proxy connection may rewrite the URL without changing the role.
  *
  * Membership is checked explicitly. `NOINHERIT` only stops automatic privilege
- * inheritance; it does NOT stop `SET ROLE`. A role that is a member of a more
- * privileged role can switch to it in one statement, so the app role must have
- * no memberships at all. `session_user = current_user` additionally rejects a
- * privileged session that merely entered the app role with `SET ROLE` and could
- * leave it again.
+ * inheritance; it does NOT stop `SET ROLE`, and PostgreSQL membership is
+ * transitive for `SET ROLE`: `app -> bridge -> privileged` is enough. The guard
+ * therefore counts every role reachable through the membership graph and
+ * refuses if there is even one. `session_user = current_user` additionally
+ * rejects a privileged session that merely entered the app role with
+ * `SET ROLE` and could leave it again.
  */
-async function assertDatabaseRole(
+async function loadDatabaseRoleSnapshot(
   pool: Queryable,
-  expectedRole: string,
-  failurePrefix: string,
-): Promise<void> {
-  const result = await pool.query<RoleRow>(`
+  roleName?: string,
+): Promise<DatabaseRoleSnapshot | null> {
+  const result = await pool.query<{
+    role: string;
+    session_role: string;
+    rolsuper: boolean;
+    rolbypassrls: boolean;
+    rolcreatedb: boolean;
+    rolcreaterole: boolean;
+    owned_relations: string;
+    owned_schemas: string;
+    reachable_roles: string;
+  }>(`
     SELECT r.rolname AS role,
            session_user::text AS session_role,
            r.rolsuper,
@@ -144,13 +160,45 @@ async function assertDatabaseRole(
            ) AS owned_schemas,
            (
              SELECT count(*)::text
-               FROM pg_auth_members am
-              WHERE am.member = r.oid
-           ) AS memberships
+               FROM pg_roles target
+              WHERE target.oid <> r.oid
+                AND pg_has_role(r.oid, target.oid, 'MEMBER')
+           ) AS reachable_roles
       FROM pg_roles r
-     WHERE r.rolname = current_user
-  `);
+     WHERE r.rolname = COALESCE($1::text, current_user)
+  `, [roleName ?? null]);
   const row = result.rows[0];
+  if (!row) return null;
+  return {
+    role: row.role,
+    sessionRole: row.session_role,
+    superuser: row.rolsuper,
+    bypassRls: row.rolbypassrls,
+    createDb: row.rolcreatedb,
+    createRole: row.rolcreaterole,
+    ownedRelations: row.owned_relations,
+    ownedSchemas: row.owned_schemas,
+    reachableRoles: row.reachable_roles,
+  };
+}
+
+/**
+ * Loads the catalog snapshot for the current role, or for `roleName` when an
+ * operator check wants to inspect a role without connecting as it.
+ */
+export async function inspectDatabaseRole(
+  pool: Queryable,
+  roleName?: string,
+): Promise<DatabaseRoleSnapshot | null> {
+  return loadDatabaseRoleSnapshot(pool, roleName);
+}
+
+async function assertDatabaseRole(
+  pool: Queryable,
+  expectedRole: string,
+  failurePrefix: string,
+): Promise<void> {
+  const row = await loadDatabaseRoleSnapshot(pool);
   if (!row) {
     throw new DatabaseRoleError('The application role could not be resolved.');
   }
@@ -158,18 +206,18 @@ async function assertDatabaseRole(
   if (row.role !== expectedRole) {
     problems.push(`connected as ${row.role}, expected ${expectedRole}`);
   }
-  if (row.session_role !== expectedRole) {
-    problems.push(`session user is ${row.session_role}, so ${row.role} was entered with SET ROLE`);
+  if (row.sessionRole !== expectedRole) {
+    problems.push(`session user is ${row.sessionRole}, so ${row.role} was entered with SET ROLE`);
   }
-  if (Number(row.memberships) > 0) {
-    problems.push(`role is a member of ${row.memberships} other role(s), so it can SET ROLE`);
+  if (Number(row.reachableRoles) > 0) {
+    problems.push(`role can SET ROLE into ${row.reachableRoles} other role(s); membership is transitive`);
   }
-  if (row.rolsuper) problems.push('role is SUPERUSER');
-  if (row.rolbypassrls) problems.push('role has BYPASSRLS');
-  if (row.rolcreatedb) problems.push('role has CREATEDB');
-  if (row.rolcreaterole) problems.push('role has CREATEROLE');
-  if (Number(row.owned_relations) > 0) problems.push(`role owns ${row.owned_relations} relation(s)`);
-  if (Number(row.owned_schemas) > 0) problems.push(`role owns ${row.owned_schemas} schema(s)`);
+  if (row.superuser) problems.push('role is SUPERUSER');
+  if (row.bypassRls) problems.push('role has BYPASSRLS');
+  if (row.createDb) problems.push('role has CREATEDB');
+  if (row.createRole) problems.push('role has CREATEROLE');
+  if (Number(row.ownedRelations) > 0) problems.push(`role owns ${row.ownedRelations} relation(s)`);
+  if (Number(row.ownedSchemas) > 0) problems.push(`role owns ${row.ownedSchemas} schema(s)`);
   if (problems.length > 0) {
     throw new DatabaseRoleError(`${failurePrefix}: ${problems.join('; ')}.`);
   }

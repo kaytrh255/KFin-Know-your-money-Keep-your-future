@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   FinancialAccountBootstrapService,
   PostgresAuthRepository,
+  inspectDatabaseRole,
   PostgresFinancialRepository,
   PostgresInvitationRepository,
   PostgresUserRepository,
@@ -658,6 +659,50 @@ integration('row level security under kfin_app', () => {
          ORDER BY 1, 2
       `, [['kfin_app', 'kfin_operator', 'kfin_migrator']])).rows;
       expect(rows).toEqual([]);
+
+      // SET ROLE also follows chains, so the invariant is "no role is reachable
+      // through the membership graph", not merely "no direct grant".
+      expect((await inspectDatabaseRole(app))?.reachableRoles).toBe('0');
+      expect((await inspectDatabaseRole(operator))?.reachableRoles).toBe('0');
+      expect((await inspectDatabaseRole(migration))?.reachableRoles).toBe('0');
+    });
+
+    it('detects a chained membership that would allow an indirect SET ROLE', async () => {
+      const suffix = randomUUID().replaceAll('-', '').slice(0, 10);
+      const probeApp = `kfin_probe_app_${suffix}`;
+      const bridge = `kfin_probe_bridge_${suffix}`;
+      const privileged = `kfin_probe_priv_${suffix}`;
+      const names = [probeApp, bridge, privileged];
+      try {
+        for (const name of names) await administration.query(`CREATE ROLE ${quoteIdentifier(name)}`);
+        await administration.query(`GRANT ${quoteIdentifier(bridge)} TO ${quoteIdentifier(probeApp)}`);
+        await administration.query(`GRANT ${quoteIdentifier(privileged)} TO ${quoteIdentifier(bridge)}`);
+
+        // The predicate the startup guard now uses must see both the direct and
+        // the chained role; a direct-membership count would report 1.
+        const snapshot = await inspectDatabaseRole(administration, probeApp);
+        expect(Number(snapshot?.reachableRoles)).toBe(2);
+
+        const direct = (await administration.query<{ count: string }>(
+          `SELECT count(*)::text AS count FROM pg_auth_members am
+             JOIN pg_roles m ON m.oid = am.member
+            WHERE m.rolname = $1::text`,
+          [probeApp],
+        )).rows[0]!.count;
+        expect(direct).toBe('1');
+
+        // Reality check: PostgreSQL itself lets the probe role enter the chained
+        // role, which is why the guard counts transitively.
+        const chained = (await administration.query<{ allowed: boolean }>(
+          'SELECT pg_has_role($1::name, $2::name, $3::text) AS allowed',
+          [probeApp, privileged, 'MEMBER'],
+        )).rows[0]!.allowed;
+        expect(chained).toBe(true);
+      } finally {
+        await administration.query(`DROP ROLE IF EXISTS ${quoteIdentifier(bridge)}`).catch(() => undefined);
+        await administration.query(`DROP ROLE IF EXISTS ${quoteIdentifier(privileged)}`).catch(() => undefined);
+        await administration.query(`DROP ROLE IF EXISTS ${quoteIdentifier(probeApp)}`).catch(() => undefined);
+      }
     });
 
     it('denies SET ROLE from the application and operator roles', async () => {
