@@ -125,7 +125,11 @@ TLS terminates at the proxy in front of the container; the app emits HSTS, a str
 names the only peers whose `X-Forwarded-For` is believed. `pnpm run smoke:https` runs the artifact
 behind a real TLS proxy and checks those headers, the same-origin write path and the `__Host-`
 session cookie. The public hostname, the secret store and log shipping belong to the host. See [`docs/operations/PRODUCTION-RUNTIME.md`](docs/operations/PRODUCTION-RUNTIME.md).
-There is still no staging environment, and none of this has been deployed.
+A staging deployment path now exists — one image behind Caddy on a single VM, with a separate
+database, CI rehearsing the full Compose stack on every pull request, and a dispatch workflow that
+publishes the image and deploys it. It has not been run against a real host yet: the owner steps and
+the remaining conditions are in [`deploy/staging/README.md`](deploy/staging/README.md) and
+[`docs/operations/STAGING-DEPLOYMENT.md`](docs/operations/STAGING-DEPLOYMENT.md).
 
 ## Specification areas
 
