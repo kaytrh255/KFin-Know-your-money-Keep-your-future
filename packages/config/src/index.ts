@@ -119,13 +119,30 @@ const environmentSchema = z.object({
     .default('true')
     .transform((value) => value === 'true')
     .pipe(z.boolean()),
-  // Provider selection remains Phase 6 (OQ-17). Only vendor-neutral adapters exist.
-  EMAIL_DELIVERY_ADAPTER: z.enum(['memory', 'none', 'file']).default('none'),
+  // `resend` is the Private Beta provider (ADR-002/OQ-17 implementation). The
+  // other kinds stay for tests and local development; production refuses them.
+  EMAIL_DELIVERY_ADAPTER: z.enum(['memory', 'none', 'file', 'resend']).default('none'),
+  // Provider configuration is read from the environment only; no credential is
+  // ever committed. `from` may use the `Name <address>` form the provider accepts.
+  EMAIL_FROM_ADDRESS: z.string().trim().min(3).max(320).refine(
+    (value) => value.includes('@') && !/[\r\n]/.test(value),
+    { message: 'must contain an email address and no line break' },
+  ).optional(),
+  EMAIL_REPLY_TO: z.string().trim().min(3).max(320).refine(
+    (value) => value.includes('@') && !/[\r\n]/.test(value),
+    { message: 'must contain an email address and no line break' },
+  ).optional(),
+  RESEND_API_KEY: z.string().trim().min(8).max(512).optional(),
+  EMAIL_PROVIDER_BASE_URL: z.string().trim().url().default('https://api.resend.com'),
+  EMAIL_PROVIDER_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(5_000),
   // Local-development sink only: the `file` adapter writes each security message
   // into this directory so a developer can complete registration and recovery
   // without an email provider. Refused in production below, because it puts an
   // OTP/reset secret on the filesystem where the design never persists one.
   EMAIL_OUTBOX_DIR: z.string().trim().min(1).max(4_096).optional(),
+  // Production serving topology: the compiled client directory. Defaults to
+  // `apps/api/dist/web` next to the running bundle.
+  WEB_CLIENT_ROOT: z.string().trim().min(1).max(4_096).optional(),
 }).superRefine((value, ctx) => {
   if (value.EMAIL_DELIVERY_ADAPTER === 'file') {
     if (value.NODE_ENV === 'production') {
@@ -142,6 +159,32 @@ const environmentSchema = z.object({
         message: 'is required when EMAIL_DELIVERY_ADAPTER=file',
       });
     }
+  }
+  if (value.EMAIL_DELIVERY_ADAPTER === 'resend') {
+    if (!value.RESEND_API_KEY) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RESEND_API_KEY'],
+        message: 'is required when EMAIL_DELIVERY_ADAPTER=resend',
+      });
+    }
+    if (!value.EMAIL_FROM_ADDRESS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['EMAIL_FROM_ADDRESS'],
+        message: 'is required when EMAIL_DELIVERY_ADAPTER=resend',
+      });
+    }
+  }
+  // A production deployment that cannot deliver mail cannot run the Private Beta:
+  // invitation, reset and security notices all depend on it. Refusing the boot is
+  // the only way this gap cannot silently return.
+  if (value.NODE_ENV === 'production' && value.EMAIL_DELIVERY_ADAPTER !== 'resend') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['EMAIL_DELIVERY_ADAPTER'],
+      message: 'must be "resend" when NODE_ENV=production: the beta requires real email delivery',
+    });
   }
   // A clear-cookie session flag in production would put the bearer token on the
   // network in plaintext; refuse to boot instead of degrading silently
@@ -168,9 +211,16 @@ export interface ApiConfig {
   readonly financialPreviewSigningKey: string;
   readonly authSecret: string;
   readonly authCookieSecure: boolean;
-  readonly emailDeliveryAdapter: 'memory' | 'none' | 'file';
+  readonly emailDeliveryAdapter: 'memory' | 'none' | 'file' | 'resend';
   /** Absolute or relative directory for the local-development email sink. */
   readonly emailOutboxDir: string | null;
+  readonly emailFromAddress: string | null;
+  readonly emailReplyTo: string | null;
+  readonly resendApiKey: string | null;
+  readonly emailProviderBaseUrl: string;
+  readonly emailProviderTimeoutMs: number;
+  /** Static client directory for the single-origin production topology. */
+  readonly webClientRoot: string | null;
 }
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -197,6 +247,12 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): Api
     authCookieSecure: parsed.data.AUTH_COOKIE_SECURE,
     emailDeliveryAdapter: parsed.data.EMAIL_DELIVERY_ADAPTER,
     emailOutboxDir: parsed.data.EMAIL_OUTBOX_DIR ?? null,
+    emailFromAddress: parsed.data.EMAIL_FROM_ADDRESS ?? null,
+    emailReplyTo: parsed.data.EMAIL_REPLY_TO ?? null,
+    resendApiKey: parsed.data.RESEND_API_KEY ?? null,
+    emailProviderBaseUrl: parsed.data.EMAIL_PROVIDER_BASE_URL,
+    emailProviderTimeoutMs: parsed.data.EMAIL_PROVIDER_TIMEOUT_MS,
+    webClientRoot: parsed.data.WEB_CLIENT_ROOT ?? null,
   });
 }
 

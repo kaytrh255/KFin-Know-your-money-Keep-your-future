@@ -68,8 +68,58 @@ describe('configuration', () => {
       IDEMPOTENCY_RETENTION_HOURS: '24',
       FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
       AUTH_SECRET,
+      EMAIL_DELIVERY_ADAPTER: 'resend',
+      EMAIL_FROM_ADDRESS: 'KFin <no-reply@kfin.example>',
+      RESEND_API_KEY: 're_test_key_0123456789',
     });
     expect(config.authCookieSecure).toBe(true);
+  });
+
+  it('refuses a production configuration that cannot deliver email', () => {
+    expect(() => loadApiConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+    })).toThrow(/EMAIL_DELIVERY_ADAPTER/);
+  });
+
+  it('requires both provider credentials when the resend adapter is selected', () => {
+    const base = {
+      NODE_ENV: 'development',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      DATABASE_SSL_MODE: 'disable',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      EMAIL_DELIVERY_ADAPTER: 'resend',
+    } as const;
+    expect(() => loadApiConfig({ ...base })).toThrow(/RESEND_API_KEY/);
+    expect(() => loadApiConfig({ ...base, RESEND_API_KEY: 're_test_key_0123456789' }))
+      .toThrow(/EMAIL_FROM_ADDRESS/);
+  });
+
+  it('loads resend configuration without exposing it in derived values', () => {
+    const config = loadApiConfig({
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      EMAIL_DELIVERY_ADAPTER: 'resend',
+      EMAIL_FROM_ADDRESS: 'KFin <no-reply@kfin.example>',
+      EMAIL_REPLY_TO: 'support@kfin.example',
+      RESEND_API_KEY: 're_test_key_0123456789',
+      EMAIL_PROVIDER_BASE_URL: 'https://api.resend.com',
+      EMAIL_PROVIDER_TIMEOUT_MS: '7500',
+    });
+    expect(config.emailDeliveryAdapter).toBe('resend');
+    expect(config.emailFromAddress).toBe('KFin <no-reply@kfin.example>');
+    expect(config.emailReplyTo).toBe('support@kfin.example');
+    expect(config.emailProviderBaseUrl).toBe('https://api.resend.com');
+    expect(config.emailProviderTimeoutMs).toBe(7_500);
+    expect(config.resendApiKey).toBe('re_test_key_0123456789');
   });
 
   it('accepts the local file email sink in development when a directory is given', () => {
