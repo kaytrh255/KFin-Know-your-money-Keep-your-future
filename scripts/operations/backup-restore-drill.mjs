@@ -211,12 +211,25 @@ async function main() {
   await rm(directory, { recursive: true, force: true }).catch(() => {});
 }
 
+function escapeWorkflowCommand(value) {
+  return value.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+}
+
 function emit() {
   const text = JSON.stringify(summary, null, 2);
   process.stdout.write(`${text}\n`);
   if (process.env.GITHUB_ACTIONS === 'true') {
-    const oneLine = JSON.stringify({ status: summary.status, tables: summary.tables, rows: summary.rows });
-    process.stdout.write(`::notice title=backup-restore-drill::${oneLine}\n`);
+    // Annotations are readable through the checks API even when the job log is
+    // not; this keeps a failed drill diagnosable without printing a secret.
+    const payload = summary.status === 'pass'
+      ? { status: summary.status, tables: summary.tables, rows: summary.rows, backupMs: summary.backupMs, restoreMs: summary.restoreMs }
+      : {
+        status: summary.status,
+        error: (summary.error ?? 'unknown').slice(0, 400),
+        steps: summary.steps.map((step) => `${step.step}:${step.status}`).join(','),
+      };
+    const command = summary.status === 'pass' ? '::notice' : '::error';
+    process.stdout.write(`${command} title=backup-restore-drill::${escapeWorkflowCommand(JSON.stringify(payload))}\n`);
   }
 }
 
