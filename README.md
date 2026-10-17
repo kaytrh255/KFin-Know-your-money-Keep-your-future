@@ -89,6 +89,41 @@ corepack pnpm run invite:provision
 
 `apps/web` is a **local testing client**, not a product surface: one form per implemented API flow, no stub endpoints, no seeded data. Browser writes must be same-origin, so the dev server proxies `/api/*` to the API rather than the client calling another port.
 
+## Production runtime
+
+Deployment does **not** run `tsx` or `tools/dev-server.mjs`. The build produces one artifact in
+`apps/api/dist` and one process serves both the compiled client and the API on the same origin,
+which is what the same-origin-only browser transport requires.
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm run build                  # tsc -b + scripts/build-production.mjs
+corepack pnpm run start                  # node apps/api/dist/server.bundle.mjs
+
+# prove it before deploying (needs a non-production database)
+DATABASE_URL=... AUTH_SECRET=... FINANCIAL_PREVIEW_SIGNING_KEY=... \
+IDEMPOTENCY_RETENTION_HOURS=24 corepack pnpm run smoke:production
+
+# prove the artifact survives a production-only install (no devDependencies, no tsx)
+corepack pnpm run verify:production-install
+```
+
+The artifact contains `server.bundle.mjs`, `migrate.bundle.mjs`,
+`provision-invitation.bundle.mjs`, `migrations/`, `web/`, `runtime-package.json` (the exact
+production dependency set) and `BUILD-INFO.json`. A production start refuses to boot without
+secure cookies, without the `resend` mail adapter, or without `web/index.html`.
+
+The deployment unit is a container image built from the repository root:
+
+```bash
+corepack pnpm run image:build            # docker build -t kfin-runtime:local .
+docker run --env-file /run/kfin.env -p 3000:3000 kfin-runtime:local
+```
+
+TLS, the public hostname, the secret store and log shipping belong to the host in front of the
+container. See [`docs/operations/PRODUCTION-RUNTIME.md`](docs/operations/PRODUCTION-RUNTIME.md).
+There is still no staging environment, and none of this has been deployed.
+
 ## Specification areas
 
 - [Product](docs/product/PRD.md)

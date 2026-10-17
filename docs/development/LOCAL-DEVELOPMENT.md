@@ -318,8 +318,14 @@ migrate.bundle.mjs                node apps/api/dist/migrate.bundle.mjs
 provision-invitation.bundle.mjs   node apps/api/dist/provision-invitation.bundle.mjs
 migrations/                       applied by the bundle above
 web/                              index.html + src/*.js + src/styles.css
+runtime-package.json              production dependency set, no devDependencies
 BUILD-INFO.json                   commit, build time, Node version
 ```
+
+`corepack pnpm run verify:production-install` copies that artifact into an empty
+directory, installs it with `npm install --omit=dev`, asserts `tsx` is absent, and
+runs the 12 deployment checks there. `Dockerfile` packages the same artifact as
+`kfin-runtime` (`corepack pnpm run image:build`).
 
 `corepack pnpm run start` runs the bundle with `NODE_ENV=production`, serving the
 client and the API on one origin (no `tsx`, no dev server). `corepack pnpm run api:dev`

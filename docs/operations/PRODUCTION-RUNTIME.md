@@ -31,6 +31,7 @@ writes everything a deploy needs under `apps/api/dist`:
 | `provision-invitation.bundle.mjs` | the operator invitation CLI |
 | `migrations/` | the reviewed forward-only SQL |
 | `web/` | `index.html`, `src/styles.css`, compiled `src/*.js` |
+| `runtime-package.json` | the exact production dependency set (`npm install --omit=dev`) |
 | `BUILD-INFO.json` | commit, build time, Node version |
 
 The bundles deliberately contain no `tsx` and no TypeScript source; `scripts/build-production.mjs`
@@ -75,8 +76,60 @@ unknown API route, `401 + Cache-Control: no-store` on `/api/v1/auth/me`, and tha
 the process still refuses to boot with insecure cookies or without email.
 It prints a JSON report and exits non-zero on the first failure.
 
-Measured on 2026-10-17 against the local PostgreSQL 18 cluster: **12/12 checks
-passed**, artifact commit `caa43a818` (rebuilt during development).
+## Production-only install
+
+The artifact must run with no devDependency at all — no `tsx`, no TypeScript, no
+repository `node_modules`:
+
+```bash
+DATABASE_URL=... AUTH_SECRET=... FINANCIAL_PREVIEW_SIGNING_KEY=... \
+IDEMPOTENCY_RETENTION_HOURS=24 corepack pnpm run verify:production-install
+```
+
+It copies `apps/api/dist` into an empty directory, renames `runtime-package.json`
+to `package.json`, runs a real `npm install --omit=dev`, asserts `tsx` cannot be
+resolved, and then runs the 12 deployment checks against `server.bundle.mjs` in
+that directory. The repository's own `node_modules` is not on the resolution
+path.
+
+## Container image
+
+The deployable unit is a two-stage image built from the repository root
+(`Dockerfile`):
+
+- **build**: pinned `node:22.22.3-bookworm-slim`, `pnpm install --frozen-lockfile`,
+  `pnpm run build` with the commit passed as `BUILD_COMMIT`;
+- **runtime**: the same base image, `npm install --omit=dev` against
+  `runtime-package.json`, then the artifact copied in; runs as the `node` user,
+  `ENV NODE_ENV=production`, `HEALTHCHECK` on `/health/ready`, `CMD node server.bundle.mjs`.
+
+```bash
+corepack pnpm run image:build
+docker run --env-file /run/kfin.env -p 3000:3000 kfin-runtime:local
+```
+
+The image also carries `migrate.bundle.mjs`, so a deploy applies reviewed SQL
+with the same artifact:
+
+```bash
+docker run --rm --network host -e MIGRATION_DATABASE_URL=... \
+  kfin-runtime:ci node migrate.bundle.mjs
+```
+
+**Hosting decision (minimal):** one container behind a TLS-terminating proxy,
+with a managed PostgreSQL (Supabase) reached over `verify-full`. This keeps the
+single-origin design intact, needs no CDN or CORS work, and is portable across
+hosts; the proxy owns the hostname, certificates, HSTS and request logging.
+
+`verify:production-install` and the image build are exercised in CI
+(`verify` job and the separate `image` job). Docker is not available in the
+development sandbox used on 2026-10-17, so the image itself is only proven by CI.
+
+## Measured
+
+- 2026-10-17, local PostgreSQL 18.6: smoke **12/12**, production-only install
+  (6 dependencies, `npm install --omit=dev`) **12/12**; artifact commit `5802b8c`.
+- The CI `verify` and `image` jobs repeat both against `postgres:17.6`.
 
 ## Rollback
 
@@ -89,5 +142,8 @@ deploy.
 
 - TLS termination, HSTS and the other response headers belong to the ingress;
   nothing in the repository configures them.
-- No container image, manifest or CI deploy job exists; staging will need one.
+- No staging host, DNS, certificate or deploy workflow exists; the image is built
+  and started only in CI and locally.
+- No secret store is configured for `AUTH_SECRET`, `FINANCIAL_PREVIEW_SIGNING_KEY`
+  or `RESEND_API_KEY`; the container expects them in its environment.
 - No log shipping, metrics or alerts consume the JSON logs or the health probes.
