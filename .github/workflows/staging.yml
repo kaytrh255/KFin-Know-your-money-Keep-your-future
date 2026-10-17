@@ -92,7 +92,7 @@ jobs:
       - name: Apply migrations with the same image
         run: |
           umask 077
-          printf 'MIGRATION_DATABASE_URL=postgresql://kfin_migrator:%s@db:5432/kfin_staging\n' \
+          printf 'MIGRATION_DATABASE_URL=postgresql://kfin_migrator:%s@db:5432/kfin_staging\nDATABASE_SSL_MODE=disable\n' \
             "$KFIN_MIGRATOR_PASSWORD" > deploy/staging/migration.env
           docker run --rm \
             --env-file deploy/staging/migration.env \
@@ -325,9 +325,10 @@ jobs:
           } > "$work/db.env"
 
           if [ "$STAGING_DB_MODE" = "managed" ]; then
-            printf 'MIGRATION_DATABASE_URL=%s\n' "$STAGING_MIGRATION_DATABASE_URL" > "$work/migration.env"
+            printf 'MIGRATION_DATABASE_URL=%s\nDATABASE_SSL_MODE=%s\n' \
+              "$STAGING_MIGRATION_DATABASE_URL" "${STAGING_DATABASE_SSL_MODE:-verify-full}" > "$work/migration.env"
           else
-            printf 'MIGRATION_DATABASE_URL=postgresql://kfin_migrator:%s@db:5432/kfin_staging\n' \
+            printf 'MIGRATION_DATABASE_URL=postgresql://kfin_migrator:%s@db:5432/kfin_staging\nDATABASE_SSL_MODE=disable\n' \
               "$KFIN_MIGRATOR_PASSWORD" > "$work/migration.env"
           fi
 

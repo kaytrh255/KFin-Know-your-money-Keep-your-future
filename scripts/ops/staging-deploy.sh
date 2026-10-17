@@ -59,6 +59,10 @@ if ! grep -Eq '^MIGRATION_DATABASE_URL=.+$' "$MIGRATION_ENV_FILE"; then
   echo "migration.env is missing MIGRATION_DATABASE_URL" >&2
   exit 2
 fi
+if ! grep -Eq '^DATABASE_SSL_MODE=(disable|verify-full)$' "$MIGRATION_ENV_FILE"; then
+  echo "migration.env is missing DATABASE_SSL_MODE=disable|verify-full (the migration defaults to verify-full)" >&2
+  exit 2
+fi
 if grep -qx 'EMAIL_DELIVERY_ADAPTER=none' "$ENV_FILE" && ! grep -qx 'STAGING_MODE=true' "$ENV_FILE"; then
   echo "EMAIL_DELIVERY_ADAPTER=none is refused outside staging: set STAGING_MODE=true explicitly." >&2
   exit 2
