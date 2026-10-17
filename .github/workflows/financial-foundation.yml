@@ -9,7 +9,10 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Pinned: the PGDG apt repository used by the backup drill and the
+    # postgres:17 service must match the runner image. `ubuntu-latest` migrates
+    # to Ubuntu 26 on 2026-10-19.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
