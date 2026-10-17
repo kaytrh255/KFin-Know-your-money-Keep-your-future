@@ -16,7 +16,6 @@ const INVITATION_CODE_SEGMENT = /^[0-9A-HJKMNP-TV-Z]{8}$/;
 export const emailSchema = z.string().trim().min(3).max(320).email();
 export const passwordSchema = z.string().min(1).max(200);
 export const otpSchema = z.string().regex(/^[0-9]{6}$/);
-export const resetSecretSchema = z.string().regex(/^[A-Za-z0-9_-]{32,128}$/);
 export const invitationCodeSchema = z
   .string()
   .trim()
@@ -26,6 +25,18 @@ export const invitationCodeSchema = z
   .refine(
     (value) => value.split('-').length === 4 && value.split('-').every((part) => INVITATION_CODE_SEGMENT.test(part)),
     { message: 'must be the invitation code issued for this Private Beta account' },
+  )
+  // The rule above is a `.refine`, which OpenAPI cannot express as a `pattern`,
+  // so without this description the published contract claimed only "1 to 64
+  // characters" while the runtime required four groups of eight Crockford
+  // characters. A caller reading the contract was told it sent the wrong thing
+  // by a contract that never stated the rule (found by a live register attempt,
+  // 2026-10-12). Descriptions survive schema transformation, so the requirement
+  // is now published next to the field that enforces it.
+  .describe(
+    'Invitation code exactly as issued: four groups of eight characters separated by hyphens, '
+    + 'for example XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX. Crockford base32 alphabet (digits and '
+    + 'A-Z excluding I, L, O and U); case and surrounding whitespace are ignored.',
   );
 
 export const localeSchema = z.string().trim().min(2).max(35);
@@ -45,7 +56,16 @@ export const authSessionSchema = z.strictObject({
 
 export const registerBodySchema = z.strictObject({
   email: emailSchema,
-  password: passwordSchema,
+  // The transport bound and the enforced policy are different numbers, and only
+  // the transport bound was published, so a caller reading the contract could be
+  // refused by a rule the contract never stated (2026-10-12). The service policy
+  // is described next to the field that is subject to it; other endpoints reuse
+  // `passwordSchema` and are not, so the note stays on the register body only.
+  password: passwordSchema.describe(
+    'Transport bound only (1–200 characters). Registration additionally enforces the service '
+    + 'password policy: at least 12 characters, at most 128, and a refusal for a password that is '
+    + 'too common or too similar to the email address (400 AUTH_PASSWORD_POLICY_FAILED).',
+  ),
   invitationCode: invitationCodeSchema,
   displayName: z.string().trim().min(1).max(120).optional(),
   locale: localeSchema,
@@ -56,30 +76,14 @@ export const registerBodySchema = z.strictObject({
 // Registration is intentionally generic: a new account and an existing email
 // return the same accepted outcome so the endpoint is not an enumeration oracle
 // (UF-AUTH-01, SEC-AUTH-04).
+/**
+ * OQ-20 (2026-10-12): registration issues no challenge and sends no email, so the
+ * response carries no delivery and no resend window — a caller cannot infer from it
+ * whether a verification email exists at all. Verification has no endpoint of its
+ * own: the only emailed code is the reset OTP, submitted to `/auth/password/reset`.
+ */
 export const registerResponseSchema = z.strictObject({
   accepted: z.literal(true),
-  resendAvailableAt: instantSchema,
-});
-
-export const resendVerificationBodySchema = z.strictObject({
-  email: emailSchema,
-});
-
-export const resendVerificationResponseSchema = z.strictObject({
-  accepted: z.literal(true),
-  resendAvailableAt: instantSchema,
-});
-
-export const verifyEmailBodySchema = z.strictObject({
-  email: emailSchema,
-  oneTimeCode: otpSchema,
-});
-
-export const verifyEmailResponseSchema = z.strictObject({
-  userId: uuidSchema,
-  status: z.literal('active'),
-  session: authSessionSchema,
-  csrfToken: z.string().min(16).max(256),
 });
 
 export const loginBodySchema = z.strictObject({
@@ -138,7 +142,7 @@ export const passwordResetRequestResponseSchema = z.strictObject({
 
 export const passwordResetBodySchema = z.strictObject({
   email: emailSchema,
-  resetSecret: resetSecretSchema,
+  oneTimeCode: otpSchema,
   newPassword: passwordSchema,
 });
 
@@ -188,7 +192,7 @@ export const securityEventListResponseSchema = z.strictObject({
 export const meResponseSchema = z.strictObject({
   userId: uuidSchema,
   email: z.string().min(3).max(320),
-  status: z.enum(['pending_verification', 'active', 'locked', 'disabled', 'deletion_pending']),
+  status: z.enum(['active', 'locked', 'disabled', 'deletion_pending']),
   emailVerifiedAt: instantSchema.nullable(),
   displayName: z.string().nullable(),
   locale: z.string(),
@@ -223,7 +227,6 @@ export function authResponses(
 
 export type RegisterBody = z.infer<typeof registerBodySchema>;
 export type LoginBody = z.infer<typeof loginBodySchema>;
-export type VerifyEmailBody = z.infer<typeof verifyEmailBodySchema>;
 export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
 export type PasswordResetBody = z.infer<typeof passwordResetBodySchema>;
 export type AuthSession = z.infer<typeof authSessionSchema>;

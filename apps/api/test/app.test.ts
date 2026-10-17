@@ -184,6 +184,7 @@ function service(): FinancialApiService {
       replayed: false,
     })),
     listFinancialAccounts: vi.fn(async () => ({ items: [] })),
+    listCategories: vi.fn(async () => ({ items: [] })),
     getCurrentBalance: vi.fn(async () => ({
       accountId: ACCOUNT_ID,
       currency: 'VND',
@@ -343,6 +344,49 @@ describe('KFin API ownership boundary', () => {
     expect(response.statusCode).toBe(401);
     expect(response.json().error.code).toBe('AUTHENTICATION_REQUIRED');
     expect(financialService.getCurrentBalance).not.toHaveBeenCalled();
+  });
+
+  it('serves categories to an authenticated caller and refuses an anonymous one', async () => {
+    const financialService = service();
+    financialService.listCategories = vi.fn(async () => ({
+      items: [
+        {
+          code: 'income_other',
+          transactionKind: 'income' as const,
+          messageKey: 'category.income_other',
+          defaultExpenseClass: null,
+          displayOrder: 10,
+        },
+        {
+          code: 'rent',
+          transactionKind: 'expense' as const,
+          messageKey: 'category.rent',
+          defaultExpenseClass: 'essential_fixed' as const,
+          displayOrder: 100,
+        },
+      ],
+    }));
+    const app = await buildProtectedTransactionApp({ financialService });
+
+    const response = await app.inject({ method: 'GET', url: '/api/v1/categories' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      items: [
+        { code: 'income_other', transactionKind: 'income', messageKey: 'category.income_other', defaultExpenseClass: null, displayOrder: 10 },
+        { code: 'rent', transactionKind: 'expense', messageKey: 'category.rent', defaultExpenseClass: 'essential_fixed', displayOrder: 100 },
+      ],
+    });
+    // Owner scope comes from the session, never from the request.
+    expect(financialService.listCategories).toHaveBeenCalledWith(USER_ID);
+
+    const anonymous = await buildApp({
+      financialService: service(),
+      authenticate: async () => null,
+    });
+    apps.push(anonymous);
+    const refused = await anonymous.inject({ method: 'GET', url: '/api/v1/categories' });
+    expect(refused.statusCode).toBe(401);
+    expect(refused.json().error.code).toBe('AUTHENTICATION_REQUIRED');
   });
 
   it('derives owner scope from authentication and never from request data', async () => {

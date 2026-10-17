@@ -11,8 +11,6 @@ import {
   registerResponseSchema,
   securityEventListResponseSchema,
   sessionListResponseSchema,
-  verifyEmailBodySchema,
-  verifyEmailResponseSchema,
 } from '../src/index.js';
 
 const SESSION = {
@@ -61,31 +59,30 @@ describe('trusted beta access request contracts', () => {
     })).toThrow();
   });
 
-  it('accepts only the six-digit OTP shape and never a stored presentation alias', () => {
-    expect(verifyEmailBodySchema.parse({
-      email: 'beta.user@example.invalid',
-      oneTimeCode: '012345',
-    })).toEqual({ email: 'beta.user@example.invalid', oneTimeCode: '012345' });
-    expect(() => verifyEmailBodySchema.parse({
-      email: 'beta.user@example.invalid',
-      oneTimeCode: '12345',
-    })).toThrow();
-    expect(() => verifyEmailBodySchema.parse({
-      email: 'beta.user@example.invalid',
-      oneTimeCode: 'verified',
-    })).toThrow();
-  });
-
-  it('accepts a high-entropy reset secret and rejects a short guess', () => {
-    const secret = 'a'.repeat(43);
+  it('accepts only the six-digit OTP shape for password reset', () => {
     expect(passwordResetBodySchema.parse({
       email: 'beta.user@example.invalid',
-      resetSecret: secret,
+      oneTimeCode: '012345',
       newPassword: 'another-good-passphrase',
-    }).resetSecret).toBe(secret);
+    })).toEqual({
+      email: 'beta.user@example.invalid',
+      oneTimeCode: '012345',
+      newPassword: 'another-good-passphrase',
+    });
     expect(() => passwordResetBodySchema.parse({
       email: 'beta.user@example.invalid',
-      resetSecret: 'short',
+      oneTimeCode: '12345',
+      newPassword: 'another-good-passphrase',
+    })).toThrow();
+    expect(() => passwordResetBodySchema.parse({
+      email: 'beta.user@example.invalid',
+      oneTimeCode: 'verified',
+      newPassword: 'another-good-passphrase',
+    })).toThrow();
+    // The retired URL-token field is not an alias the API would still accept.
+    expect(() => passwordResetBodySchema.parse({
+      email: 'beta.user@example.invalid',
+      resetSecret: 'a'.repeat(43),
       newPassword: 'another-good-passphrase',
     })).toThrow();
   });
@@ -101,26 +98,27 @@ describe('trusted beta access request contracts', () => {
 });
 
 describe('trusted beta access response contracts', () => {
-  it('returns no secret-bearing field from registration', () => {
-    const response = registerResponseSchema.parse({
+  it('returns nothing but acceptance from registration (OQ-20)', () => {
+    // No secret, no session, and no resend window: a caller cannot tell a fresh
+    // address from an existing one apart from an already-consumed invitation.
+    const response = registerResponseSchema.parse({ accepted: true });
+    expect(Object.keys(response)).toEqual(['accepted']);
+    expect(() => registerResponseSchema.parse({
       accepted: true,
       resendAvailableAt: '2026-10-08T02:01:00.000Z',
-    });
-    expect(Object.keys(response)).toEqual(['accepted', 'resendAvailableAt']);
+    })).toThrow();
   });
 
   it('exposes the CSRF token once in the body and never the session bearer token', () => {
-    const serialized = JSON.stringify(verifyEmailResponseSchema.parse({
+    const serialized = JSON.stringify(loginResponseSchema.parse({
       userId: '00000000-0000-4000-8000-000000000002',
-      status: 'active',
       session: SESSION,
       csrfToken: 'csrf-token-value-0123456789',
     }));
     expect(serialized).toContain('csrfToken');
     expect(serialized).not.toContain('sessionToken');
-    expect(() => verifyEmailResponseSchema.parse({
+    expect(() => loginResponseSchema.parse({
       userId: '00000000-0000-4000-8000-000000000002',
-      status: 'active',
       session: SESSION,
       csrfToken: 'csrf-token-value-0123456789',
       sessionToken: 'bearer-value',

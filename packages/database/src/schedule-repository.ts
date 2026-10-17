@@ -18,6 +18,7 @@ import {
 } from '@kfin/domain';
 import { assertFinancialAggregateBounds } from './aggregate-bounds.js';
 import { digestCanonicalRequest } from './canonical.js';
+import { withUserContext } from './context.js';
 import {
   AccountFinancialSerializer,
   StableIdempotentFinancialError,
@@ -261,9 +262,9 @@ export class PostgresScheduleRepository {
   }
 
   async getOccurrence(ownerUserId: string, occurrenceId: string): Promise<OccurrenceView> {
-    const result = await this.pool.query<OccurrenceRow>(`${occurrenceSelect}
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<OccurrenceRow>(`${occurrenceSelect}
       WHERE occurrence.user_id = $1 AND occurrence.id = $2
-    `, [ownerUserId, occurrenceId]);
+    `, [ownerUserId, occurrenceId]));
     const row = result.rows[0];
     if (!row) throw unavailableError();
     return this.mapOccurrence(row);
@@ -297,12 +298,12 @@ export class PostgresScheduleRepository {
       filters.push(`(occurrence.due_on, occurrence.id) > ($${values.length - 1}::date, $${values.length}::uuid)`);
     }
     values.push(options.limit + 1);
-    const result = await this.pool.query<OccurrenceRow>(`${occurrenceSelect}
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<OccurrenceRow>(`${occurrenceSelect}
       WHERE occurrence.user_id = $1
       ${filters.length === 0 ? '' : `AND ${filters.join(' AND ')}`}
       ORDER BY occurrence.due_on ASC, occurrence.id ASC
       LIMIT $${values.length}
-    `, values);
+    `, values));
     const hasMore = result.rows.length > options.limit;
     const rows = result.rows.slice(0, options.limit);
     const last = rows.at(-1);
@@ -533,19 +534,16 @@ export class PostgresScheduleRepository {
   }
 
   private async resolveOwnedAccountId(ownerUserId: string): Promise<string> {
-    const result = await this.pool.query<{ id: string }>(
-      'SELECT id FROM financial_accounts WHERE user_id = $1',
-      [ownerUserId],
-    );
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<{ id: string }>('SELECT id FROM financial_accounts WHERE user_id = $1', [ownerUserId]));
     const account = result.rows[0];
     if (!account) throw unavailableError();
     return account.id;
   }
 
   private async resolveOwnedOccurrenceAccount(ownerUserId: string, occurrenceId: string): Promise<string> {
-    const result = await this.pool.query<{ account_id: string }>(`
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<{ account_id: string }>(`
       SELECT account_id FROM scheduled_occurrences WHERE user_id = $1 AND id = $2
-    `, [ownerUserId, occurrenceId]);
+    `, [ownerUserId, occurrenceId]));
     const occurrence = result.rows[0];
     if (!occurrence) throw unavailableError();
     return occurrence.account_id;

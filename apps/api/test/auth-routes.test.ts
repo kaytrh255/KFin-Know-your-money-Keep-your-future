@@ -7,7 +7,6 @@ import type {
   ProfileView,
   RegisterResult,
   SecurityEventPage,
-  VerifyEmailResult,
 } from '@kfin/database';
 import { buildApp, type BuildAppOptions, type FinancialApiService } from '../src/app.js';
 import type { AuthApiService } from '../src/auth-routes.js';
@@ -37,28 +36,8 @@ function issued() {
 
 function authService(overrides: Partial<AuthApiService> = {}): AuthApiService {
   return {
-    register: vi.fn(async (): Promise<RegisterResult> => ({
-      userId: USER_ID,
-      accepted: true,
-      issued: true,
-      resendAvailableAt: '2026-10-08T02:01:00.000Z',
-      delivery: {
-        challengeId: '00000000-0000-4000-8000-00000000000a',
-        oneTimeCode: '123456',
-        expiresAt: '2026-10-08T02:10:00.000Z',
-      },
-    })),
-    resendVerification: vi.fn(async () => ({
-      accepted: true as const,
-      issued: false,
-      resendAvailableAt: '2026-10-08T02:01:00.000Z',
-      delivery: null,
-    })),
-    verifyEmail: vi.fn(async (): Promise<VerifyEmailResult> => ({
-      userId: USER_ID,
-      status: 'active',
-      session: issued(),
-    })),
+    // OQ-20: registration returns acceptance only — no challenge to deliver.
+    register: vi.fn(async (): Promise<RegisterResult> => ({ userId: USER_ID, accepted: true })),
     login: vi.fn(async (): Promise<LoginResult> => ({ userId: USER_ID, session: issued() })),
     logout: vi.fn(async () => true),
     logoutAll: vi.fn(async () => 3),
@@ -69,8 +48,9 @@ function authService(overrides: Partial<AuthApiService> = {}): AuthApiService {
       accepted: true as const,
       issued: true,
       delivery: {
+        userId: USER_ID,
         challengeId: '00000000-0000-4000-8000-00000000000b',
-        resetSecret: 'reset-secret-value-0123456789012345678901',
+        oneTimeCode: '123456',
         expiresAt: '2026-10-08T02:30:00.000Z',
       },
     })),
@@ -147,8 +127,6 @@ describe('trusted beta access routes', () => {
         timezone: 'Asia/Ho_Chi_Minh',
         baseCurrency: 'VND',
       }],
-      ['POST', '/api/v1/auth/verification/resend', { email: 'beta.user@example.invalid' }],
-      ['POST', '/api/v1/auth/verify-email', { email: 'beta.user@example.invalid', oneTimeCode: '123456' }],
       ['POST', '/api/v1/auth/login', { email: 'beta.user@example.invalid', password: 'value' }],
       ['POST', '/api/v1/auth/logout', undefined],
       ['POST', '/api/v1/auth/logout-all', undefined],
@@ -161,7 +139,7 @@ describe('trusted beta access routes', () => {
       ['POST', '/api/v1/auth/password/reset-request', { email: 'beta.user@example.invalid' }],
       ['POST', '/api/v1/auth/password/reset', {
         email: 'beta.user@example.invalid',
-        resetSecret: 'reset-secret-value-0123456789012345678901',
+        oneTimeCode: '123456',
         newPassword: 'a-brand-new-passphrase',
       }],
       ['GET', '/api/v1/auth/security-events', undefined],
@@ -178,7 +156,7 @@ describe('trusted beta access routes', () => {
     }
   });
 
-  it('registers, delivers the OTP once, and returns no secret in the response', async () => {
+  it('answers registration with acceptance only and sends no email (OQ-20)', async () => {
     const email = new RecordingEmailAdapter();
     const { app, service } = await build({ email });
     const response = await app.inject({
@@ -195,44 +173,55 @@ describe('trusted beta access routes', () => {
       },
     });
     expect(response.statusCode).toBe(202);
-    expect(response.json()).toEqual({
-      accepted: true,
-      resendAvailableAt: '2026-10-08T02:01:00.000Z',
-    });
-    expect(email.messages).toHaveLength(1);
-    expect(email.messages[0]).toMatchObject({
-      to: 'beta.user@example.invalid',
-      template: 'email_verification_otp',
-      oneTimeSecret: '123456',
-      correlationId: CORRELATION_ID,
-    });
-    expect(service.recordChallengeDelivery).toHaveBeenCalledWith(
-      '00000000-0000-4000-8000-00000000000a',
-      'delivered',
-      'memory-1',
-    );
+    // Byte-identical to the answer for an address that already exists: the 202 body
+    // is the whole observable outcome (SEC-AUTH-04).
+    expect(response.json()).toEqual({ accepted: true });
+    expect(service.register).toHaveBeenCalledTimes(1);
+    expect(email.messages).toHaveLength(0);
+    expect(service.recordChallengeDelivery).not.toHaveBeenCalled();
     expect(response.body).not.toContain('123456');
   });
 
-  it('records a failed delivery without leaking account state', async () => {
-    const email = new RecordingEmailAdapter({ fail: true });
+  it('delivers the reset OTP once and records a failed delivery without leaking account state', async () => {
+    const email = new RecordingEmailAdapter();
     const { app, service } = await build({ email });
-    const response = await app.inject({
+    const delivered = await app.inject({
       method: 'POST',
-      url: '/api/v1/auth/register',
+      url: '/api/v1/auth/password/reset-request',
       headers: BROWSER_HEADERS,
-      payload: {
-        email: 'beta.user@example.invalid',
-        password: 'correct horse battery staple',
-        invitationCode: 'ABCDEFGH-JKMNPQRS-TVWXYZ23-456789AB',
-        locale: 'vi-VN',
-        timezone: 'Asia/Ho_Chi_Minh',
-        baseCurrency: 'VND',
-      },
+      payload: { email: 'beta.user@example.invalid' },
     });
-    expect(response.statusCode).toBe(202);
+    expect(delivered.statusCode).toBe(200);
+    expect(delivered.json()).toEqual({ accepted: true });
+    expect(email.messages).toHaveLength(1);
+    expect(email.messages[0]).toMatchObject({
+      to: 'beta.user@example.invalid',
+      template: 'password_reset',
+      oneTimeSecret: '123456',
+    });
     expect(service.recordChallengeDelivery).toHaveBeenCalledWith(
-      '00000000-0000-4000-8000-00000000000a',
+      USER_ID,
+      '00000000-0000-4000-8000-00000000000b',
+      'delivered',
+      'memory-1',
+    );
+    expect(delivered.body).not.toContain('123456');
+
+    const failing = new RecordingEmailAdapter({ fail: true });
+    const second = await build({ email: failing });
+    const failed = await second.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/password/reset-request',
+      headers: BROWSER_HEADERS,
+      payload: { email: 'beta.user@example.invalid' },
+    });
+    // A provider failure is invisible in the response: it would otherwise separate
+    // a real address from an unknown one and from a throttled resend.
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json()).toEqual({ accepted: true });
+    expect(second.service.recordChallengeDelivery).toHaveBeenCalledWith(
+      USER_ID,
+      '00000000-0000-4000-8000-00000000000b',
       'failed',
       'memory-failure',
     );
@@ -242,9 +231,9 @@ describe('trusted beta access routes', () => {
     const { app } = await build();
     const response = await app.inject({
       method: 'POST',
-      url: '/api/v1/auth/verify-email',
+      url: '/api/v1/auth/login',
       headers: BROWSER_HEADERS,
-      payload: { email: 'beta.user@example.invalid', oneTimeCode: '123456' },
+      payload: { email: 'beta.user@example.invalid', password: 'value' },
     });
     expect(response.statusCode).toBe(200);
     const setCookies = response.headers['set-cookie'];
@@ -427,7 +416,7 @@ describe('trusted beta access routes', () => {
       headers: BROWSER_HEADERS,
       payload: {
         email: 'beta.user@example.invalid',
-        resetSecret: 'reset-secret-value-0123456789012345678901',
+        oneTimeCode: '123456',
         newPassword: 'a-brand-new-passphrase',
       },
     });

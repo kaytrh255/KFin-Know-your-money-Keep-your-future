@@ -1,0 +1,17 @@
+# The image builds from source and installs its own dependencies.
+.git
+.gitignore
+.github
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+coverage
+.tmp
+tmp
+docs
+*.log
+.env
+.env.*
+# Keep the documented example; it holds no values.
+!.env.example

@@ -14,8 +14,8 @@ An item is in scope only when it is listed here and supported by approved produc
 
 ### 2.1 Account and security
 
-- Registration with a mandatory single-use, expiring Private Beta invitation code; no server-side email-allowlist alternative.
-- Email verification by OTP.
+- Registration with a mandatory single-use, expiring Private Beta invitation code; no server-side email-allowlist alternative. The account is usable immediately by signing in with the chosen credentials, and registration sends no email OTP.
+- Emailed OTP for password reset only; password-reset requests do not reveal whether an address exists.
 - Email/password login.
 - Persistent, revocable authenticated session.
 - Current-session logout and all-session logout.
@@ -104,7 +104,7 @@ An item is in scope only when it is listed here and supported by approved produc
 
 | Capability | Outcome required before Private Beta |
 |---|---|
-| Registration | A person with a valid mandatory single-use expiring invitation code can create and verify one account without revealing arbitrary email/code state; email presence alone never grants admission. |
+| Registration | A person with a valid mandatory single-use expiring invitation code can create one immediately usable account — no email OTP, no email sent, no session issued by registration — and sign in with the credentials just chosen, without revealing arbitrary email/code state; email presence alone never grants admission. |
 | Session | A returning user resumes securely; revoked/expired sessions cannot be replayed. |
 | Account deletion | A verified request is cancellable for 7 days, then active data is purged under the approved map and a restore cannot resurrect it. |
 | Quick expense | A user can record a valid basic expense on one mobile surface with clear success/failure and no duplicate on retry. |

@@ -8,6 +8,7 @@ import {
   validationError,
 } from '@kfin/domain';
 import { digestCanonicalRequest, digestSecret } from './canonical.js';
+import { USER_CONTEXT_SETTING, assertUserId, withUserContext } from './context.js';
 
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -27,12 +28,12 @@ export interface UserRecord {
   readonly locale: string;
   readonly timezone: string;
   readonly baseCurrency: string;
-  readonly status: 'pending_verification' | 'active';
+  readonly status: 'active' | 'locked' | 'disabled' | 'deletion_pending';
 }
 
 export class PostgresUserRepository {
   constructor(
-    private readonly pool: Pick<Pool, 'query'>,
+    private readonly pool: Pick<Pool, 'connect'>,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -56,13 +57,19 @@ export class PostgresUserRepository {
     }
 
     const id = randomUUID();
-    const status = input.emailVerifiedAt ? 'active' : 'pending_verification';
+    // OQ-20 (2026-10-12): registration admits a usable account and records the email
+    // as explicitly unverified, rather than parking the account in a pre-active state.
+    const status = 'active';
+    const emailVerificationState = input.emailVerifiedAt ? 'verified' : 'unverified';
     try {
-      await this.pool.query(`
+      // The row is created under its own owner context: the `users` INSERT
+      // policy requires `id = kfin.user_id`, and the same transaction-local
+      // setting lets a later read of the row inside the same unit of work work.
+      await withUserContext(this.pool, id, (client) => client.query(`
         INSERT INTO users (
           id, email, email_normalized, email_verified_at, display_name,
-          locale, timezone, base_currency, status
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          locale, timezone, base_currency, status, email_verification_state
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       `, [
         id,
         email,
@@ -73,7 +80,8 @@ export class PostgresUserRepository {
         input.timezone,
         input.baseCurrency,
         status,
-      ]);
+        emailVerificationState,
+      ]));
     } catch (error) {
       if (sqlstateOf(error) === '23505') {
         throw new FinancialError({
@@ -191,12 +199,16 @@ export class FinancialAccountBootstrapService {
     ) => queryBefore<Row>(client, text, values, deadline, this.now);
     try {
       await query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await query('SELECT set_config($1, $2, true)', [
+        USER_CONTEXT_SETTING,
+        assertUserId(input.ownerUserId),
+      ]);
       await query("SELECT set_config('lock_timeout', $1, true)", [`${recovery ? 1_900 : 2_000}ms`]);
       await query("SELECT set_config('statement_timeout', $1, true)", [`${recovery ? 1_900 : 5_000}ms`]);
       const userResult = await query<BootstrapUserRow>(`
         SELECT id, timezone, base_currency
         FROM users
-        WHERE id = $1 AND status = 'active' AND email_verified_at IS NOT NULL
+        WHERE id = $1 AND status = 'active'
         FOR UPDATE
       `, [input.ownerUserId]);
       const user = userResult.rows[0];

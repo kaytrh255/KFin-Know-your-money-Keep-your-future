@@ -1,0 +1,10 @@
+# Filled in on the host (or streamed there by the deploy workflow).
+staging.env
+db.env
+migration.env
+*.env
+!*.env.example
+
+# Exported Caddy internal CA and any local TLS material.
+caddy-root.crt
+*.pem

@@ -8,7 +8,6 @@ import {
   challengeAttemptsExhaustedError,
   eventVisibility,
   expiredChallengeError,
-  generateInvitationCode,
   generateNumericOtp,
   generateUrlToken,
   invalidChallengeError,
@@ -32,6 +31,7 @@ import {
   type NormalizedEmail,
 } from '@kfin/domain';
 import { constantTimeBufferEqual, keyedDigest } from './canonical.js';
+import { applyUserContext, withUserContext } from './context.js';
 import { decoyVerification, hashPassword, verifyPassword } from './passwords.js';
 
 /**
@@ -45,7 +45,9 @@ import { decoyVerification, hashPassword, verifyPassword } from './passwords.js'
  *   scopes are stored only as purpose-separated keyed digests;
  * - every unauthenticated outcome is generic, so a missing account, a used
  *   invitation, an expired code, and a wrong password are indistinguishable;
- * - account status and verified-email state are re-checked on every session use;
+ * - account status is re-checked on every session use, and email verification is
+ *   represented but never required: registration admits an account usable and
+ *   explicitly unverified, and the only emailed OTP is the reset OTP (OQ-20);
  * - multi-record transitions run in one transaction (SEC-APP-06).
  *
  * Candidate policy values come from the caller (`authPolicy` in `@kfin/config`).
@@ -74,10 +76,11 @@ export interface AuthAccessPolicy {
     readonly otpLifetimeMs: number;
     readonly maximumAttempts: number;
     readonly resendCooldownMs: number;
-    readonly resetSecretEntropyBytes: number;
-    readonly resetLifetimeMs: number;
     readonly hourlyIssuanceCap: number;
     readonly dailyIssuanceCap: number;
+    /** Cumulative failed-verification budget shared by an account's reset challenges (SEC-AUTH-20). */
+    readonly verifyCumulativeMaximum: number;
+    readonly verifyCumulativeWindowMs: number;
   };
   readonly session: {
     readonly tokenEntropyBytes: number;
@@ -90,13 +93,11 @@ export interface AuthAccessPolicy {
   readonly abuse: {
     readonly windowMs: number;
     readonly loginMaximumFailures: number;
-    readonly verificationMaximumAttempts: number;
     readonly resetMaximumRequests: number;
     readonly registrationMaximumPerWindow: number;
     readonly retentionWindows: number;
   };
 }
-
 export interface AccessRequestContext {
   readonly correlationId: string;
   readonly ipAddress?: string | null;
@@ -124,7 +125,6 @@ export interface IssuedSession {
 }
 
 export type AccountStatus =
-  | 'pending_verification'
   | 'active'
   | 'locked'
   | 'disabled'
@@ -149,20 +149,6 @@ export interface AccessPrincipal {
   readonly csrfDigest: string;
 }
 
-export interface IssueInvitationInput {
-  readonly invitedEmail?: string | null;
-  readonly createdByOperatorId: string;
-  readonly correlationId: string;
-  readonly lifetimeMs?: number;
-}
-
-export interface IssuedInvitation {
-  readonly invitationId: string;
-  /** Plaintext single-use code. Never persisted; returned once for delivery. */
-  readonly code: string;
-  readonly expiresAt: string;
-}
-
 export interface RegisterInput extends AccessRequestContext {
   readonly email: string;
   readonly password: string;
@@ -173,47 +159,16 @@ export interface RegisterInput extends AccessRequestContext {
   readonly baseCurrency: string;
 }
 
-export interface VerificationDelivery {
-  readonly challengeId: string;
-  /** Plaintext OTP held only in request-process memory for immediate delivery. */
-  readonly oneTimeCode: string;
-  readonly expiresAt: string;
-}
-
 /**
  * Registration never reports whether the email already existed: an existing
  * address, a consumed invitation, and a fresh registration all return the same
- * `accepted` outcome (UF-AUTH-01, SEC-AUTH-04).
+ * `accepted` outcome (UF-AUTH-01, SEC-AUTH-04). It also has no delivery to report
+ * and no resend window: registration issues no challenge at all (OQ-20).
  */
 export interface RegisterResult {
   readonly accepted: true;
-  readonly issued: boolean;
-  readonly resendAvailableAt: string;
-  readonly delivery: VerificationDelivery | null;
   /** Null when the registration was not performed; never exposed by the API. */
   readonly userId: string | null;
-}
-
-export interface ResendVerificationInput extends AccessRequestContext {
-  readonly email: string;
-}
-
-export interface ResendVerificationResult {
-  readonly accepted: true;
-  readonly issued: boolean;
-  readonly resendAvailableAt: string;
-  readonly delivery: VerificationDelivery | null;
-}
-
-export interface VerifyEmailInput extends AccessRequestContext {
-  readonly email: string;
-  readonly oneTimeCode: string;
-}
-
-export interface VerifyEmailResult {
-  readonly userId: string;
-  readonly status: 'active';
-  readonly session: IssuedSession;
 }
 
 export interface LoginInput extends AccessRequestContext {
@@ -251,12 +206,18 @@ export interface RequestPasswordResetInput extends AccessRequestContext {
 export interface RequestPasswordResetResult {
   readonly accepted: true;
   readonly issued: boolean;
-  readonly delivery: { readonly challengeId: string; readonly resetSecret: string; readonly expiresAt: string } | null;
+  readonly delivery: {
+    readonly userId: string;
+    readonly challengeId: string;
+    readonly oneTimeCode: string;
+    readonly expiresAt: string;
+  } | null;
 }
 
 export interface ResetPasswordInput extends AccessRequestContext {
   readonly email: string;
-  readonly resetSecret: string;
+  /** The six-digit OTP delivered by mail, verified against the stored digest. */
+  readonly oneTimeCode: string;
   readonly newPassword: string;
 }
 
@@ -353,35 +314,14 @@ export class PostgresAuthRepository {
   }
 
   /**
-   * Operator-audited invitation provisioning. There is deliberately no HTTP
-   * route: codes reach users through the reviewed operator channel only
-   * (DATABASE §4.2, SEC-AUTH-14).
+   * Registration admits an account on the invitation code alone (OQ-20, SEC-AUTH-18).
+   *
+   * The account is created usable — `status = 'active'` — while its email stays
+   * explicitly `unverified`. Registration issues no challenge and sends no email:
+   * the only emailed OTP in the product is the password-reset OTP, so registration
+   * cannot be used as a delivery oracle (SEC-AUTH-04) and no identifier exists that
+   * a later step could present as a verification that never happened (SEC-AUTH-19).
    */
-  async issueInvitation(input: IssueInvitationInput): Promise<IssuedInvitation> {
-    const invitationId = randomUUID();
-    const code = generateInvitationCode(
-      this.options.policy.invitation.codeEntropyBytes,
-      this.options.policy.invitation.codeGroupLength,
-    );
-    const expiresAt = new Date(this.now() + (input.lifetimeMs ?? this.options.policy.invitation.defaultLifetimeMs));
-    const invitedEmail = input.invitedEmail ? normalizeEmail(input.invitedEmail) : null;
-    if (input.invitedEmail && !invitedEmail) throw authValidationError('The invited email address is invalid.');
-    await this.pool.query(
-      `INSERT INTO beta_invitations (
-         id, code_digest, invited_email_normalized, expires_at, created_by_operator_id, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        invitationId,
-        this.digest('invitation-code', normalizeInvitationCode(code)),
-        invitedEmail?.emailNormalized ?? null,
-        expiresAt,
-        input.createdByOperatorId,
-        new Date(this.now()),
-      ],
-    );
-    return { invitationId, code, expiresAt: expiresAt.toISOString() };
-  }
-
   async register(input: RegisterInput): Promise<RegisterResult> {
     const email = this.requireEmail(input.email);
     this.assertPassword(input.password, email);
@@ -401,9 +341,7 @@ export class PostgresAuthRepository {
 
       const invitation = await client.query<{ id: string; status: string; expires_at: Date; invited_email_normalized: string | null }>(
         `SELECT id, status, expires_at, invited_email_normalized
-           FROM beta_invitations
-          WHERE code_digest = $1
-          FOR UPDATE`,
+           FROM kfin_invitation_lookup($1)`,
         [this.digest('invitation-code', normalizeInvitationCode(input.invitationCode))],
       );
       const invitationRow = invitation.rows[0];
@@ -424,12 +362,15 @@ export class PostgresAuthRepository {
       }
 
       const userId = randomUUID();
-      const resendAvailableAt = new Date(now + this.options.policy.challenge.resendCooldownMs).toISOString();
       try {
+        // Registration creates the owner row under its own context: the
+        // `users` INSERT policy requires `id = kfin.user_id`.
+        await applyUserContext(client, userId);
         await client.query(
           `INSERT INTO users (
-             id, email, email_normalized, display_name, locale, timezone, base_currency, status
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending_verification')`,
+             id, email, email_normalized, display_name, locale, timezone, base_currency,
+             status, email_verification_state
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', 'unverified')`,
           [
             userId,
             email.email,
@@ -446,16 +387,17 @@ export class PostgresAuthRepository {
         // The invitation consumption is rolled back with the insert, so a
         // duplicate email leaves nothing behind and answers generically.
         await this.recordBlockedRegistration(client, input, now);
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null, userId: null };
+        return { accepted: true, userId: null };
       }
 
       const consumedAt = new Date(now);
-      await client.query(
-        `UPDATE beta_invitations
-            SET status = 'consumed', consumed_at = $2, consumed_by_user_id = $3
-          WHERE id = $1`,
-        [invitationRow.id, consumedAt, userId],
+      const consumed = await client.query<{ consumed: boolean }>(
+        'SELECT kfin_consume_invitation($1, $2, $3, $4) AS consumed',
+        [invitationRow.id, userId, email.emailNormalized, consumedAt],
       );
+      // Concurrent or replayed use loses the conditional UPDATE; the whole
+      // registration (including the user row) then rolls back.
+      if (consumed.rows[0]?.consumed !== true) throw invalidInvitationError();
 
       await client.query(
         `INSERT INTO password_credentials (
@@ -469,14 +411,6 @@ export class PostgresAuthRepository {
         ],
       );
 
-      const delivery = await this.issueChallenge(client, {
-        userId,
-        purpose: 'email_verification',
-        target: email.emailNormalized,
-        context: input,
-        now,
-      });
-
       await this.recordEvent(client, {
         userId,
         eventType: 'registration_requested',
@@ -486,273 +420,9 @@ export class PostgresAuthRepository {
         occurredAt: new Date(now),
         metadata: { invitationId: invitationRow.id },
       });
-      await this.recordEvent(client, {
-        userId,
-        eventType: 'verification_challenge_issued',
-        outcome: 'success',
-        correlationId: input.correlationId,
-        context: input,
-        occurredAt: new Date(now),
-        metadata: { challengeId: delivery.challengeId, purpose: 'email_verification' },
-      });
 
       await client.query('COMMIT');
-      return { accepted: true, issued: true, resendAvailableAt, delivery, userId };
-    } catch (error) {
-      await this.safeRollback(client, error);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async resendVerification(input: ResendVerificationInput): Promise<ResendVerificationResult> {
-    const email = normalizeEmail(input.email);
-    const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
-    const now = this.now();
-    // Abuse evidence is recorded before the operation connection is taken:
-    // a nested checkout would make an exhausted pool wait on the very
-    // transactions that are waiting for it (SEC-ABUSE-08/09).
-    await this.registerAbuseAttempt('verification_target', target, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-      target,
-    });
-    await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-    });
-
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      const resendAvailableAt = new Date(now + this.options.policy.challenge.resendCooldownMs).toISOString();
-      if (!email) {
-        await this.recordEvent(client, {
-          userId: null,
-          eventType: 'verification_challenge_issued',
-          outcome: 'blocked',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          metadata: { reason: 'invalid_target' },
-        });
-        await client.query('COMMIT');
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null };
-      }
-
-      const user = await client.query<{ id: string; status: string; email_verified_at: Date | null }>(
-        `SELECT id, status, email_verified_at FROM users WHERE email_normalized = $1`,
-        [email.emailNormalized],
-      );
-      const userRow = user.rows[0];
-      if (!userRow || userRow.email_verified_at !== null || userRow.status === 'deletion_pending') {
-        await client.query('COMMIT');
-        // Unknown, already-verified, and unavailable accounts receive the same
-        // generic accepted response (SEC-AUTH-04).
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null };
-      }
-
-      const active = await client.query<ChallengeRow>(
-        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
-                consumed_at, superseded_at, attempt_count, max_attempts
-           FROM auth_challenges
-          WHERE user_id = $1 AND purpose = 'email_verification'
-            AND consumed_at IS NULL AND superseded_at IS NULL
-          ORDER BY issued_at DESC
-          LIMIT 1
-          FOR UPDATE`,
-        [userRow.id],
-      );
-      const activeRow = active.rows[0];
-      if (
-        activeRow
-        && activeRow.issued_at.getTime() + this.options.policy.challenge.resendCooldownMs > now
-      ) {
-        await client.query('COMMIT');
-        return {
-          accepted: true,
-          issued: false,
-          resendAvailableAt: new Date(
-            activeRow.issued_at.getTime() + this.options.policy.challenge.resendCooldownMs,
-          ).toISOString(),
-          delivery: null,
-        };
-      }
-      if (!(await this.withinIssuanceCap(client, userRow.id, now))) {
-        await client.query('COMMIT');
-        return { accepted: true, issued: false, resendAvailableAt, delivery: null };
-      }
-
-      const delivery = await this.issueChallenge(client, {
-        userId: userRow.id,
-        purpose: 'email_verification',
-        target: email.emailNormalized,
-        context: input,
-        now,
-      });
-      await this.recordEvent(client, {
-        userId: userRow.id,
-        eventType: 'verification_challenge_issued',
-        outcome: 'success',
-        correlationId: input.correlationId,
-        context: input,
-        occurredAt: new Date(now),
-        metadata: { challengeId: delivery.challengeId, purpose: 'email_verification', resend: true },
-      });
-      await client.query('COMMIT');
-      return {
-        accepted: true,
-        issued: true,
-        resendAvailableAt: new Date(now + this.options.policy.challenge.resendCooldownMs).toISOString(),
-        delivery,
-      };
-    } catch (error) {
-      await this.safeRollback(client, error);
-      throw error;
-    } finally {
-      client.release();
-    }
-  }
-
-  async verifyEmail(input: VerifyEmailInput): Promise<VerifyEmailResult> {
-    const email = this.requireEmail(input.email);
-    const now = this.now();
-    // Abuse evidence is recorded before the operation connection is taken:
-    // a nested checkout would make an exhausted pool wait on the very
-    // transactions that are waiting for it (SEC-ABUSE-08/09).
-    await this.registerAbuseAttempt('verification_target', email.emailNormalized, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-      target: email.emailNormalized,
-    });
-    await this.registerAbuseAttempt('verification_ip', input.ipAddress ?? null, now, {
-      limit: this.options.policy.abuse.verificationMaximumAttempts,
-    });
-
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      const challengeResult = await client.query<ChallengeRow>(
-        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
-                consumed_at, superseded_at, attempt_count, max_attempts
-           FROM auth_challenges
-          WHERE purpose = 'email_verification'
-            AND target_digest = $1
-            AND consumed_at IS NULL
-            AND superseded_at IS NULL
-          ORDER BY issued_at DESC
-          LIMIT 1
-          FOR UPDATE`,
-        [this.digest('challenge-target:email_verification', email.emailNormalized)],
-      );
-      const challenge = challengeResult.rows[0];
-      if (!challenge) {
-        await this.recordFailureAndCommit(client, {
-          userId: null,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'no_active_challenge' },
-        });
-        throw invalidChallengeError();
-      }
-      if (challenge.expires_at.getTime() <= now) {
-        await client.query(
-          `UPDATE auth_challenges SET superseded_at = $2 WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`,
-          [challenge.id, new Date(now)],
-        );
-        await this.recordFailureAndCommit(client, {
-          userId: challenge.user_id,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'expired' },
-        });
-        throw expiredChallengeError();
-      }
-      if (challenge.attempt_count >= challenge.max_attempts) {
-        await this.recordFailureAndCommit(client, {
-          userId: challenge.user_id,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'attempts_exhausted' },
-        });
-        throw challengeAttemptsExhaustedError();
-      }
-
-      const presented = this.digest(
-        'challenge-secret:email_verification',
-        input.oneTimeCode.trim(),
-      );
-      if (!constantTimeBufferEqual(presented, challenge.secret_digest)) {
-        await client.query(
-          `UPDATE auth_challenges SET attempt_count = attempt_count + 1 WHERE id = $1`,
-          [challenge.id],
-        );
-        await this.recordFailureAndCommit(client, {
-          userId: challenge.user_id,
-          eventType: 'verification_challenge_failed',
-          correlationId: input.correlationId,
-          context: input,
-          occurredAt: new Date(now),
-          target: email.emailNormalized,
-          metadata: { reason: 'mismatch', attemptCount: challenge.attempt_count + 1 },
-        });
-        throw invalidChallengeError();
-      }
-
-      const consumedAt = new Date(now);
-      await client.query(
-        `UPDATE auth_challenges SET consumed_at = $2 WHERE id = $1 AND consumed_at IS NULL`,
-        [challenge.id, consumedAt],
-      );
-
-      const userResult = await client.query<{ id: string; status: string; email_verified_at: Date | null }>(
-        `SELECT id, status, email_verified_at FROM users WHERE id = $1 FOR UPDATE`,
-        [challenge.user_id],
-      );
-      const user = userResult.rows[0];
-      if (!user) {
-        await this.rollback(client);
-        throw invalidChallengeError();
-      }
-      await client.query(
-        `UPDATE users
-            SET email_verified_at = $2,
-                status = CASE WHEN status = 'pending_verification' THEN 'active' ELSE status END,
-                updated_at = $2,
-                version = version + 1
-          WHERE id = $1`,
-        [user.id, consumedAt],
-      );
-
-      // SPEC-AUTH-01 candidate branch selected for this milestone: verification
-      // issues one fresh rotated session. No pre-authenticated identifier exists
-      // and none can be promoted (SEC-AUTH-10/16).
-      const session = await this.createSession(client, {
-        userId: user.id,
-        context: input,
-        now,
-      });
-      await this.recordEvent(client, {
-        userId: user.id,
-        eventType: 'email_verified',
-        outcome: 'success',
-        correlationId: input.correlationId,
-        context: input,
-        occurredAt: consumedAt,
-        sessionId: session.session.id,
-        metadata: { challengeId: challenge.id },
-      });
-      await client.query('COMMIT');
-      return { userId: user.id, status: 'active', session };
+      return { accepted: true, userId };
     } catch (error) {
       await this.safeRollback(client, error);
       throw error;
@@ -779,15 +449,16 @@ export class PostgresAuthRepository {
     try {
       await client.query('BEGIN');
 
-      const userResult = await client.query<UserAuthRow>(
-        `SELECT u.id, u.status, u.email_verified_at, c.password_hash
-           FROM users u
-           LEFT JOIN password_credentials c ON c.user_id = u.id
-          WHERE u.email_normalized = $1`,
+      const accountResult = await client.query<{
+        user_id: string;
+        status: string;
+        email_verified_at: Date | null;
+      }>(
+        'SELECT user_id, status, email_verified_at FROM kfin_account_lookup($1)',
         [email.emailNormalized],
       );
-      const user = userResult.rows[0];
-      if (!user || !user.password_hash) {
+      const account = accountResult.rows[0];
+      if (!account) {
         // Equalize work for unknown accounts without revealing existence.
         await decoyVerification(normalizePassword(input.password), this.hashPolicy);
         await this.recordFailureAndCommit(client, {
@@ -801,6 +472,33 @@ export class PostgresAuthRepository {
         });
         throw invalidCredentialsError();
       }
+      // The lookup returns no secret. Once the owner is known the credential is
+      // read under the `password_credentials` owner policy.
+      await applyUserContext(client, account.user_id);
+      const credentialResult = await client.query<{ password_hash: string }>(
+        'SELECT password_hash FROM password_credentials WHERE user_id = $1',
+        [account.user_id],
+      );
+      const passwordHash = credentialResult.rows[0]?.password_hash;
+      if (!passwordHash) {
+        await decoyVerification(normalizePassword(input.password), this.hashPolicy);
+        await this.recordFailureAndCommit(client, {
+          userId: account.user_id,
+          eventType: 'login_failed',
+          correlationId: input.correlationId,
+          context: input,
+          occurredAt: new Date(now),
+          target: email.emailNormalized,
+          metadata: { reason: 'invalid_credentials' },
+        });
+        throw invalidCredentialsError();
+      }
+      const user = {
+        id: account.user_id,
+        status: account.status,
+        email_verified_at: account.email_verified_at,
+        password_hash: passwordHash,
+      };
 
       const verification = await verifyPassword(
         user.password_hash,
@@ -820,7 +518,12 @@ export class PostgresAuthRepository {
         throw invalidCredentialsError();
       }
 
-      if (user.status !== 'active' || user.email_verified_at === null) {
+      // OQ-20: a verified email is no longer a sign-in gate. Registration verifies
+      // nothing, so demanding verification would lock every beta account out of its
+      // own account. Account *status* remains a hard gate, and the refusal stays
+      // operator-only evidence rather than a self-service path: a locked, disabled,
+      // or deletion-pending account cannot be recovered by signing in (D4).
+      if (user.status !== 'active') {
         await this.recordFailureAndCommit(client, {
           userId: user.id,
           eventType: 'access_denied_unverified',
@@ -828,7 +531,7 @@ export class PostgresAuthRepository {
           context: input,
           occurredAt: new Date(now),
           target: email.emailNormalized,
-          metadata: { reason: 'account_unavailable' },
+          metadata: { reason: 'account_unavailable', accountStatus: user.status },
         });
         throw accountUnavailableError();
       }
@@ -876,62 +579,89 @@ export class PostgresAuthRepository {
   async authenticate(token: string | null | undefined): Promise<AccessPrincipal | null> {
     if (!token || token.length < 16) return null;
     const now = this.now();
-    const result = await this.pool.query<SessionRow>(
-      `SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
-              s.absolute_expires_at, s.device_label, s.revoked_at, s.csrf_digest,
-              t.retired_at AS token_retired_at, t.grace_expires_at AS token_grace_expires_at,
-              t.generation, u.status AS user_status, u.email_verified_at
-         FROM session_tokens t
-         JOIN sessions s ON s.id = t.session_id
-         JOIN users u ON u.id = s.user_id
-        WHERE t.token_digest = $1
-        LIMIT 1`,
-      [this.digest('session-token', token)],
-    );
-    const row = result.rows[0];
-    if (!row) return null;
-
-    if (row.revoked_at !== null) return null;
-
-    if (row.token_retired_at !== null) {
-      const withinGrace = row.token_grace_expires_at !== null
-        && row.token_grace_expires_at.getTime() > now;
-      if (!withinGrace) {
-        await this.containReplay(row.id, now);
+    const client = await this.pool.connect();
+    let began = false;
+    try {
+      await client.query('BEGIN');
+      began = true;
+      const result = await client.query<SessionRow>(
+        `SELECT id, user_id, client_type, created_at, last_seen_at, idle_expires_at,
+                absolute_expires_at, device_label, revoked_at, csrf_digest,
+                token_retired_at, token_grace_expires_at, generation,
+                user_status, email_verified_at
+           FROM kfin_token_lookup($1)`,
+        [this.digest('session-token', token)],
+      );
+      const row = result.rows[0];
+      if (!row) {
+        await client.query('COMMIT');
         return null;
       }
-    }
-    if (row.absolute_expires_at.getTime() <= now || row.idle_expires_at.getTime() <= now) {
-      await this.expireSession(row.id, now);
-      return null;
-    }
-    if (row.user_status !== 'active' || row.email_verified_at === null) return null;
+      // The token lookup is the only pre-identity read in this method. Every
+      // later statement runs under the resolved owner's context.
+      await applyUserContext(client, row.user_id);
 
-    if (now - row.last_seen_at.getTime() >= this.options.policy.session.lastSeenThrottleMs) {
-      await this.pool.query(
-        `UPDATE sessions
-            SET last_seen_at = $2,
-                idle_expires_at = $3,
-                version = version + 1
-          WHERE id = $1 AND revoked_at IS NULL`,
-        [
-          row.id,
-          new Date(now),
-          new Date(clampIdleExpiry(
-            now,
-            this.options.policy.session.idleLifetimeMs,
-            row.absolute_expires_at,
-          )),
-        ],
-      );
-    }
+      if (row.revoked_at !== null) {
+        await client.query('COMMIT');
+        return null;
+      }
 
-    return {
-      userId: row.user_id,
-      sessionId: row.id,
-      sessionGeneration: row.generation,
-      csrfDigest: row.csrf_digest.toString('hex'),
-    };
+      if (row.token_retired_at !== null) {
+        const withinGrace = row.token_grace_expires_at !== null
+          && row.token_grace_expires_at.getTime() > now;
+        if (!withinGrace) {
+          await client.query('COMMIT');
+          await this.containReplay(row.id, row.user_id, now);
+          return null;
+        }
+      }
+      if (row.absolute_expires_at.getTime() <= now || row.idle_expires_at.getTime() <= now) {
+        await client.query('COMMIT');
+        await this.expireSession(row.id, row.user_id, now);
+        return null;
+      }
+      // OQ-20: verification state is not a session gate. Sessions are granted by
+      // sign-in, reused while the account is active, and dropped the moment the
+      // account leaves `active` (SEC-SES-04/05, SEC-AUTH-19).
+      if (row.user_status !== 'active') {
+        await client.query('COMMIT');
+        return null;
+      }
+
+      if (now - row.last_seen_at.getTime() >= this.options.policy.session.lastSeenThrottleMs) {
+        await client.query(
+          `UPDATE sessions
+              SET last_seen_at = $2,
+                  idle_expires_at = $3,
+                  version = version + 1
+            WHERE id = $1 AND revoked_at IS NULL`,
+          [
+            row.id,
+            new Date(now),
+            new Date(clampIdleExpiry(
+              now,
+              this.options.policy.session.idleLifetimeMs,
+              row.absolute_expires_at,
+            )),
+          ],
+        );
+      }
+
+      await client.query('COMMIT');
+      return {
+        userId: row.user_id,
+        sessionId: row.id,
+        sessionGeneration: row.generation,
+        csrfDigest: row.csrf_digest.toString('hex'),
+      };
+    } catch (error) {
+      if (began) {
+        try { await client.query('ROLLBACK'); } catch { /* preserve the original failure */ }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   /** Verifies a presented CSRF token against the digest bound to a session. */
@@ -943,9 +673,8 @@ export class PostgresAuthRepository {
     );
   }
 
-  async logout(sessionId: string, input: AccessRequestContext): Promise<boolean> {
-    return this.withTransaction(async (client) => {
-      const userId = await this.userIdForSession(sessionId, client);
+  async logout(userId: string, sessionId: string, input: AccessRequestContext): Promise<boolean> {
+    return this.withTransaction(userId, async (client) => {
       const revoked = await this.revokeSessionRows(client, {
         userId,
         exceptSessionId: null,
@@ -977,7 +706,7 @@ export class PostgresAuthRepository {
    * sessions actually revoked, current one included (SEC-SES-06/08).
    */
   async logoutAll(userId: string, input: AccessRequestContext): Promise<number> {
-    return this.withTransaction(async (client) => {
+    return this.withTransaction(userId, async (client) => {
       const revoked = await this.revokeSessionRows(client, {
         userId,
         exceptSessionId: null,
@@ -1004,8 +733,8 @@ export class PostgresAuthRepository {
   ): Promise<SessionPage> {
     const limit = Math.min(Math.max(options.limit, 1), 100);
     const cursor = decodeSessionCursor(options.cursor);
-    const result = await this.pool.query<SessionRow>(
-      `SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
+    const result = await withUserContext(this.pool, userId, (client) => client.query<SessionRow>(`
+      SELECT s.id, s.user_id, s.client_type, s.created_at, s.last_seen_at, s.idle_expires_at,
               s.absolute_expires_at, s.device_label, s.revoked_at, s.csrf_digest,
               NULL::timestamptz AS token_retired_at, NULL::timestamptz AS token_grace_expires_at,
               0 AS generation, u.status AS user_status, u.email_verified_at
@@ -1015,14 +744,12 @@ export class PostgresAuthRepository {
           AND s.revoked_at IS NULL
           AND (s.created_at, s.id) < ($2::timestamptz, $3::uuid)
         ORDER BY s.created_at DESC, s.id DESC
-        LIMIT $4`,
-      [
+        LIMIT $4`, [
         userId,
         cursor ? new Date(cursor.createdAt) : 'infinity',
         cursor ? cursor.id : 'ffffffff-ffff-4fff-bfff-ffffffffffff',
         limit + 1,
-      ],
-    );
+      ]));
     const rows = result.rows.slice(0, limit);
     const hasMore = result.rows.length > limit;
     const last = rows.at(-1);
@@ -1048,7 +775,7 @@ export class PostgresAuthRepository {
     sessionId: string,
     input: AccessRequestContext,
   ): Promise<boolean> {
-    return this.withTransaction(async (client) => {
+    return this.withTransaction(userId, async (client) => {
       const revoked = await this.revokeSessionRows(client, {
         userId,
         exceptSessionId: null,
@@ -1075,7 +802,7 @@ export class PostgresAuthRepository {
     const email = await this.emailForUser(input.userId);
     this.assertPassword(input.newPassword, email ?? undefined);
     const now = this.now();
-    return this.withTransaction(async (client) => {
+    return this.withTransaction(input.userId, async (client) => {
       const credential = await client.query<UserAuthRow>(
         `SELECT u.id, u.status, u.email_verified_at, c.password_hash
            FROM users u
@@ -1144,6 +871,16 @@ export class PostgresAuthRepository {
     });
   }
 
+  /**
+   * Issues the single-use password-reset OTP (OQ-20, SEC-AUTH-20).
+   *
+   * Eligibility is `status = 'active'` alone. If a verified email were required, an
+   * invited beta account that legitimately never verifies could never recover its
+   * own password; if a *missing* account were treated differently, this route would
+   * be an account-existence oracle. Unknown address, non-active account, cooldown,
+   * and issuance cap therefore all return the same `accepted` body with no
+   * challenge issued and no mail queued (SEC-AUTH-04, TM-03).
+   */
   async requestPasswordReset(input: RequestPasswordResetInput): Promise<RequestPasswordResetResult> {
     const email = normalizeEmail(input.email);
     const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
@@ -1151,9 +888,12 @@ export class PostgresAuthRepository {
     // Abuse evidence is recorded before the operation connection is taken:
     // a nested checkout would make an exhausted pool wait on the very
     // transactions that are waiting for it (SEC-ABUSE-08/09).
+    // F-3: the target-scoped counters are keyed by (target, caller network) so that
+    // one network cannot spend another person's budget — see `targetNetworkKey`.
     await this.registerAbuseAttempt('reset_target', target, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
-      target,
+      target: this.targetNetworkKey(target, input.ipAddress),
+      onExhausted: (info) => this.recordBudgetExhausted(info, input, target),
     });
     await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
@@ -1167,19 +907,46 @@ export class PostgresAuthRepository {
         await client.query('COMMIT');
         return { accepted: true, issued: false, delivery: null };
       }
-      const userResult = await client.query<{ id: string; status: string; email_verified_at: Date | null }>(
-        `SELECT id, status, email_verified_at FROM users WHERE email_normalized = $1`,
+      const userResult = await client.query<{ id: string; status: string }>(
+        `SELECT user_id AS id, status FROM kfin_account_lookup($1)`,
         [email.emailNormalized],
       );
       const user = userResult.rows[0];
-      if (!user || user.status !== 'active' || user.email_verified_at === null) {
+      if (!user || user.status !== 'active') {
+        await client.query('COMMIT');
+        return { accepted: true, issued: false, delivery: null };
+      }
+      await applyUserContext(client, user.id);
+
+      const active = await client.query<ChallengeRow>(
+        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
+                consumed_at, superseded_at, attempt_count, max_attempts
+           FROM auth_challenges
+          WHERE user_id = $1 AND purpose = 'password_reset'
+            AND consumed_at IS NULL AND superseded_at IS NULL
+          ORDER BY issued_at DESC
+          LIMIT 1
+          FOR UPDATE`,
+        [user.id],
+      );
+      const activeRow = active.rows[0];
+      if (
+        activeRow
+        && activeRow.issued_at.getTime() + this.options.policy.challenge.resendCooldownMs > now
+      ) {
+        // A live challenge inside the cooldown is not re-sent and not replaced;
+        // the caller cannot tell this apart from an unknown address.
+        await client.query('COMMIT');
+        return { accepted: true, issued: false, delivery: null };
+      }
+      if (!(await this.withinIssuanceCap(client, user.id, now))) {
         await client.query('COMMIT');
         return { accepted: true, issued: false, delivery: null };
       }
 
       const challengeId = randomUUID();
-      const resetSecret = generateUrlToken(this.options.policy.challenge.resetSecretEntropyBytes);
-      const expiresAt = new Date(now + this.options.policy.challenge.resetLifetimeMs);
+      const oneTimeCode = generateNumericOtp(this.options.policy.challenge.otpDigits);
+      const expiresAt = new Date(now + this.options.policy.challenge.otpLifetimeMs);
       await this.supersedeActiveChallenges(client, user.id, 'password_reset', now);
       await client.query(
         `INSERT INTO auth_challenges (
@@ -1190,7 +957,7 @@ export class PostgresAuthRepository {
           challengeId,
           user.id,
           this.digest('challenge-target:password_reset', email.emailNormalized),
-          this.digest('challenge-secret:password_reset', resetSecret),
+          this.digest('challenge-secret:password_reset', oneTimeCode),
           new Date(now),
           expiresAt,
           this.options.policy.challenge.maximumAttempts,
@@ -1211,7 +978,7 @@ export class PostgresAuthRepository {
       return {
         accepted: true,
         issued: true,
-        delivery: { challengeId, resetSecret, expiresAt: expiresAt.toISOString() },
+        delivery: { userId: user.id, challengeId, oneTimeCode, expiresAt: expiresAt.toISOString() },
       };
     } catch (error) {
       await this.safeRollback(client, error);
@@ -1221,6 +988,17 @@ export class PostgresAuthRepository {
     }
   }
 
+  /**
+   * Consumes one reset OTP: verifies it, writes the new password hash, and revokes
+   * every session of the account (ADR-004, PRD-AUTH-07); it issues none.
+   *
+   * Order matters for security and for privacy. The cumulative failure budget is
+   * spent *before* any challenge is read, so an address with no account is
+   * throttled exactly like one with an account and the limit never becomes an
+   * existence oracle (SEC-AUTH-04, SEC-AUTH-20, TM-03). The budget is deliberately
+   * not refunded on success: "spend first, then look" is what keeps the two
+   * indistinguishable.
+   */
   async resetPassword(input: ResetPasswordInput): Promise<ResetPasswordResult> {
     const email = normalizeEmail(input.email);
     const target = email?.emailNormalized ?? input.email.trim().toLowerCase();
@@ -1228,12 +1006,24 @@ export class PostgresAuthRepository {
     // Abuse evidence is recorded before the operation connection is taken:
     // a nested checkout would make an exhausted pool wait on the very
     // transactions that are waiting for it (SEC-ABUSE-08/09).
+    // F-3: both target-scoped counters below are keyed by (target, caller network).
     await this.registerAbuseAttempt('reset_target', target, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
-      target,
+      target: this.targetNetworkKey(target, input.ipAddress),
+      onExhausted: (info) => this.recordBudgetExhausted(info, input, target),
     });
     await this.registerAbuseAttempt('reset_ip', input.ipAddress ?? null, now, {
       limit: this.options.policy.abuse.resetMaximumRequests,
+    });
+    // Cumulative budget: superseded challenges share one per-account counter, so
+    // requesting a new code cannot reset the attacker's attempts to zero
+    // (SEC-AUTH-20). Scope `verification_target` is the one this counter has always
+    // used in `auth_attempt_counters`; it is now the only writer of that scope.
+    await this.registerAbuseAttempt('verification_target', target, now, {
+      limit: this.options.policy.challenge.verifyCumulativeMaximum,
+      windowMs: this.options.policy.challenge.verifyCumulativeWindowMs,
+      target: this.targetNetworkKey(target, input.ipAddress),
+      onExhausted: (info) => this.recordBudgetExhausted(info, input, target),
     });
 
     const client = await this.pool.connect();
@@ -1243,20 +1033,38 @@ export class PostgresAuthRepository {
       const challengeResult = await client.query<ChallengeRow>(
         `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
                 consumed_at, superseded_at, attempt_count, max_attempts
-           FROM auth_challenges
-          WHERE purpose = 'password_reset'
-            AND target_digest = $1
-            AND consumed_at IS NULL
-            AND superseded_at IS NULL
-          ORDER BY issued_at DESC
-          LIMIT 1
-          FOR UPDATE`,
+           FROM kfin_reset_challenge_lookup($1)`,
         [this.digest('challenge-target:password_reset', target)],
       );
-      const challenge = challengeResult.rows[0];
-      if (!challenge) {
+      const lookup = challengeResult.rows[0];
+      if (!lookup?.user_id) {
         await this.recordFailureAndCommit(client, {
           userId: null,
+          eventType: 'password_reset_failed',
+          correlationId: input.correlationId,
+          context: input,
+          occurredAt: new Date(now),
+          target,
+          metadata: { reason: 'no_active_challenge' },
+        });
+        throw invalidChallengeError();
+      }
+      // The digest lookup is the only pre-identity read. The real row is then
+      // locked under the account's context so attempt accounting stays
+      // serialized; a row consumed between the two reads is treated as absent.
+      await applyUserContext(client, lookup.user_id);
+      const lockedResult = await client.query<ChallengeRow>(
+        `SELECT id, user_id, purpose, secret_digest, issued_at, expires_at,
+                consumed_at, superseded_at, attempt_count, max_attempts
+           FROM auth_challenges
+          WHERE id = $1 AND user_id = $2
+          FOR UPDATE`,
+        [lookup.id, lookup.user_id],
+      );
+      const challenge = lockedResult.rows[0];
+      if (!challenge) {
+        await this.recordFailureAndCommit(client, {
+          userId: lookup.user_id,
           eventType: 'password_reset_failed',
           correlationId: input.correlationId,
           context: input,
@@ -1283,6 +1091,14 @@ export class PostgresAuthRepository {
         throw expiredChallengeError();
       }
       if (challenge.attempt_count >= challenge.max_attempts) {
+        // The per-challenge attempt cap and the cumulative budget are separate
+        // limits: this one retires *this* code, the budget retires the hour. A
+        // superseded challenge can never be revived, so the owner must request a
+        // fresh code — itself capped and cooled down (SEC-AUTH-20).
+        await client.query(
+          `UPDATE auth_challenges SET superseded_at = $2 WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`,
+          [challenge.id, new Date(now)],
+        );
         await this.recordFailureAndCommit(client, {
           userId: challenge.user_id,
           eventType: 'password_reset_failed',
@@ -1295,7 +1111,7 @@ export class PostgresAuthRepository {
         throw challengeAttemptsExhaustedError();
       }
 
-      const presented = this.digest('challenge-secret:password_reset', input.resetSecret.trim());
+      const presented = this.digest('challenge-secret:password_reset', input.oneTimeCode.trim());
       if (!constantTimeBufferEqual(presented, challenge.secret_digest)) {
         await client.query(`UPDATE auth_challenges SET attempt_count = attempt_count + 1 WHERE id = $1`, [
           challenge.id,
@@ -1367,27 +1183,25 @@ export class PostgresAuthRepository {
   ): Promise<SecurityEventPage> {
     const limit = Math.min(Math.max(options.limit, 1), 100);
     const cursor = decodeEventCursor(options.cursor);
-    const result = await this.pool.query<{
+    const result = await withUserContext(this.pool, userId, (client) => client.query<{
       id: string;
       event_type: AuthEventType;
       outcome: AuthEventOutcome;
       occurred_at: Date;
       session_id: string | null;
-    }>(
-      `SELECT id, event_type, outcome, occurred_at, session_id
+    }>(`
+      SELECT id, event_type, outcome, occurred_at, session_id
          FROM security_events
         WHERE user_id = $1
           AND visibility IN ('user', 'both')
           AND (occurred_at, id) < ($2::timestamptz, $3::uuid)
         ORDER BY occurred_at DESC, id DESC
-        LIMIT $4`,
-      [
+        LIMIT $4`, [
         userId,
         cursor ? new Date(cursor.occurredAt) : 'infinity',
         cursor ? cursor.id : 'ffffffff-ffff-4fff-bfff-ffffffffffff',
         limit + 1,
-      ],
-    );
+      ]));
     const rows = result.rows.slice(0, limit);
     const hasMore = result.rows.length > limit;
     const last = rows.at(-1);
@@ -1407,12 +1221,9 @@ export class PostgresAuthRepository {
 
   /** Minimal owner-scoped profile projection for the authenticated principal. */
   async getProfile(userId: string): Promise<ProfileView | null> {
-    const result = await this.pool.query<ProfileRow>(
-      `SELECT id, email, status, email_verified_at, display_name, locale, timezone, base_currency
+    const result = await withUserContext(this.pool, userId, (client) => client.query<ProfileRow>(`SELECT id, email, status, email_verified_at, display_name, locale, timezone, base_currency
          FROM users
-        WHERE id = $1`,
-      [userId],
-    );
+        WHERE id = $1`, [userId]));
     const row = result.rows[0];
     if (!row) return null;
     return {
@@ -1429,18 +1240,16 @@ export class PostgresAuthRepository {
 
   /** Records the sanitized outcome of an immediate secret-bearing delivery. */
   async recordChallengeDelivery(
+    userId: string,
     challengeId: string,
     status: 'delivered' | 'failed',
     reference?: string,
   ): Promise<void> {
-    await this.pool.query(
-      `UPDATE auth_challenges
+    await withUserContext(this.pool, userId, (client) => client.query(`UPDATE auth_challenges
           SET delivery_status = $2,
               last_delivery_attempt_at = $3,
               last_delivery_status = $4
-        WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`,
-      [challengeId, status, new Date(this.now()), sanitizeReference(reference)],
-    );
+        WHERE id = $1 AND consumed_at IS NULL AND superseded_at IS NULL`, [challengeId, status, new Date(this.now()), sanitizeReference(reference)]));
   }
 
   /** Bounded pruning keeps fixed-window counters from growing without bound. */
@@ -1497,6 +1306,33 @@ export class PostgresAuthRepository {
     return this.digest('request-context', `${input.ipAddress ?? ''}|${input.userAgent ?? ''}`);
   }
 
+  /**
+   * F-3 mitigation — confines a target-scoped abuse counter to the caller's network.
+   *
+   * Before this, `reset_target` and the cumulative `verification_target` budget were
+   * keyed on the target address alone, and both are spent **before** any account or
+   * challenge lookup (deliberately: spending after the lookup would turn the counter
+   * into an existence oracle). The combination meant any anonymous caller could
+   * exhaust another person's budget: ten wrong-code submissions against a known
+   * address answered `429` to the address owner's own correct code for the rest of
+   * the window. That is an externally reachable denial of password recovery.
+   *
+   * Composing the counter input with the caller's network prefix keeps the spend
+   * unconditional and pre-lookup (so the anti-enumeration property is untouched) while
+   * confining one network's spend to its own bucket. What actually bounds code
+   * guessing is not this counter but the challenge-scoped controls — five attempts per
+   * challenge and at most three issuances per hour (six per day) per account — and
+   * those are unchanged, so rotating networks buys an attacker nothing.
+   *
+   * Residual, documented in `docs/evidence/2026-10-12-RESET-AVAILABILITY-AND-TIMING-RISKS.md`:
+   * a caller sharing the victim's /24 (IPv4) or /48 (IPv6) still shares the bucket, and
+   * a caller arriving without an address keeps the previous target-only scope.
+   */
+  private targetNetworkKey(target: string, ipAddress: string | null | undefined): string {
+    const prefix = this.ipPrefixDigest(ipAddress);
+    return prefix ? `${target}|${prefix.toString('hex')}` : target;
+  }
+
   private ipPrefixDigest(value: string | null | undefined): Buffer | null {
     if (!value) return null;
     const trimmed = value.trim();
@@ -1509,40 +1345,6 @@ export class PostgresAuthRepository {
     return this.digest('ip-prefix', prefix);
   }
 
-  private async issueChallenge(
-    client: PoolClient,
-    input: {
-      readonly userId: string;
-      readonly purpose: 'email_verification';
-      readonly target: string;
-      readonly context: AccessRequestContext;
-      readonly now: number;
-    },
-  ): Promise<VerificationDelivery> {
-    await this.supersedeActiveChallenges(client, input.userId, input.purpose, input.now);
-    const challengeId = randomUUID();
-    const oneTimeCode = generateNumericOtp(this.options.policy.challenge.otpDigits);
-    const expiresAt = new Date(input.now + this.options.policy.challenge.otpLifetimeMs);
-    await client.query(
-      `INSERT INTO auth_challenges (
-         id, user_id, purpose, target_digest, secret_digest, issued_at, expires_at,
-         max_attempts, request_context_digest, correlation_id, created_at
-       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $6)`,
-      [
-        challengeId,
-        input.userId,
-        input.purpose,
-        this.digest(`challenge-target:${input.purpose}`, input.target),
-        this.digest(`challenge-secret:${input.purpose}`, oneTimeCode),
-        new Date(input.now),
-        expiresAt,
-        this.options.policy.challenge.maximumAttempts,
-        this.contextDigest(input.context),
-        input.context.correlationId,
-      ],
-    );
-    return { challengeId, oneTimeCode, expiresAt: expiresAt.toISOString() };
-  }
 
   private async supersedeActiveChallenges(
     client: PoolClient,
@@ -1570,7 +1372,7 @@ export class PostgresAuthRepository {
       `SELECT COUNT(*) FILTER (WHERE issued_at > $2) AS hourly,
               COUNT(*) FILTER (WHERE issued_at > $3) AS daily
          FROM auth_challenges
-        WHERE user_id = $1 AND purpose = 'email_verification'`,
+        WHERE user_id = $1 AND purpose = 'password_reset'`,
       [
         userId,
         new Date(now - 60 * 60 * 1_000),
@@ -1767,10 +1569,11 @@ export class PostgresAuthRepository {
     return result.rowCount ?? 0;
   }
 
-  private async containReplay(sessionId: string, now: number): Promise<void> {
+  private async containReplay(sessionId: string, userId: string, now: number): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await applyUserContext(client, userId);
       const session = await client.query<{ user_id: string; family_id: string }>(
         `SELECT user_id, family_id FROM sessions WHERE id = $1 FOR UPDATE`,
         [sessionId],
@@ -1809,10 +1612,11 @@ export class PostgresAuthRepository {
     }
   }
 
-  private async expireSession(sessionId: string, now: number): Promise<void> {
+  private async expireSession(sessionId: string, userId: string, now: number): Promise<void> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await applyUserContext(client, userId);
       const session = await client.query<{ user_id: string }>(
         `SELECT user_id FROM sessions WHERE id = $1 FOR UPDATE`,
         [sessionId],
@@ -1885,6 +1689,38 @@ export class PostgresAuthRepository {
   }
 
   /**
+   * F-3 detection: records an operator-only event the moment a reset budget tips over.
+   *
+   * Before this, exhausting a victim's reset budget was silent: the `429` path wrote
+   * no event at all, so an attack and a burst of forgetful users looked identical to
+   * the operator. This writes one `password_reset_failed` event with
+   * `outcome = 'blocked'` on the transition only (`count === limit + 1`), which keeps
+   * a sustained flood from turning one attack into an event-per-request flood.
+   *
+   * It is deliberately operator-only, never user-facing, and it is written whether or
+   * not the address exists — mirroring the unconditional spend it reports, so it adds
+   * no oracle either. It is evidence, not mitigation: the availability fix is the
+   * network-scoped key in `targetNetworkKey`.
+   */
+  private async recordBudgetExhausted(
+    info: { readonly client: PoolClient; readonly count: number; readonly limit: number; readonly scopeKind: AbuseScopeKind },
+    context: AccessRequestContext,
+    target: string,
+  ): Promise<void> {
+    if (info.count !== info.limit + 1) return;
+    await this.recordEvent(info.client, {
+      userId: null,
+      eventType: 'password_reset_failed',
+      outcome: 'blocked',
+      correlationId: context.correlationId,
+      context,
+      occurredAt: new Date(),
+      target,
+      metadata: { reason: 'reset_budget_exhausted', scope: info.scopeKind },
+    });
+  }
+
+  /**
    * Records a sanitized failure event and commits it before throwing.
    *
    * Failed attempts are abuse evidence and challenge-attempt evidence, so they
@@ -1937,19 +1773,36 @@ export class PostgresAuthRepository {
    * `pool.connect()`: acquiring a second connection while an operation
    * transaction is open holds one connection and waits for another, which
    * deadlocks the auth pool once every connection is in that state.
+   *
+   * `onExhausted` (F-3) lets a caller record operator-visible evidence when a
+   * budget tips over, using the same connection. It is awaited but never allowed
+   * to change the outcome: a failure to record evidence must not turn a `429`
+   * into a `200` or a `500`. Callers that want "once per transition" semantics
+   * filter on `count === limit + 1` themselves.
    */
   private async registerAbuseAttempt(
     scopeKind: AbuseScopeKind,
     scopeValue: string | null | undefined,
     now: number,
-    options: { readonly limit: number; readonly target?: string },
+    options: {
+      readonly limit: number;
+      readonly target?: string;
+      readonly windowMs?: number;
+      readonly onExhausted?: (info: {
+        readonly client: PoolClient;
+        readonly count: number;
+        readonly limit: number;
+        readonly scopeKind: AbuseScopeKind;
+      }) => Promise<void>;
+    },
   ): Promise<void> {
     if (!scopeValue) return;
     const scopeDigest = scopeKind.endsWith('_ip')
       ? this.ipPrefixDigest(scopeValue)
       : this.digest(`abuse:${scopeKind}`, options.target ?? scopeValue);
     if (!scopeDigest) return;
-    const windowStart = new Date(abuseWindowStart(now, this.options.policy.abuse.windowMs));
+    const windowMs = options.windowMs ?? this.options.policy.abuse.windowMs;
+    const windowStart = new Date(abuseWindowStart(now, windowMs));
     const instant = new Date(now);
     const client = await this.pool.connect();
     try {
@@ -1963,9 +1816,13 @@ export class PostgresAuthRepository {
       );
       const count = result.rows[0]?.count ?? 1;
       if (count > options.limit) {
+        if (options.onExhausted) {
+          await options.onExhausted({ client, count, limit: options.limit, scopeKind })
+            .catch(() => undefined);
+        }
         const retryAfterSeconds = Math.max(
           1,
-          Math.ceil((windowStart.getTime() + this.options.policy.abuse.windowMs - now) / 1_000),
+          Math.ceil((windowStart.getTime() + windowMs - now) / 1_000),
         );
         throw rateLimitedError(retryAfterSeconds);
       }
@@ -1974,41 +1831,25 @@ export class PostgresAuthRepository {
     }
   }
 
-  private async userIdForSession(sessionId: string, client?: PoolClient): Promise<string> {
-    const runner: Pick<Pool, 'query'> = client ?? this.pool;
-    const result = await runner.query<{ user_id: string }>(
-      `SELECT user_id FROM sessions WHERE id = $1`,
-      [sessionId],
-    );
-    const row = result.rows[0];
-    if (!row) throw accountUnavailableError();
-    return row.user_id;
-  }
-
-  private async emailForUser(userId: string | null, client?: PoolClient): Promise<NormalizedEmail | null> {
+  private async emailForUser(
+    userId: string | null,
+    client?: PoolClient,
+  ): Promise<NormalizedEmail | null> {
     if (!userId) return null;
-    const runner: Pick<Pool, 'query'> = client ?? this.pool;
-    const result = await runner.query<{ email: string }>(
-      `SELECT email FROM users WHERE id = $1`,
-      [userId],
-    );
+    // Inside an open transaction the caller has already applied the owner
+    // context; use its client so the read sees the same snapshot.
+    const result = client
+      ? await client.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId])
+      : await withUserContext(this.pool, userId, (client) => client.query<{ email: string }>(`SELECT email FROM users WHERE id = $1`, [userId]));
     const row = result.rows[0];
     return row ? normalizeEmail(row.email) : null;
   }
 
-  private async withTransaction<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const value = await operation(client);
-      await client.query('COMMIT');
-      return value;
-    } catch (error) {
-      await this.safeRollback(client, error);
-      throw error;
-    } finally {
-      client.release();
-    }
+  private async withTransaction<T>(
+    userId: string,
+    operation: (client: PoolClient) => Promise<T>,
+  ): Promise<T> {
+    return withUserContext(this.pool, userId, operation);
   }
 
   private async rollback(client: PoolClient): Promise<void> {

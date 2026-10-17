@@ -1,0 +1,78 @@
+# KFin staging stack.
+#
+# One container serves the client and the API on one origin; Caddy terminates
+# TLS and preserves `Host`, which the same-origin CSRF check depends on.
+#
+#   KFIN_IMAGE=ghcr.io/<owner>/<repo>/kfin-runtime:sha-<commit> \
+#   STAGING_SITE_ADDRESS=staging.example.com \
+#   STAGING_TLS_ARGS=ops@example.com \
+#     docker compose --env-file staging.env up -d
+#
+# The database is either a container (`docker-compose.database.yml`, the default
+# for staging) or an external managed PostgreSQL (`STAGING_DB_MODE=managed`,
+# `DATABASE_URL` in `staging.env`). Secrets live in `staging.env` next to this
+# file and are never committed.
+
+name: kfin-staging
+
+services:
+  kfin:
+    image: ${KFIN_IMAGE:?set KFIN_IMAGE to the published image reference}
+    restart: unless-stopped
+    env_file:
+      - ./staging.env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "3000"
+      # Only Caddy may set X-Forwarded-For (see the `edge` network below).
+      TRUST_PROXY: ${KFIN_PROXY_CIDR:-172.28.0.0/16}
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health/ready').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+    networks:
+      - edge
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      kfin:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # Public hostname and how Caddy obtains its certificate.
+      # `internal` issues a local CA certificate — rehearsal only.
+      STAGING_SITE_ADDRESS: ${STAGING_SITE_ADDRESS:?set STAGING_SITE_ADDRESS}
+      STAGING_TLS_ARGS: ${STAGING_TLS_ARGS:-internal}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+
+networks:
+  edge:
+    # A fixed name and subnet keep TRUST_PROXY deterministic: the app trusts
+    # exactly the network Caddy is on, not whatever Docker happened to allocate.
+    name: kfin-staging-edge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  caddy_data:
+  caddy_config:

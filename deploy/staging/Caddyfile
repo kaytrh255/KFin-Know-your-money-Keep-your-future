@@ -1,0 +1,40 @@
+# KFin staging edge.
+#
+# Caddy terminates TLS and forwards to the API container. Two things matter for
+# the application:
+#
+#  1. `Host` is preserved. The same-origin CSRF defense compares the request's
+#     `Origin` with the `Host` it receives; a rewritten host would refuse every
+#     browser write.
+#  2. `X-Forwarded-For`/`X-Forwarded-Proto` describe the browser, and the app
+#     trusts only this proxy's network (`TRUST_PROXY` in the Compose file), so a
+#     client cannot forge the address stored in the security audit trail.
+#
+# Certificates: `STAGING_TLS_ARGS` is an ACME account email on a public hostname
+# (automatic Let's Encrypt) or the literal `internal` for a local test CA.
+# Security headers (CSP, HSTS, nosniff, …) are emitted by the application; the
+# two below are repeated only for Caddy-generated error pages.
+
+{$STAGING_SITE_ADDRESS} {
+	tls {$STAGING_TLS_ARGS}
+
+	encode zstd gzip
+
+	reverse_proxy kfin:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output stdout
+		format json
+		level INFO
+	}
+}

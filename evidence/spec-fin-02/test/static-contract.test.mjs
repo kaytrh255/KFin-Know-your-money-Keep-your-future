@@ -1,12 +1,37 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import test from 'node:test';
-import { FROZEN_SOURCE_COMMIT, POLICY, RETRYABLE_SQLSTATES } from '../src/constants.mjs';
-import { verifyFrozenAuthoritativeDocs } from '../src/runner.mjs';
+import { execFileSync } from 'node:child_process';
+import { AMENDED_AUTHORITATIVE_DOCS, FROZEN_SOURCE_COMMIT, POLICY, RETRYABLE_SQLSTATES } from '../src/constants.mjs';
+import { AUTHORITATIVE_DOCS, verifyFrozenAuthoritativeDocs } from '../src/runner.mjs';
 
 test('authoritative documents remain byte-identical to frozen candidate', () => {
   assert.doesNotThrow(() => verifyFrozenAuthoritativeDocs());
   assert.equal(FROZEN_SOURCE_COMMIT, 'a48d2c5683550859c1b4e19e9d06750616adc0a2');
+});
+
+test('amended authoritative documents are digest-pinned to a dated revision and the rest stay frozen', async () => {
+  const fs = await import('node:fs');
+  const amended = Object.keys(AMENDED_AUTHORITATIVE_DOCS.sha256).sort();
+  assert.deepEqual(amended, [
+    'docs/architecture/DATABASE.md',
+    'docs/governance/APPROVAL-AND-EVIDENCE-REGISTER.md',
+    'docs/testing/TEST-STRATEGY.md',
+  ]);
+  assert.equal(AMENDED_AUTHORITATIVE_DOCS.revision.id, 'OQ-20');
+  assert.equal(AMENDED_AUTHORITATIVE_DOCS.revision.date, '2026-10-12');
+  for (const file of amended) {
+    assert.ok(AUTHORITATIVE_DOCS.includes(file), `${file} must be an authoritative document`);
+    assert.match(AMENDED_AUTHORITATIVE_DOCS.sha256[file], /^[0-9a-f]{64}$/);
+  }
+  for (const file of AUTHORITATIVE_DOCS) {
+    if (amended.includes(file)) continue;
+    const frozen = execFileSync('git', ['show', `${FROZEN_SOURCE_COMMIT}:${file}`]);
+    assert.ok(
+      frozen.equals(fs.readFileSync(file)),
+      `${file} is not listed as amended but differs from the frozen commit`,
+    );
+  }
 });
 
 test('physical evidence schema contains required state and ownership constraints', async () => {

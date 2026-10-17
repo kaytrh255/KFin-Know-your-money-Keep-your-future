@@ -8,7 +8,7 @@
 
 ## Context
 
-KFin needs required email for verification/recovery/security and in-app outgoing-obligation reminders without falsely changing financial state or creating notification spam. Product review selected in-app-only payment reminders, evaluated at 09:00 user-local time, with at most one notification for each 7-day, 3-day, due-today, and first-overdue stage. Push, payment-reminder email, SMS, and chat channels are future scope. At most 50 users do not justify Redis, Kafka, or a separate notification service.
+KFin needs required email for password-reset OTP and approved security messages, plus in-app outgoing-obligation reminders without falsely changing financial state or creating notification spam. Product review selected in-app-only payment reminders, evaluated at 09:00 user-local time, with at most one notification for each 7-day, 3-day, due-today, and first-overdue stage. Push, payment-reminder email, SMS, and chat channels are future scope. At most 50 users do not justify Redis, Kafka, or a separate notification service.
 
 ## Decision
 
@@ -17,7 +17,7 @@ Use a **PostgreSQL transactional outbox/job mechanism plus a small worker**, whi
 ### Product channels
 
 - In-app notification center is the only MVP outgoing-obligation reminder channel; scheduled income remains visible/projected but has no fixed-stage notification requirement.
-- Required verification, recovery, and approved security email is a separate authentication/security communication path.
+- Required password-reset OTP and approved security email is a separate authentication/security communication path; registration sends no email (OQ-20).
 - Payment-reminder email, push, SMS, and chat are not implemented.
 - There is no reminder-channel/quiet-hours preference screen in MVP.
 
@@ -70,7 +70,7 @@ Product, Architecture, Operations, and QA owners must approve one complete tuple
 - Bounded exponential backoff/jitter handles transient database/runtime errors; permanent failure/dead-letter remains operator-visible.
 - Worker downtime, late occurrence creation, and timezone-change catch-up obey `REM-INV-08`; exact selection/suppression remains blocked by `REM-INV-09`. Closed-app or delayed-app-return behavior obeys `REM-INV-06` and `REM-INV-07`.
 - Notification read/dismiss state has no authority over payment/receipt state.
-- Email verification OTP and password-reset secrets are not placed in the ordinary outbox. Under ADR-002, they are submitted immediately from ephemeral request-process memory after digest-only challenge commit. A future encrypted asynchronous envelope requires a separate key-management decision.
+- The password-reset OTP is not placed in the ordinary outbox. Under ADR-002, it is submitted immediately from ephemeral request-process memory after digest-only challenge commit. A future encrypted asynchronous envelope requires a separate key-management decision, and no other authentication flow sends a secret-bearing email.
 - Non-secret security email may use the outbox/provider adapter with minimum template data.
 
 ## Alternatives considered
@@ -132,7 +132,7 @@ Product, Architecture, Operations, and QA owners must approve one complete tuple
 - Unique occurrence + stage constraints and state recheck at execution.
 - Timezone, leap/day-boundary, timezone-change, downtime catch-up, and deduplication tests.
 - No amount/note in generic logs or product analytics.
-- Required security-email SPF/DKIM/DMARC, provider webhook verification where used, and payload redaction remain under authentication/security controls.
+- Required SPF/DKIM/DMARC for password-reset and security email, provider webhook signature checks where used, and payload redaction remain under authentication/security controls.
 
 ## Validation before acceptance
 
@@ -141,7 +141,7 @@ Product, Architecture, Operations, and QA owners must approve one complete tuple
 - Test schedule edit/payment confirmation racing with reminder evaluation.
 - Prove one notification per stage and one first-overdue notification over long unresolved periods.
 - Review Vietnamese notification content, accessibility, and no-external-channel UX.
-- Confirm authentication/security email remains operationally separate.
+- Confirm password-reset and security email remains operationally separate from reminder delivery, and that registration sends no email.
 - Retain versioned RCT/`REM-REC` results, content/accessibility review, named approvers, date, source versions and review trigger in the governance register; a policy table without evidence is not acceptance.
 
 ## Revisit when

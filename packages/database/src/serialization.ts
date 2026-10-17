@@ -6,6 +6,7 @@ import {
   unavailableError,
 } from '@kfin/domain';
 import { digestSecret } from './canonical.js';
+import { USER_CONTEXT_SETTING, assertUserId } from './context.js';
 
 export const SERIALIZATION_POLICY = Object.freeze({
   lockTimeoutMs: 2_000,
@@ -226,6 +227,10 @@ export class AccountFinancialSerializer {
 
     try {
       await transaction.query('BEGIN ISOLATION LEVEL READ COMMITTED');
+      await transaction.query('SELECT set_config($1, $2, true)', [
+        USER_CONTEXT_SETTING,
+        assertUserId(operation.ownerUserId),
+      ]);
       await transaction.query(
         "SELECT set_config('lock_timeout', $1, true)",
         [`${Math.max(1, Math.min(SERIALIZATION_POLICY.lockTimeoutMs, transaction.remainingMs()))}ms`],

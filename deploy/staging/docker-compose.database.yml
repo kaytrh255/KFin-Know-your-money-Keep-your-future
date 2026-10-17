@@ -1,0 +1,55 @@
+# Staging database as a container on the staging host.
+#
+# This is the default: it needs no second provider account, and it lets CI
+# rehearse the exact same stack. It is a separate PostgreSQL instance from
+# production and publishes port 5432 on the host loopback only — enough for a
+# one-time role provisioning step over an SSH tunnel, never enough for the
+# public internet.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.database.yml up -d
+#
+# Use an external managed PostgreSQL instead by leaving this file out and
+# putting `DATABASE_URL` in `staging.env` (see staging.env.example).
+#
+# Passwords must be hex (`openssl rand -hex 24`): they are interpolated into a
+# connection URL and characters such as `@`, `:` or `/` would need escaping.
+
+services:
+  db:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${STAGING_DB_NAME:-kfin_staging}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${STAGING_DB_ADMIN_PASSWORD:?set STAGING_DB_ADMIN_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - max_connections=50
+      - -c
+      - shared_buffers=128MB
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${STAGING_DB_PORT:-55433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${STAGING_DB_NAME:-kfin_staging}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - edge
+
+  kfin:
+    environment:
+      DATABASE_URL: postgresql://kfin_app:${KFIN_APP_PASSWORD:?set KFIN_APP_PASSWORD}@db:5432/${STAGING_DB_NAME:-kfin_staging}
+      # Local container: the traffic never leaves the host, so TLS is off. A
+      # managed database uses `DATABASE_SSL_MODE=verify-full` in staging.env.
+      DATABASE_SSL_MODE: disable
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:

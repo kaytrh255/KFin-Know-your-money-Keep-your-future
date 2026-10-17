@@ -1,9 +1,9 @@
 # KFin Product Decision Log
 
 **Status:** Active — FIN-01/02 policies proposed; approvals/evidence remain open<br>
-**Version:** 0.5<br>
-**Decision date:** 2026-10-07<br>
-**Source:** Interactive specification review with the project owner; Round 3 remediation; GitHub Issues #1 and #3 decision candidates
+**Version:** 0.6<br>
+**Decision date:** 2026-10-07 (OQ-20 added 2026-10-12)<br>
+**Source:** Interactive specification review with the project owner; Round 3 remediation; GitHub Issues #1 and #3 decision candidates; OQ-20 authentication-policy revision of 2026-10-12
 
 This log records product decisions made after the initial specification foundation was drafted. It replaces the recommendations previously listed as unresolved OQ items. A decision here changes product meaning; affected product, UX, architecture, security, database, and test specifications must remain consistent with it.
 
@@ -32,6 +32,7 @@ This log records product decisions made after the initial specification foundati
 | OQ-17 | Deferred — Release Candidate blocker | Specific PaaS, PostgreSQL, email, observability providers, domain, region, and budget will be selected before Release Candidate, not at implementation kickoff. |
 | OQ-18 | Accepted baseline | Maximum baseline retention: encrypted backups 90 days, application logs 90 days, and security/audit events 24 months. Legal review may require shorter periods. |
 | OQ-19 | Accepted | Create one in-app notification when an occurrence first becomes overdue. Do not repeat it daily/weekly; Schedule continues to show overdue state. |
+| OQ-20 | Accepted | Registration is admitted by the mandatory single-use invitation code without an email OTP; the account is usable immediately by signing in with the chosen credentials. Emailed OTP is reserved for password reset, which requires a valid, unexpired, single-use OTP before a new password is accepted. Email is never represented as verified without a consumed verification challenge. |
 
 ## 2. Detailed decisions and consequences
 
@@ -268,6 +269,37 @@ safe-to-spend estimate
 - This direction is not itself a legal conclusion that cross-border hosting is permitted.
 - International beta, additional legal jurisdictions, and broad localization require a future specification.
 
+### OQ-20 — Email OTP scope: invitation-admitted registration, OTP reserved for password reset
+
+**Decision date:** 2026-10-12<br>
+**Status:** Accepted (product direction); implementation not authorized by this entry<br>
+**Supersedes:** the registration-time email-verification requirement of PRD-AUTH-02 and the verification scope of `SPEC-AUTH-01`
+
+**Decision**
+
+- Private Beta registration is admitted by the mandatory single-use, expiring invitation code (OQ-11) plus the required registration fields. Registration MUST NOT send an OTP, MUST NOT require email OTP verification, and MUST NOT create an authentication challenge or enqueue any email.
+- An account created by registration is usable immediately: the user signs in with the credentials just chosen. Registration itself MUST NOT create an authenticated session.
+- The emailed OTP is reserved for password reset. A password reset MUST require a valid, unexpired, single-use, attempt-limited OTP before the new password is accepted, and MUST NOT reveal whether an address exists.
+- An account whose email was never verified is represented explicitly as **invitation-admitted, email unverified**: `email_verified_at` stays NULL and the verification state records `unverified`. Registration, invitation consumption, login, password reset, password change, and operator support MUST NOT set a verified state, and the product MUST NOT present the address as verified.
+- Preserved unchanged: password policy and Argon2id parameters, invitation-code controls, login rate limits and abuse defenses, session lifetimes/rotation/revocation, browser origin/CSRF defense, security-event recording, and retention.
+
+**Rationale**
+
+- Admission is already controlled by a high-entropy, single-use, digest-only invitation code issued by an audited operator procedure (OQ-11, SEC-AUTH-14/15). Requiring a second proof of the same admission increases friction without adding an admissions control the invitation does not already provide.
+- A registration OTP creates an email-delivery dependency, an abuse/cost surface, and a failure path (delivery uncertainty, wrong address, provider outage) on the critical first-run journey, for a control that does not gate access to any financial capability in MVP.
+- Email ownership is not an authorization input anywhere in MVP: access comes from the session, admission from the invitation code, and financial authority from explicit user confirmation. Keeping an unverified address explicit is therefore honest rather than weakening a real control.
+- The OTP mechanism itself is retained where it does protect a high-value action: password reset, the one flow where an unauthenticated party may replace a credential.
+
+**Consequences**
+
+- `SPEC-AUTH-01` (post-verification outcome) loses its subject: no MVP flow verifies an email address, so no post-verification session question exists. The reset equivalent is decided here — a successful reset revokes every session and issues none, so the user signs in explicitly. Retiring the blocker requires Product + Security ratification; this entry records the product decision, not the approval.
+- Email ownership is unproven for every MVP account. Email possession MUST NOT be used as identity proof — including account-deletion identity verification — and ownership-implying security notices MUST NOT be sent to an unverified address.
+- Password recovery is the only email-OTP path. A user who registered a mistyped address can only be recovered through the audited operator/support procedure, which is an accepted beta risk requiring named ownership before external beta.
+- `users.status` retires `pending_verification`; every MVP registration creates an `active` account. `auth_challenges.purpose` is limited to `password_reset` in MVP.
+- Email provider scope narrows to password-reset OTP and approved non-secret security messages, and the registration path loses its delivery dependency.
+- Existing data created under the previous policy needs a one-time migration before the implementation change ships: `pending_verification` rows become `active` (their consumed invitation remains the admission evidence), `email_verified_at` remains set only where a verification challenge was genuinely consumed, and outstanding `email_verification` challenges are invalidated rather than reinterpreted as reset challenges.
+- Follow-up work is **not** authorized by this entry: the implementation change itself, its migration, its OpenAPI change, and the removal of the verification endpoints are separately scoped tasks that MUST cite this decision.
+
 ## 3. Traceability map
 
 This map identifies the primary normative and verification destinations. It is not a substitute for the full requirement-to-test report required at release.
@@ -285,6 +317,7 @@ This map identifies the primary normative and verification destinations. It is n
 | OQ-09 | Roadmap Phase 6 | ADR-007; Architecture §16; provider/deployment gates |
 | OQ-10 | PRD-AUTH-10; UF-AUTH-07 | Database §§4.8–4.9, 15, 17; SEC-DATA; deletion/restore tests |
 | OQ-11 | PRD-AUTH-01; UF-AUTH-01 | ADR-002; Database §4.2; SEC-AUTH-14/15; valid-code/no-email-allowlist-bypass tests |
+| OQ-20 | PRD-AUTH-01/02/06; UF-AUTH-01/04 | ADR-002; ADR-004; Database §§4.1, 4.4–4.5; SEC-AUTH-04–06/13/16–20; registration-no-challenge/no-email and reset-OTP tests |
 | OQ-12 | PRD-REM-02/04/06/10/11/12; UF-REM-01 | REM-INV-01–10; RCT-01–RCT-10; ADR-008; Database §11 |
 | OQ-13 | PRD-FIN-02/08–13; UF-FIN-01/02/03/06 | FIN-SNAP-INV-01–10; snapshot A–J; `FIN-COR`; `FIN-RACE`; SEC-APP-14/15/19 |
 | OQ-14 | PRD-REM-09; UF-SCH flows | Database §7; recurrence boundary/property tests |
@@ -300,8 +333,8 @@ Round 3 records the exact decision packets below. **No row is an approved decisi
 
 | Blocker | Exact approval still required | Fixed decision/constraint that remains in force | Accountable owner | Minimum closure evidence | Status |
 |---|---|---|---|---|---|
-| `SPEC-AUTH-01` | Fresh rotated session after verification **or** explicit sign-in; result/cookie/CSRF/event/multi-tab/uncertain-response contract | Single-use atomic verification; no session fixation | Product Owner; Security co-approval | Threat, flow, session-fixation, retry, content review | OPEN — decision ready |
-| `SPEC-AUTH-02` | Every invitation/password/OTP/reset/abuse/session/rotation/password-change value and behavior | Invitation code, Argon2id, digest-only secrets, generic responses, reset revokes all sessions | Security Owner; Product co-approval | Threat, runtime benchmark, provider, abuse-cost, usability, replay tests | OPEN — decision ready |
+| `SPEC-AUTH-01` | **Superseded by OQ-20 (2026-10-12):** the post-verification outcome no longer exists in MVP — registration issues no session and no verification step, and a successful password reset revokes every session and issues none | No pre-authenticated identifier survives; no session-fixation path | Product Owner; Security co-approval of the retirement | Ratification record plus flow/session-fixation tests for the reset-and-sign-in path | SUPERSEDED — awaiting Product + Security ratification |
+| `SPEC-AUTH-02` | Every invitation/password/abuse/session/rotation/password-change value and behavior, plus the reset-OTP expiry/attempt/resend/issuance bounds of OQ-20 | Invitation code, Argon2id, digest-only secrets, generic responses, reset revokes all sessions, reset OTP single-use | Security Owner; Product co-approval | Threat, runtime benchmark, provider, abuse-cost, usability, replay tests | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve proposed `snapshot_correction.v1`, P1 exclusive-domain-claim matrix, and P2 persisted/presentation occurrence terminology | No history erasure/double effect/incompatible owner/current-balance rewrite from closed history | Product Owner; Financial Integrity/Data/Security co-approval; Architecture on enforcement | Issue #1 PR review plus exact H–J, `FIN-COR-01`–`10`, `FIN-LINK-01`–`06`, and `FIN-OCC-01`–`04` specifications | OPEN — approval/evidence ready |
 | `SPEC-FIN-02` | Approve `account_financial_serialization.v1`: account lock/version/order, exclusive-claim check, explicit rollback before release/result/fresh retry, bounded transient retry, same-key commit recovery and exact candidate bounds/errors | One latest segment/compatible claim; one winner/stale loser; no failed-transaction reuse, silent re-anchor, duplicate or unbounded retry | Data Owner; Architecture/Security/Financial Integrity co-approval | ADR-009 plus Supabase PostgreSQL `FIN-RACE`/`FIN-LINK`, idle-confirmed rollback/lock release/deterministic clean reuse/unconfirmed-cleanup eviction, query and commit-fault evidence | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay, mandatory fresh lender-reported balance, or explicitly bounded combination | No inferred principal, interest, fee, payoff, or outstanding | Product Owner; Financial Integrity/Data co-approval | DCT-08/09 and later-event/date-reorder proof | OPEN — decision ready |
@@ -378,3 +411,10 @@ Changing any accepted OQ decision requires:
 - affected requirement/flow/data/threat/test updates;
 - migration and existing-user impact where implementation exists;
 - a new dated decision-log entry rather than silent replacement.
+
+OQ-20 was recorded under these rules on 2026-10-12. Its synchronized specification updates,
+the contradictions it resolved, the historical records deliberately left unchanged, and the
+resulting implementation gap are listed in
+[2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md](../evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md).
+Retirement of `SPEC-AUTH-01` remains an owner ratification, and the implementation change is
+not authorized by this log entry.

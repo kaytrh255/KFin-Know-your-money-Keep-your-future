@@ -207,22 +207,45 @@ integration('financial-account onboarding on real PostgreSQL', () => {
     expect(await counts(owner.id)).toEqual({ accounts: 1, snapshots: 1, receipts: 1, audits: 1 });
   }, 30_000);
 
-  it('returns 404 for an unknown owner and for an unverified owner without writing', async () => {
+  it('returns 404 for an unknown owner and for a non-active owner without writing', async () => {
     const unknownOwner = randomUUID();
     await expect(repository.openFinancialAccount(unknownOwner, opening(), randomUUID(), randomUUID()))
       .rejects.toMatchObject({ code: 'FINANCIAL_RESOURCE_UNAVAILABLE', statusCode: 404 });
     expect(await counts(unknownOwner)).toEqual({ accounts: 0, snapshots: 0, receipts: 0, audits: 0 });
 
+    // OQ-20 (2026-10-12): registration admits an account that is usable while its
+    // address stays explicitly unverified, so an unverified owner is no longer
+    // refused — refusing it would deny the product to every beta account.
     const unverified = await users.create({
       email: `m05-unverified-${randomUUID()}@example.invalid`,
       locale: 'vi-VN',
       timezone: 'Asia/Ho_Chi_Minh',
       baseCurrency: 'VND',
     });
-    expect(unverified.status).toBe('pending_verification');
-    await expect(repository.openFinancialAccount(unverified.id, opening(), randomUUID(), randomUUID()))
+    expect(unverified.status).toBe('active');
+    const state = await database.query<{ email_verification_state: string }>(
+      'SELECT email_verification_state FROM users WHERE id = $1',
+      [unverified.id],
+    );
+    expect(state.rows[0]?.email_verification_state).toBe('unverified');
+    const opened = await repository.openFinancialAccount(unverified.id, opening(), randomUUID(), randomUUID());
+    expect(opened).toMatchObject({ financialStateVersion: '1', replayed: false });
+    expect(await counts(unverified.id)).toEqual({ accounts: 1, snapshots: 1, receipts: 1, audits: 1 });
+
+    // The gate that remains is account status: a disabled owner writes nothing.
+    const disabled = await users.create({
+      email: `m05-disabled-${randomUUID()}@example.invalid`,
+      locale: 'vi-VN',
+      timezone: 'Asia/Ho_Chi_Minh',
+      baseCurrency: 'VND',
+    });
+    await database.query(
+      `UPDATE users SET status = 'disabled', disabled_at = now() WHERE id = $1`,
+      [disabled.id],
+    );
+    await expect(repository.openFinancialAccount(disabled.id, opening(), randomUUID(), randomUUID()))
       .rejects.toMatchObject({ code: 'FINANCIAL_RESOURCE_UNAVAILABLE', statusCode: 404 });
-    expect(await counts(unverified.id)).toEqual({ accounts: 0, snapshots: 0, receipts: 0, audits: 0 });
+    expect(await counts(disabled.id)).toEqual({ accounts: 0, snapshots: 0, receipts: 0, audits: 0 });
   }, 30_000);
 
   it('rejects an invalid opening balance with 422 and writes nothing', async () => {
@@ -294,5 +317,60 @@ integration('financial-account onboarding on real PostgreSQL', () => {
     expect(otherList.items.map((item) => item.accountId)).not.toContain(opened.accountId);
     expect((await repository.listFinancialAccounts(outsider.id)).items).toEqual([]);
     expect((await repository.listFinancialAccounts(randomUUID())).items).toEqual([]);
+  }, 30_000);
+
+  /**
+   * MVP-SCOPE §2.4 "default categories": the money write flows require a
+   * `categoryCode`, so the codes a caller may use have to be discoverable
+   * without reading the schema. This asserts the ordering the client relies on,
+   * that inactive categories are withheld, and — the part that must never
+   * regress — that one owner's custom category is invisible to another.
+   */
+  it('lists active categories deterministically and never leaks another owner\'s custom category', async () => {
+    const owner = await verifiedUser();
+    const other = await verifiedUser();
+
+    const shared = await repository.listCategories(owner.id);
+    expect(shared.items.length).toBeGreaterThan(0);
+    // Deterministic order: display_order, then code.
+    const keys = shared.items.map((item) => `${item.displayOrder}:${item.code}`);
+    expect(keys).toEqual([...keys].sort((a, b) => {
+      const [orderA, codeA] = a.split(':');
+      const [orderB, codeB] = b.split(':');
+      return Number(orderA) - Number(orderB) || String(codeA).localeCompare(String(codeB));
+    }));
+    // The seeded baseline every direction needs.
+    const income = shared.items.filter((item) => item.transactionKind === 'income');
+    const expense = shared.items.filter((item) => item.transactionKind === 'expense');
+    expect(income.map((item) => item.code)).toContain('income_other');
+    expect(expense.map((item) => item.code)).toContain('food');
+    expect(shared.items.every((item) => item.messageKey.startsWith('category.'))).toBe(true);
+    // The same list for two owners, because the baseline is shared.
+    expect((await repository.listCategories(other.id)).items).toEqual(shared.items);
+
+    // An owner-owned category is private to that owner...
+    await database.query(
+      `INSERT INTO categories (id, owner_user_id, code, message_key, transaction_kind, default_expense_class, display_order)
+       VALUES ($1, $2, 'owner_private_probe', 'category.owner_private_probe', 'expense', NULL, 500)`,
+      [randomUUID(), owner.id],
+    );
+    const withCustom = await repository.listCategories(owner.id);
+    expect(withCustom.items.map((item) => item.code)).toContain('owner_private_probe');
+    // ...and another owner, and an unknown id, never see it.
+    const otherView = await repository.listCategories(other.id);
+    expect(otherView.items.map((item) => item.code)).not.toContain('owner_private_probe');
+    expect(otherView.items).toEqual(shared.items);
+    const strangerView = await repository.listCategories(randomUUID());
+    expect(strangerView.items.map((item) => item.code)).not.toContain('owner_private_probe');
+
+    // Deactivating a category removes it from the selectable list for everyone.
+    await database.query(
+      `INSERT INTO categories (id, owner_user_id, code, message_key, transaction_kind, default_expense_class, display_order, active)
+       VALUES ($1, NULL, 'retired_probe', 'category.retired_probe', 'expense', NULL, 510, false)`,
+      [randomUUID()],
+    );
+    const afterRetire = await repository.listCategories(owner.id);
+    expect(afterRetire.items.map((item) => item.code)).not.toContain('retired_probe');
+    expect(afterRetire.items.map((item) => item.code)).toContain('owner_private_probe');
   }, 30_000);
 });

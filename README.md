@@ -27,13 +27,25 @@ Start with the [KFin Specification Foundation](docs/README.md), [Milestone 01 tr
 - append-only correction chains, standalone voids, owner-scoped history, stable stale receipts, and no silent re-anchoring;
 - owner-scoped monthly actuals that exclude voided facts and identify amended groups;
 - one-off scheduled income/essential-expense occurrences with exact persisted states, derived due/Paid/Received presentation, explicit confirmation, and skip/cancel;
-- Trusted Private Beta access: digest-only single-use invitations, Argon2id registration, generic OTP verification with a fresh rotated session, opaque rotating sessions with CSRF/origin defense, session list/revocation, known-password change, password reset that revokes every session, and sanitized security history;
+- Trusted Private Beta access: digest-only single-use invitations, Argon2id registration admitted by the invitation code alone (usable account, email explicitly unverified, no verification email), opaque rotating sessions with CSRF/origin defense, session list/revocation, known-password change, password reset by a single-use six-digit emailed OTP that revokes every session, and sanitized security history;
 - authenticated financial-account onboarding (`POST /api/v1/financial-account`: atomic account + opening snapshot + idempotency receipt, replay, duplicate-account `409`, CSRF-protected) and owner-scoped listing from `financial_current_balances` (`GET /api/v1/financial-accounts`);
 - savings goals (`/api/v1/savings-goals`): create, list by status, plan edits, absolute current-amount updates with immutable old/new history, optimistic versions, idempotent CSRF-protected mutations, and terminal archive; a goal is a declared reserve and never changes the account balance or monthly actuals;
 - schedule-linked correction pointer transfer and linked standalone-void rejection;
 - unit/API/static-contract tests plus guarded real-PostgreSQL foundation, correction, schedule, access, onboarding, and savings-goal integration suites.
 
-Access secrets are never persisted in plaintext: invitation codes, OTP/reset secrets, session tokens, and CSRF tokens are stored only as purpose-separated keyed digests. Unauthenticated outcomes stay generic so a missing account, a consumed invitation, an expired code, and a wrong password are indistinguishable. Invitation provisioning has no HTTP route; it remains an audited operator procedure.
+Access secrets are never persisted in plaintext: invitation codes, reset OTPs, session tokens, and CSRF tokens are stored only as purpose-separated keyed digests. Unauthenticated outcomes stay generic so a missing account, a consumed invitation, an expired code, and a wrong password are indistinguishable. Invitation provisioning has no HTTP route; it remains an audited operator procedure.
+
+> **Specification revision 2026-10-12 (OQ-20), implemented.** Registration admits an account on the
+> invitation code alone — no OTP, no email composed or sent, no session — and leaves the address
+> explicitly unverified rather than marked verified. The emailed six-digit OTP exists only for
+> password reset, is single-use with a 10-minute lifetime, five attempts, a 60-second cooldown, a
+> cumulative per-account failure budget, and 3-per-hour / 6-per-day issuance caps; reset revokes
+> every session and issues none. `/api/v1/auth/verify-email` and `/api/v1/auth/verification/resend`
+> no longer exist. Implemented by
+> [`docs/implementation/MILESTONE-11-OTP-RESET-ONLY.md`](docs/implementation/MILESTONE-11-OTP-RESET-ONLY.md)
+> on top of the revision
+> [`docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md`](docs/evidence/2026-10-12-AUTH-POLICY-SPECIFICATION-REVISION.md)
+> (**not merged, not deployed**; `SPEC-AUTH-01`/`SPEC-AUTH-02` remain open owner decisions).
 
 ## Workspace commands
 
@@ -62,6 +74,62 @@ corepack pnpm run test:integration
 ```
 
 Never commit connection strings or populated `.env` files. The checked-in [`.env.example`](.env.example) contains names and placeholders only.
+
+### Running it locally
+
+[`docs/development/LOCAL-DEVELOPMENT.md`](docs/development/LOCAL-DEVELOPMENT.md) is the single runbook: environment names, migrations, how to complete the email flows on a local machine without a provider, and how to mint the first invitation. It documents the **current implementation**, which the 2026-10-12 specification revision changes for registration.
+
+```bash
+cp .env.example .env            # fill in locally; never commit it
+corepack pnpm run db:migrate    # local/disposable database only
+corepack pnpm run api:dev       # terminal 1
+corepack pnpm run web:dev       # terminal 2, serves the local testing client
+corepack pnpm run invite:provision
+```
+
+`apps/web` is a **local testing client**, not a product surface: one form per implemented API flow, no stub endpoints, no seeded data. Browser writes must be same-origin, so the dev server proxies `/api/*` to the API rather than the client calling another port.
+
+## Production runtime
+
+Deployment does **not** run `tsx` or `tools/dev-server.mjs`. The build produces one artifact in
+`apps/api/dist` and one process serves both the compiled client and the API on the same origin,
+which is what the same-origin-only browser transport requires.
+
+```bash
+corepack pnpm install --frozen-lockfile
+corepack pnpm run build                  # tsc -b + scripts/build-production.mjs
+corepack pnpm run start                  # node apps/api/dist/server.bundle.mjs
+
+# prove it before deploying (needs a non-production database)
+DATABASE_URL=... AUTH_SECRET=... FINANCIAL_PREVIEW_SIGNING_KEY=... \
+IDEMPOTENCY_RETENTION_HOURS=24 corepack pnpm run smoke:production
+
+# prove the artifact survives a production-only install (no devDependencies, no tsx)
+corepack pnpm run verify:production-install
+```
+
+The artifact contains `server.bundle.mjs`, `migrate.bundle.mjs`,
+`provision-invitation.bundle.mjs`, `migrations/`, `web/`, `runtime-package.json` (the exact
+production dependency set) and `BUILD-INFO.json`. A production start refuses to boot without
+secure cookies, without the `resend` mail adapter, or without `web/index.html`.
+
+The deployment unit is a container image built from the repository root:
+
+```bash
+corepack pnpm run image:build            # docker build -t kfin-runtime:local .
+docker run --env-file /run/kfin.env -p 3000:3000 kfin-runtime:local
+```
+
+TLS terminates at the proxy in front of the container; the app emits HSTS, a strict CSP,
+`nosniff`, `Referrer-Policy: no-referrer` and framing denial on every response, and `TRUST_PROXY`
+names the only peers whose `X-Forwarded-For` is believed. `pnpm run smoke:https` runs the artifact
+behind a real TLS proxy and checks those headers, the same-origin write path and the `__Host-`
+session cookie. The public hostname, the secret store and log shipping belong to the host. See [`docs/operations/PRODUCTION-RUNTIME.md`](docs/operations/PRODUCTION-RUNTIME.md).
+A staging deployment path now exists — one image behind Caddy on a single VM, with a separate
+database, CI rehearsing the full Compose stack on every pull request, and a dispatch workflow that
+publishes the image and deploys it. It has not been run against a real host yet: the owner steps and
+the remaining conditions are in [`deploy/staging/README.md`](deploy/staging/README.md) and
+[`docs/operations/STAGING-DEPLOYMENT.md`](docs/operations/STAGING-DEPLOYMENT.md).
 
 ## Specification areas
 

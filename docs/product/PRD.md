@@ -87,12 +87,12 @@ Outcome targets are validation goals, not claims that testing has passed.
 
 | ID | Requirement |
 |---|---|
-| PRD-AUTH-01 | A permitted user MUST be able to register with email, password, and a valid single-use expiring Private Beta invitation code. Code consumption and account creation MUST be atomic. |
-| PRD-AUTH-02 | The user MUST verify control of the email address with an expiring, single-use OTP before full account access. |
-| PRD-AUTH-03 | Authentication and recovery responses MUST resist account enumeration and automated abuse. |
-| PRD-AUTH-04 | A verified user MUST be able to sign in, remain signed in through a revocable persistent session, and sign out of the current session. |
+| PRD-AUTH-01 | A permitted user MUST be able to register with email, password, and a valid single-use expiring Private Beta invitation code. Code consumption and account creation MUST be atomic, MUST create an immediately usable account, MUST NOT send an email OTP, and MUST NOT create an authenticated session. |
+| PRD-AUTH-02 | Email OTP verification MUST NOT be required for registration, sign-in, or any MVP capability. The account is admitted by the invitation code, the user signs in with the credentials just chosen, and an unverified email address MUST be represented as unverified rather than marked verified. |
+| PRD-AUTH-03 | Authentication and recovery responses MUST resist account enumeration and automated abuse. A password-reset request MUST return an identical result whether or not the address exists. |
+| PRD-AUTH-04 | A registered user MUST be able to sign in immediately with their credentials, remain signed in through a revocable persistent session, and sign out of the current session. |
 | PRD-AUTH-05 | A user MUST be able to view recognizable active sessions and revoke one or all sessions. |
-| PRD-AUTH-06 | A user MUST be able to request password recovery, reset a password with an expiring single-use token/challenge, and change a known password. |
+| PRD-AUTH-06 | A user MUST be able to request password recovery, reset a password by presenting a valid, unexpired, single-use emailed OTP before the new password is accepted, and change a known password. |
 | PRD-AUTH-07 | Password reset MUST revoke all existing sessions. Password change MUST revoke other sessions and rotate the current session, unless the approved security policy requires all sessions to end. |
 | PRD-AUTH-08 | Security-relevant events MUST appear in an understandable security history where doing so does not create additional leakage. |
 | PRD-AUTH-09 | Basic profile settings MUST include display name, locale, timezone, and base currency subject to MVP currency policy. |
@@ -251,7 +251,7 @@ Detailed quality attributes are in the architecture, security, UX, and test spec
 
 Success measures will be baselined during internal testing; they are not grounds for dark-pattern analytics.
 
-- Activation: verified users who establish an initial authoritative balance snapshot and save a first transaction.
+- Activation: registered users (invitation-admitted; email verification is not an MVP gate after OQ-20) who establish an initial authoritative balance snapshot and save a first transaction.
 - Habit: active beta users recording or reviewing finances weekly.
 - Entry usability: basic-expense completion rate and median task time in usability sessions.
 - Clarity: task-based comprehension of current balance, due obligations, and goal progress.
@@ -259,13 +259,13 @@ Success measures will be baselined during internal testing; they are not grounds
 - Security: authentication abuse indicators, unauthorized-access test results, and security-event review.
 - Feedback: reported trust, confusion, missing capability, and abandonment reasons.
 
-No financial note text, raw amount, password, token, or OTP may be sent to product analytics.
+No financial note text, raw amount, password, token, or password-reset OTP may be sent to product analytics.
 
 ## 11. Constraints and dependencies
 
 - At most 50 invited Private Beta users; each registration requires a single-use invitation code.
 - Manual data entry and authoritative-balance snapshot updates; no bank/payment integration or account-statement matching.
-- Email delivery is required for verification, recovery, and approved security messages only—not payment reminders.
+- Email delivery is required for password-reset OTP and approved security messages only—not registration, not payment reminders.
 - Cloudflare + managed PaaS + managed PostgreSQL is the accepted logical topology. Specific providers/domain/region/budget are intentionally deferred until before Release Candidate and block that gate.
 - Vietnam-first content/support and Southeast Asia hosting preference do not replace Vietnamese legal/privacy review.
 - The accepted deletion/retention baseline requires legal approval and automated enforcement before external beta.
@@ -285,14 +285,14 @@ No financial note text, raw amount, password, token, or OTP may be sent to produ
 
 ## 13. Decision status and remaining blockers
 
-OQ-01 through OQ-19 have recorded dispositions in the [Product Decision Log](DECISION-LOG.md). OQ-17 deliberately defers specific provider/domain/region/budget selection until before Release Candidate and is a release risk, not permission to claim deployment readiness.
+OQ-01 through OQ-20 have recorded dispositions in the [Product Decision Log](DECISION-LOG.md). OQ-20 (2026-10-12) removed registration-time email verification: registration is admitted by the invitation code alone, the account is usable immediately by signing in, emailed OTP is reserved for password reset, and no account is ever marked email-verified without a consumed verification challenge. OQ-17 deliberately defers specific provider/domain/region/budget selection until before Release Candidate and is a release risk, not permission to claim deployment readiness.
 
 Round 3 makes the following decisions/evidence **ready for authorized review**; it does not approve them:
 
 | Blocker | Product decision or evidence still required | Product-accountable role | Post-Round-3 state |
 |---|---|---|---|
-| `SPEC-AUTH-01` | Fresh rotated session after verification or explicit sign-in, with result/cookie/CSRF/event/multi-tab/retry behavior | Product Owner; Security co-approval | OPEN — decision ready |
-| `SPEC-AUTH-02` | Complete invitation/password/OTP/reset/abuse/session/rotation/password-change policy | Security Owner; Product co-approval | OPEN — decision ready |
+| `SPEC-AUTH-01` | **Superseded by OQ-20 (2026-10-12):** no verification step exists in MVP, so the post-verification outcome has no subject; the reset-equivalent outcome is fixed (all sessions revoked, no session issued, explicit sign-in) | Product Owner; Security co-approval | SUPERSEDED — awaiting Product + Security ratification |
+| `SPEC-AUTH-02` | Complete invitation/password/reset-OTP/abuse/session/rotation/password-change policy, including the reset-OTP expiry, attempt, resend, issuance and session-invalidation bounds of OQ-20 | Security Owner; Product co-approval | OPEN — decision ready |
 | `SPEC-FIN-01` | Approve `snapshot_correction.v1`, P1 exclusive-domain-claim matrix, and P2 persisted `confirmed` versus Paid/Received presentation terminology; review H–J/`FIN-COR`/`FIN-LINK`/`FIN-OCC` evidence | Product Owner; Financial Integrity/Data/Security co-approval; Architecture enforcement review | OPEN — approval/evidence ready |
 | `SPEC-FIN-02` | Approve proposed `account_financial_serialization.v1`: account lock/version/order/complete claim check, idle-confirmed rollback plus unconfirmed-cleanup eviction/no-retry, exact unvalidated candidate retry/uncertain-commit bounds, stale/error contract and Supabase PostgreSQL `FIN-RACE`/`FIN-LINK` evidence | Data Owner; Architecture/Security/Financial Integrity co-approval | OPEN — approval/evidence ready |
 | `SPEC-DEBT-01` | Explicit-fact replay or mandatory fresh lender-reported balance for historical correction with later events | Product Owner; Financial Integrity/Data co-approval | OPEN — decision ready |

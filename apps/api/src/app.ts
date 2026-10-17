@@ -15,6 +15,7 @@ import {
   correctionPreviewResponseSchema,
   confirmOccurrenceBodySchema,
   confirmOccurrenceResponseSchema,
+  categoryListResponseSchema,
   createOneOffScheduleBodySchema,
   createOneOffScheduleResponseSchema,
   createSnapshotBodySchema,
@@ -58,6 +59,7 @@ import type {
   CreateTransactionInput,
   CreateTransactionResult,
   CurrentBalanceView,
+  CategoryList,
   FinancialAccountList,
   MonthlyActualsView,
   OccurrenceView,
@@ -75,6 +77,9 @@ import { csrfFailedError, FinancialError, KfinServiceError } from '@kfin/domain'
 import { registerAuthRoutes, type AuthApiService } from './auth-routes.js';
 import { registerSavingsRoutes, type SavingsApiService } from './savings-routes.js';
 import { UnavailableEmailAdapter, type EmailDeliveryAdapter } from './email-delivery.js';
+import { describeRejectedContractRules, type RejectedContractField } from './validation-detail.js';
+import { registerStaticSite, type StaticSiteOptions } from './static-site.js';
+import { registerSecurityHeaders, type SecurityHeaderOptions } from './security-headers.js';
 import {
   isBrowserSafeRequest,
   readCsrfHeader,
@@ -93,6 +98,11 @@ export interface FinancialApiService {
     correlationId: string,
   ): Promise<OpenFinancialAccountResult>;
   listFinancialAccounts(ownerUserId: string): Promise<FinancialAccountList>;
+  /**
+   * The categories a caller may use. Shared seeded rows plus the caller's own,
+   * never another owner's (see `PostgresFinancialRepository.listCategories`).
+   */
+  listCategories(ownerUserId: string): Promise<CategoryList>;
   getCurrentBalance(ownerUserId: string): Promise<CurrentBalanceView>;
   createSnapshot(
     ownerUserId: string,
@@ -187,6 +197,10 @@ export interface ScheduleApiService {
 export type { SavingsApiService } from './savings-routes.js';
 
 export interface BuildAppOptions {
+  /** Peers trusted to set `X-Forwarded-For`; empty trusts nobody. */
+  readonly trustProxy?: readonly string[];
+  /** Response headers for the deployed path. Absent leaves the API header-free. */
+  readonly securityHeaders?: SecurityHeaderOptions;
   readonly financialService: FinancialApiService;
   readonly scheduleService?: ScheduleApiService;
   /** Milestone 06 savings goals. Absent means the savings routes stay unregistered. */
@@ -199,6 +213,8 @@ export interface BuildAppOptions {
   readonly emailDelivery?: EmailDeliveryAdapter;
   readonly authTransport?: SessionTransportOptions;
   readonly authAbsoluteLifetimeSeconds?: number;
+  /** Production topology: serve the compiled client from this API process. */
+  readonly staticSite?: StaticSiteOptions;
 }
 
 export async function buildApp(options: BuildAppOptions): Promise<FastifyInstance> {
@@ -213,7 +229,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         : randomUUID();
     },
     logController: new LogController({ disableRequestLogging: true }),
+    ...(options.trustProxy && options.trustProxy.length > 0 ? { trustProxy: [...options.trustProxy] } : {}),
   }).withTypeProvider<ZodTypeProvider>();
+
+  if (options.securityHeaders) registerSecurityHeaders(app, options.securityHeaders);
 
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
@@ -328,6 +347,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       response: { 200: financialAccountListResponseSchema, 401: errorResponseSchema },
     },
   }, async (request) => options.financialService.listFinancialAccounts(requireUserId(request)));
+
+  /**
+   * Categories (MVP-SCOPE §2.4 "default categories"). Read-only reference data
+   * behind session authentication, next to the money routes that consume a
+   * `categoryCode`, so a client can offer the valid codes instead of asking a
+   * person to type one blind.
+   */
+  app.get('/api/v1/categories', {
+    preHandler: requireAuthentication,
+    schema: {
+      tags: ['financial-foundation'],
+      response: { 200: categoryListResponseSchema, 401: errorResponseSchema },
+    },
+  }, async (request) => options.financialService.listCategories(requireUserId(request)));
 
   app.get('/api/v1/financial-account', {
     preHandler: requireAuthentication,
@@ -730,9 +763,38 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return reply.code(error.statusCode).send(errorEnvelope(error.code, error.safeMessage, request.id));
     }
     if (error !== null && typeof error === 'object' && 'validation' in error && error.validation) {
+      // The caller is told which field broke which rule, and the same
+      // value-free summary is logged against `request.id` so the correlation id
+      // the caller was shown can actually be looked up. Neither the submitted
+      // values nor the validator's own message are copied anywhere: see
+      // `validation-detail.ts` for why that distinction matters here.
+      const fields = describeRejectedContractRules(error.validation);
+      request.log.warn(
+        { correlationId: request.id, fields },
+        'Rejected a request that does not match the API contract',
+      );
       return reply.code(400).send(errorEnvelope(
         'REQUEST_VALIDATION_FAILED',
         'The request does not match the API contract.',
+        request.id,
+        fields,
+      ));
+    }
+    // Milestone 10 (E-6): the body/content-type layer rejects a request before any
+    // handler runs, and Fastify already carries the correct client status on those
+    // errors. Without this branch they fell through to the 500 below, so an
+    // unparsable body answered `INTERNAL_ERROR` and the `400` every route
+    // publishes in its contract was never honoured. The framework message is
+    // deliberately not echoed: only a stable code and safe message are returned,
+    // and only the bounded framework code reaches the log.
+    if (isBodyLayerClientError(error)) {
+      request.log.warn(
+        { frameworkCode: error.code, correlationId: request.id },
+        'Rejected a request whose body could not be read',
+      );
+      return reply.code(error.statusCode).send(errorEnvelope(
+        'REQUEST_BODY_UNREADABLE',
+        'The request body could not be read.',
         request.id,
       ));
     }
@@ -746,6 +808,8 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       request.id,
     ));
   });
+
+  if (options.staticSite) await registerStaticSite(app, options.staticSite);
 
   await app.ready();
   return app;
@@ -828,6 +892,47 @@ function requireUserId(request: FastifyRequest): string {
   return userId;
 }
 
-function errorEnvelope(code: string, message: string, correlationId: string) {
-  return { error: { code, message, correlationId } };
+function errorEnvelope(
+  code: string,
+  message: string,
+  correlationId: string,
+  fields?: readonly RejectedContractField[],
+) {
+  return {
+    error: {
+      code,
+      message,
+      correlationId,
+      ...(fields && fields.length > 0 ? { fields: [...fields] } : {}),
+    },
+  };
+}
+
+/**
+ * Milestone 10 (E-6) — the family of client errors raised by Fastify's
+ * content-type parsers, i.e. before any route handler or schema validation runs.
+ * Each carries the status the client should have been given all along:
+ *
+ * - `FST_ERR_CTP_INVALID_JSON_BODY` → `400` (malformed JSON, and payloads
+ *   `secure-json-parse` refuses such as a `__proto__` key, per SEC-APP-11);
+ * - `FST_ERR_CTP_EMPTY_JSON_BODY` → `400` (empty body with a JSON content type);
+ * - `FST_ERR_CTP_INVALID_MEDIA_TYPE` → `415` (a content type with no parser);
+ * - `FST_ERR_CTP_BODY_TOO_LARGE` → `413` (over the configured `bodyLimit`).
+ *
+ * The predicate is deliberately narrow. It accepts only the content-type-parser
+ * prefix, and only when the framework supplies a `4xx` status, so it can never
+ * capture a `5xx`, an application error, or Fastify's own validation errors
+ * (`FST_ERR_VALIDATION`), which keep their existing `400
+ * REQUEST_VALIDATION_FAILED` mapping one branch above.
+ */
+const BODY_LAYER_ERROR_PREFIX = 'FST_ERR_CTP_';
+
+function isBodyLayerClientError(error: unknown): error is { code: string; statusCode: number } {
+  if (error === null || typeof error !== 'object') return false;
+  const { code, statusCode } = error as { code?: unknown; statusCode?: unknown };
+  return typeof code === 'string'
+    && code.startsWith(BODY_LAYER_ERROR_PREFIX)
+    && typeof statusCode === 'number'
+    && statusCode >= 400
+    && statusCode < 500;
 }

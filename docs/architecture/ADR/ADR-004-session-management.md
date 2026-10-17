@@ -3,7 +3,7 @@
 **Status:** Blocked<br>
 **Date:** 2026-10-07<br>
 **Decision owners:** Product Owner (`SPEC-AUTH-01` and `SPEC-SEC-02` accountable); Security Owner (`SPEC-AUTH-02` accountable and mandatory co-approver); Privacy/Legal Owner (`SPEC-SEC-02` mandatory co-approver); Architecture Owner (consulted/technical evidence)<br>
-**Exact blocker:** Round 3 makes `SPEC-AUTH-01`, `SPEC-AUTH-02`, and `SPEC-SEC-02` decision-ready but leaves post-verification behavior, session/replay values, known-password-change consequences, and event visibility/disclosure unapproved. Browser/PWA cookie, CSRF, tab-race, privacy/content, and lookup-load evidence is also absent.<br>
+**Exact blocker:** OQ-20 (2026-10-12) removed registration-time verification, so `SPEC-AUTH-01` (post-verification behavior) is superseded pending ratification; `SPEC-AUTH-02` and `SPEC-SEC-02` remain decision-ready but unapproved, and session/replay values, known-password-change consequences, and event visibility/disclosure remain unapproved. Browser/PWA cookie, CSRF, tab-race, privacy/content, and lookup-load evidence is also absent.<br>
 **Related:** [ADR-002](ADR-002-authentication-strategy.md), [Security requirements](../../security/SECURITY-REQUIREMENTS.md)
 
 ## Context
@@ -27,7 +27,7 @@ Use **opaque server-side sessions** backed by PostgreSQL.
 - Enforce both idle and absolute expiry server-side.
 - Proposed initial values are 30-day idle and 90-day absolute lifetime, configurable only within reviewed security bounds.
 - Update last-seen with write throttling to avoid a database write per request.
-- Rotate after login/verification as applicable, password change, privilege/security changes, and periodically on a reviewed cadence.
+- Rotate after login, password change/reset, privilege/security changes, and periodically on a reviewed cadence. Registration issues no session, so no rotation is required at registration.
 - Handle concurrent tabs with an atomic generation change and a tightly bounded prior-token grace strategy. A retired token used outside policy is treated as possible replay and can revoke the session family.
 
 ### Revocation policy
@@ -54,7 +54,7 @@ Capacitor/native transport requires a new security review. It may use the same o
 
 | Blocker | Session/security-history decision still required | Fixed boundary | Required evidence and ADR acceptance condition |
 |---|---|---|---|
-| `SPEC-AUTH-01` | Verification creates a fresh rotated session or creates none; cookie/CSRF/event/multi-tab/uncertain-response behavior for the selected branch | Never promote pre-auth token; OTP remains atomic/single-use | Product + Security approve one branch; fixation, multi-tab and timeout tests pass; ADR-002/flows/tests agree |
+| `SPEC-AUTH-01` | **Superseded by OQ-20 (2026-10-12):** no flow verifies an email address, so no post-verification session exists. Registration returns a generic accepted result and issues no session; a consumed reset challenge revokes every session and issues none | Never promote a pre-auth token; reset OTP remains atomic/single-use; no session from registration or reset | Product + Security ratify the retirement; fixation, multi-tab, timeout-after-consume and reset-invalidation tests pass; ADR-002/flows/tests agree |
 | `SPEC-AUTH-02` | Idle/absolute/recent-auth values, last-seen writes, rotation cadence, prior-token grace/replay containment, known-password-change revocation and account-status enforcement | Opaque digest-only server sessions; reset revokes all; logout semantics fixed | Security + Product approve every value/range; concurrent-tab/replay/load evidence passes; no proposed/default value is treated as policy |
 | `SPEC-SEC-02` | Classify each session/auth/account event as user-visible, operator-only, both, or not retained; approve safe details, delivery/deep link and display/retention | No bearer secret, precise-location claim, internal rule, financial payload or enumeration leak | Product + Security + Privacy/Legal approve event table; API separation, threat/privacy/content/accessibility tests pass |
 
@@ -119,9 +119,9 @@ Rejected categorically because it is non-revocable/long-lived contrary to requir
 - Test current browser cookie limits/behavior, PWA installed mode, and same-origin proxy.
 - Confirm CSRF design for every state-changing content type/method.
 - Load test session lookup and last-seen throttling.
-- Approve every lifetime/recent-auth/rotation/replay/password-change value and all selected-branch behavior under `SPEC-AUTH-01`/`02`.
+- Approve every lifetime/recent-auth/rotation/replay/password-change value and the deterministic no-session outcomes under `SPEC-AUTH-02` (plus the `SPEC-AUTH-01` retirement ratification).
 - Approve the event-by-event owner/operator visibility and safe-detail table under `SPEC-SEC-02`; test output-schema separation and accessibility/content.
-- Retain versioned `AUTH-VRF`, `AUTH-POL`, and `SEC-HIST` evidence with named approvers/date/review trigger; a role label or passing build is insufficient.
+- Retain versioned `AUTH-REG`, `AUTH-RST`, `AUTH-UNV`, `AUTH-POL`, and `SEC-HIST` evidence with named approvers/date/review trigger; a role label or passing build is insufficient. `AUTH-VRF` applies only if an email-verification flow is later approved.
 
 ## Revisit when
 

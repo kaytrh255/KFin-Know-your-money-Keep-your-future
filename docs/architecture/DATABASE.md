@@ -87,18 +87,20 @@ Key fields:
 - `id UUID PK`
 - `email TEXT NOT NULL` — presentation value
 - `email_normalized TEXT NOT NULL UNIQUE`
-- `email_verified_at TIMESTAMPTZ NULL`
+- `email_verified_at TIMESTAMPTZ NULL` — set only by consuming a purpose-`email_verification` challenge, which MVP does not issue (OQ-20)
+- `email_verification_state TEXT NOT NULL` — `unverified | verified`; explicit, never inferred
 - `display_name TEXT NULL` with length limit
 - `locale TEXT NOT NULL`
 - `timezone TEXT NOT NULL` — validated IANA name
 - `base_currency CHAR(3) NOT NULL`
-- `status TEXT NOT NULL` — `pending_verification | active | locked | disabled | deletion_pending` subject to retention policy
+- `status TEXT NOT NULL` — `active | locked | disabled | deletion_pending` subject to retention policy. `pending_verification` is retired by OQ-20: every MVP registration creates an `active` account, because admission is the consumed invitation code and email verification gates nothing. The value MUST NOT be reused to represent an unverified address.
 - `created_at`, `updated_at`, `disabled_at`, `deletion_requested_at`
 - `version`
 
 Constraints:
 
-- Full application access requires `active` + verified email.
+- Full application access requires `active` plus a valid session. Email verification is **not** an MVP access gate (OQ-20); admission is the consumed invitation code (`beta_invitations.consumed_by_user_id`, SEC-AUTH-15).
+- Every account created by MVP registration is `email_verification_state = 'unverified'` with `email_verified_at IS NULL`. The two fields are constrained to agree: `verified` if and only if `email_verified_at IS NOT NULL`. Registration, invitation consumption, login, password reset, password change, and operator/support action MUST NOT set a verified state (SEC-AUTH-19).
 - Changing base currency after financial data exists is rejected in MVP unless a separately specified migration exists.
 - Email is not used as a foreign key.
 
@@ -131,9 +133,9 @@ No plaintext, reversible password, password hint, or password history value is s
 
 ### 4.4 `auth_challenges`
 
-One purpose-bound model for email verification and password reset; magic login is not in scope.
+One purpose-bound model, limited by OQ-20 to **password reset**: MVP issues no other challenge purpose, and registration creates no challenge at all. A future email-verification flow would require a new approved decision, and magic login remains out of scope.
 
-- `id`, `user_id` nullable only for deliberately generic workflows, `purpose`
+- `id`, `user_id` nullable only for deliberately generic workflows, `purpose` — MVP value set `{password_reset}`; `email_verification` is retired and MUST NOT be issued, and an outstanding challenge of another purpose MUST NOT be reinterpreted as a reset challenge
 - `target_digest` or normalized target reference as required without creating enumeration leakage
 - `secret_digest BYTEA NOT NULL`
 - `issued_at`, `expires_at`, `consumed_at`, `superseded_at`
@@ -145,8 +147,9 @@ Constraints:
 
 - Active challenge cannot be used after expiry, consumption, supersession, or attempts exhausted.
 - Digest is purpose/domain separated and protected against offline guessing with a server secret because numeric OTP entropy is low.
-- Resend policy must make which challenge remains active unambiguous.
-- The plaintext OTP/reset secret exists only in request-process memory long enough for immediate provider submission under the proposed design. It is not placed in the ordinary outbox because a digest cannot be reversed and queued plaintext would violate secret-storage requirements.
+- Resend policy must make which challenge remains active unambiguous. MVP keeps at most one active `password_reset` challenge per account; a resend supersedes the previous challenge and MUST NOT reset the account's cumulative failed-verification budget (SEC-AUTH-20).
+- Consuming a `password_reset` challenge atomically replaces the credential, revokes every session, clears the session cookie, invalidates the account's other outstanding challenges, issues no authenticated session, and records a security event (SEC-AUTH-08/16).
+- The plaintext password-reset OTP exists only in request-process memory long enough for immediate provider submission under the proposed design. It is not placed in the ordinary outbox because a digest cannot be reversed and queued plaintext would violate secret-storage requirements.
 
 ### 4.5 `sessions`
 
@@ -608,7 +611,7 @@ Rules:
 - `available_at`, `lease_until`, `attempt_count`, `max_attempts`
 - `status`, `last_error_code`, `created_at`, `completed_at`
 
-Outbox insertion occurs in the domain transaction. Payload must not contain OTP/reset/session plaintext. Ordinary notifications reference protected records or minimum non-secret template input. Secret-bearing OTP/reset messages use the immediate ephemeral-memory delivery path proposed in ADR-002/ADR-008; an asynchronous encrypted-envelope design would require a separate reviewed decision.
+Outbox insertion occurs in the domain transaction. Payload must not contain password-reset OTP, invite or session plaintext. Ordinary notifications reference protected records or minimum non-secret template input. The secret-bearing reset OTP uses the immediate ephemeral-memory delivery path proposed in ADR-002/ADR-008; an asynchronous encrypted-envelope design would require a separate reviewed decision. Registration writes no outbox row at all (OQ-20).
 
 ## 12. Integrity and operational tables
 
@@ -717,6 +720,23 @@ Private Beta is blocked until the deletion map, request channel, cancellation au
 - Backfill jobs are resumable and emit counts, not sensitive row payloads.
 - Destructive migrations require approved backup/restore and rollback/forward plan.
 - Release health checks verify schema compatibility.
+
+### 16.1 Required migration for OQ-20 (specified, not yet implemented)
+
+The authentication-policy revision of 2026-10-12 changes existing data semantics, so the
+implementation change that adopts it MUST include one migration that:
+
+1. maps existing `users.status = 'pending_verification'` rows to `active` — their consumed
+   invitation row is the admission evidence, and no email verification is invented;
+2. sets `email_verification_state = 'verified'` only where `email_verified_at IS NOT NULL`
+   was genuinely produced by a consumed verification challenge, and `'unverified'` otherwise,
+   then adds the agreement constraint;
+3. invalidates outstanding `auth_challenges` rows whose `purpose` is not `password_reset`
+   (attributes `superseded_at`, never reinterprets them as reset challenges);
+4. reports counts only, never addresses or codes, and is rehearsed against a restorable copy.
+
+Until that migration ships, the deployed schema and code still follow the pre-revision flow,
+and no environment may present an unverified address as verified.
 
 ## 17. Backup and recovery
 

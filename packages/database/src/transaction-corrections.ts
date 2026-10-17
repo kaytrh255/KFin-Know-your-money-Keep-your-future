@@ -21,6 +21,7 @@ import {
   assertFinancialAggregateBounds,
 } from './aggregate-bounds.js';
 import { digestCanonicalRequest, signCanonicalPayload, verifyCanonicalPayload } from './canonical.js';
+import { withUserContext } from './context.js';
 import {
   AccountFinancialSerializer,
   StableIdempotentFinancialError,
@@ -261,12 +262,12 @@ export class PostgresTransactionCorrectionService {
       undefined,
       source.current_timezone,
     );
-    await assertCorrectionAggregateProjection(
-      this.pool,
+    await withUserContext(this.pool, ownerUserId, (client) => assertCorrectionAggregateProjection(
+      client,
       ownerUserId,
       source.account_id,
       aggregateProjection(source, source.latest_snapshot_id, replacement),
-    );
+    ));
     return buildPreview('correction', source, replacement, reason, this.previewSigningKey);
   }
 
@@ -277,12 +278,12 @@ export class PostgresTransactionCorrectionService {
   ): Promise<CorrectionPreviewView> {
     const reason = assertReason(input.reason);
     const source = await this.loadPreviewSource(ownerUserId, sourceTransactionId);
-    await assertCorrectionAggregateProjection(
-      this.pool,
+    await withUserContext(this.pool, ownerUserId, (client) => assertCorrectionAggregateProjection(
+      client,
       ownerUserId,
       source.account_id,
       aggregateProjection(source, source.latest_snapshot_id, null),
-    );
+    ));
     return buildPreview('void', source, null, reason, this.previewSigningKey);
   }
 
@@ -512,14 +513,11 @@ export class PostgresTransactionCorrectionService {
 
   async getMonthlyActuals(ownerUserId: string, month: string): Promise<MonthlyActualsView> {
     const { start, end } = monthBounds(month);
-    const account = await this.pool.query<{ currency: string }>(
-      'SELECT currency FROM financial_accounts WHERE user_id = $1',
-      [ownerUserId],
-    );
+    const account = await withUserContext(this.pool, ownerUserId, (client) => client.query<{ currency: string }>('SELECT currency FROM financial_accounts WHERE user_id = $1', [ownerUserId]));
     const accountRow = account.rows[0];
     if (!accountRow) throw unavailableError();
 
-    const result = await this.pool.query<MonthlyRow>(`
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<MonthlyRow>(`
       SELECT category.code AS category_code, txn.kind, txn.balance_effect,
              COALESCE(SUM(txn.amount_minor) FILTER (WHERE txn.status = 'posted'), 0)::numeric AS amount_minor,
              COUNT(*) FILTER (WHERE txn.status = 'posted')::text AS transaction_count,
@@ -540,7 +538,7 @@ export class PostgresTransactionCorrectionService {
         AND txn.occurred_on < $3::date
       GROUP BY category.code, txn.kind, txn.balance_effect
       ORDER BY txn.kind, category.code, txn.balance_effect
-    `, [ownerUserId, start, end]);
+    `, [ownerUserId, start, end]));
 
     let income = 0n;
     let expense = 0n;
@@ -578,7 +576,7 @@ export class PostgresTransactionCorrectionService {
     ownerUserId: string,
     sourceTransactionId: string,
   ): Promise<PreviewSourceRow> {
-    const result = await this.pool.query<PreviewSourceRow>(`
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<PreviewSourceRow>(`
       SELECT txn.id, txn.user_id, txn.account_id, txn.balance_snapshot_id,
              txn.kind, txn.amount_minor, txn.currency,
              txn.occurred_on::text AS occurred_on, txn.balance_effect,
@@ -624,7 +622,7 @@ export class PostgresTransactionCorrectionService {
        AND schedule_occurrence.account_id = txn.account_id
        AND schedule_occurrence.confirmed_transaction_id = txn.id
       WHERE txn.user_id = $1 AND txn.id = $2
-    `, [ownerUserId, sourceTransactionId]);
+    `, [ownerUserId, sourceTransactionId]));
     const source = result.rows[0];
     if (!source) throw unavailableError();
     assertPostedTerminal(source);
@@ -687,10 +685,7 @@ export class PostgresTransactionCorrectionService {
   }
 
   private async resolveOwnedAccountId(ownerUserId: string): Promise<string> {
-    const result = await this.pool.query<{ id: string }>(
-      'SELECT id FROM financial_accounts WHERE user_id = $1',
-      [ownerUserId],
-    );
+    const result = await withUserContext(this.pool, ownerUserId, (client) => client.query<{ id: string }>('SELECT id FROM financial_accounts WHERE user_id = $1', [ownerUserId]));
     const account = result.rows[0];
     if (!account) throw unavailableError();
     return account.id;

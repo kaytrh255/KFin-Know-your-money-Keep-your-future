@@ -192,14 +192,40 @@ These cases establish the safe boundary. Rows marked with `SPEC-REM-01` cannot r
 | PRD-REM-04, PRD-REM-06 | UF-REM-01 | REM-INV-03, REM-INV-04, REM-INV-05 | RCT-09 — retry/crash/concurrency | Retry, lease reclaim, or parallel workers evaluate same stage | One occurrence + stage notification, idempotent completion, and no payment mutation |
 | PRD-REM-05 | UF-REM-01 | REM-INV-10 | RCT-10 — channel boundary | Any normal or catch-up path executes | In-app record only; no payment-reminder email, push, SMS, chat, or permission prompt |
 
+### 3.4.1 Authentication cases introduced by OQ-20 (2026-10-12)
+
+These cases specify the revised flows. They are **SPECIFIED, NOT RUN**; a run records
+environment, specification version, producer, reviewer, expected/observed result and disposition
+in the Approval and Evidence Register.
+
+| Requirement → | Flow → | Invariant → | Test case | Condition | Required result / status |
+|---|---|---|---|---|---|
+| PRD-AUTH-01, PRD-AUTH-02, SEC-AUTH-15/18 | UF-AUTH-01 | Invitation admission only | AUTH-REG-01 — valid invitation, no OTP | Valid unexpired code plus required fields | Account created `active`; **zero** `auth_challenges` rows; zero email/outbox rows; zero sessions; generic accepted response |
+| PRD-AUTH-01, PRD-AUTH-04 | UF-AUTH-01/02 | Immediate usability | AUTH-REG-02 — sign in right after registering | Same credentials immediately after registration | Sign-in succeeds; onboarding is reachable; no verification step intervenes |
+| PRD-AUTH-03, SEC-AUTH-04 | UF-AUTH-01 | Enumeration resistance | AUTH-REG-03 — existing address, expired/consumed/revoked/wrong-email code, unknown code | Each rejection path | Same status, shape and bounded timing; no field or message distinguishes which case applied; no challenge row and no email created |
+| SEC-AUTH-18 | UF-AUTH-01 | No registration email | Registration is committed while the provider is stubbed to fail | Account still created; no delivery attempted; no outbox row; no user-visible failure |
+| SEC-AUTH-19 | UF-AUTH-01 | Honest representation | Registration completes | `email_verified_at` NULL and verification state `unverified`; the response and every screen describe the address as unverified |
+| PRD-AUTH-01, SEC-AUTH-14/15 | UF-AUTH-01 | Atomicity | Validation succeeds but account creation fails mid-transaction | Invitation stays unconsumed; no partial user/credential row; no challenge or email side effect |
+| PRD-AUTH-03, PRD-AUTH-06, SEC-AUTH-04/20 | UF-AUTH-04 | Request privacy | Reset requested for existing, non-existing, ineligible (`locked`/`disabled`/`deletion_pending`) and rate-limited addresses | Identical status, body shape and bounded timing in all four cases; a message is sent only for the eligible existing account |
+| SEC-AUTH-05/20 | UF-AUTH-04 | Expiry | OTP presented after 10 minutes | Generic failure, challenge unusable, safe path to a new code |
+| SEC-AUTH-05/20 | UF-AUTH-04 | Attempt limit | Sixth wrong OTP for one challenge | Generic failure; challenge becomes unusable at the fifth failed attempt; no account state disclosed |
+| SEC-AUTH-20 | UF-AUTH-04 | Cumulative budget | Repeated resends interleaved with wrong OTP attempts | Failed attempts accumulate across superseded challenges; a resend never restores the budget; generic failure at the cap |
+| SEC-AUTH-05/20 | UF-AUTH-04 | Resend and supersession | Resend within and after the 60-second cooldown, and beyond the hourly/daily issuance caps | Exactly one active challenge at a time; the previous one is superseded; over-cap requests answer generically and send nothing |
+| SEC-AUTH-05 | UF-AUTH-04 | Single use and replay | Correct OTP consumed twice, and a superseded/expired OTP replayed | First use succeeds once; replay fails generically; no second credential change |
+| SEC-AUTH-08/16 | UF-AUTH-04 | Session invalidation | Reset completes while the user has several live sessions plus a current browser session | Every session revoked, cookie cleared, other challenges invalidated, security event recorded, no session issued, new password signs in, old password rejected |
+| SEC-AUTH-05/13 | UF-AUTH-04 | Secret containment | Reset issued and completed with full log/outbox/analytics capture | OTP plaintext appears nowhere except the provider payload; no URL, referrer or response carries it |
+| SEC-AUTH-16/19 | UF-AUTH-04 | No verification by side effect | Reset completes | `email_verified_at` remains NULL and the state remains `unverified` |
+| SEC-AUTH-11/19 | UF-AUTH-01/02 | Session-time enforcement | A session is used for an account with an unverified address | Access is granted on status + session alone; no code path treats the address as verified or blocks on it |
+| SEC-AUTH-19 | UF-AUTH-01/04 | Presentation honesty | Registration result, profile/security screens, and API reads of the account | The address is never labelled or implied verified; support tooling cannot mark it verified outside a consumed verification challenge |
+
 ### 3.5 Round 3 blocker closure evidence matrix
 
 The suites below are specifications for evidence, not executed results. A blocker cannot close when only the test design exists. Each retained result must identify specification version, environment/tool/runtime, producer, named reviewer, date, expected/observed result, defects, and disposition in the Approval and Evidence Register.
 
 | Blocker | Mandatory decision-validation suite | Accountable review | Objective closure result | Current result |
 |---|---|---|---|---|
-| `SPEC-AUTH-01` | `AUTH-VRF-01`–`AUTH-VRF-06`: both candidate threat reviews; fresh-identifier/no-session assertion; cookie/CSRF; multi-tab; timeout-after-consume; compact/expanded result flow/content | Product + Security; QA evidence review | Exactly one branch is approved; selected branch passes all applicable cases; rejected branch is absent from source contracts | NOT RUN — OPEN |
-| `SPEC-AUTH-02` | `AUTH-POL-01`–`AUTH-POL-12`: each invitation/password/OTP/reset/login/session/rotation/replay/password-change boundary, Argon2 benchmark, provider failure and abuse-cost tests | Security + Product; Architecture/UX/Operations/QA consultation | Every dimension has approved value/range/change owner and exact pass/fail outcomes; evidence covers lower/upper/expiry/replay/failure boundaries | NOT RUN — OPEN |
+| `SPEC-AUTH-01` | **Superseded by OQ-20 (2026-10-12):** the verification branch it decides on no longer exists. Replacement evidence is `AUTH-REG-01`–`06` (registration never issues a session or a challenge) and `AUTH-RST-01`–`12` (reset revokes every session and issues none), so `AUTH-VRF-01`–`06` apply only if a future verification flow is approved | Product + Security; QA evidence review | Ratification of the retirement is recorded; the register→sign-in and reset→sign-in paths pass fixation, multi-tab and timeout-after-consume checks; no contract offers an alternative outcome | SUPERSEDED — awaiting Product + Security ratification |
+| `SPEC-AUTH-02` | `AUTH-POL-01`–`AUTH-POL-12`: each invitation/password/reset-OTP/reset/login/session/rotation/replay/password-change boundary, the `AUTH-RST` expiry/attempt/cumulative-budget/resend/issuance bounds, Argon2 benchmark, provider failure and abuse-cost tests | Security + Product; Architecture/UX/Operations/QA consultation | Every dimension has approved value/range/change owner and exact pass/fail outcomes; evidence covers lower/upper/expiry/replay/failure boundaries | NOT RUN — OPEN |
 | `SPEC-FIN-01` | Issue #1 policy review plus H–J, `FIN-COR-01`–`10`, `FIN-LINK-01`–`06`, and `FIN-OCC-01`–`04`: void/replacement, same/prior/cross-segment, exclusive occurrence/debt/purchase claims, terminology, report periods, idempotent retry and stale state | Product + Financial Integrity + Data + Security; Architecture for cross-table enforcement | Owners approve `snapshot_correction.v1`; one effective result/compatible owning claim only; current-balance/history constraints hold; all supported/rejected transitions and links are exact | SPECIFIED, NOT RUN — OPEN |
 | `SPEC-FIN-02` | ADR-009 review plus `FIN-RACE-01`–`FIN-RACE-08`: account-row lock/version, forced orders, exclusive-claim race, idempotency, exact SQLSTATE/bounds, idle-confirmed rollback, lock release, deterministic clean reuse, unconfirmed-cleanup eviction/no-retry, commit uncertainty and bypass | Data + Architecture + Security + Financial Integrity | Owners approve `account_financial_serialization.v1`; real-PostgreSQL evidence on Supabase proves one winner/stale loser, exclusive claim, idle-confirmed rollback before response/retry/check-in, fresh transaction per permitted retry, deterministic clean reuse, eviction/no-retry after unconfirmed cleanup, no duplicate/third retry and same-key recovery | SPECIFIED, NOT RUN — OPEN |
 | `SPEC-DEBT-01` | DCT-08/09 plus `DEBT-HIST-01`–`DEBT-HIST-06`: later payment, later adjustment, date reorder, void, missing pre-state and partial failure | Product + Financial Integrity + Data | Approved policy yields exact safe result or explicit rejection for every branch; no inferred component/outstanding in state or preview | NOT RUN — OPEN |
@@ -284,7 +310,8 @@ Run against the supported PostgreSQL version in disposable isolated databases.
 - Concurrent snapshot creation and transaction creation serialize/fail safely; no record attaches to an ambiguous segment.
 - Historical/current effect, old/latest segment, void/correction, and same-day inclusion constraints produce one explainable balance.
 - Concurrent confirm/payment/savings update/purchase completion/idempotency requests produce one valid result and one goal deduction.
-- Session rotation/revocation, invitation consumption/account creation, and challenge consumption are race-safe.
+- Session rotation/revocation, invitation consumption/account creation, and reset-challenge consumption (including the all-session revocation it performs) are race-safe.
+- Registration produces no `auth_challenges` row and no email/outbox row, and leaves `email_verified_at` NULL with the explicit unverified state.
 - Deletion request/cancel/purge claiming and restore-tombstone behavior are race-safe and idempotent.
 - Outbox insertion is atomic with applicable domain writes.
 - Worker lease/crash/reclaim/retry/dead-letter and duplicate execution are safe.
@@ -316,11 +343,12 @@ Security automation and manual review map directly to [the threat model](../secu
 #### Authentication and abuse
 
 - Credential-stuffing/brute-force patterns across IP/account/global dimensions.
-- Registration/login/reset/OTP/invitation enumeration content/status/timing/rate behavior.
+- Registration/login/reset-request/reset-verify/invitation enumeration content/status/timing/rate behavior, including identical reset-request answers for existing, non-existing, ineligible and rate-limited addresses.
 - Invitation expiry, wrong-email binding, revoke/use/replay, parallel consumption, digest-only storage, atomic account creation, and rejection of registration without a valid code even if the email appears in any operator dataset; no email-allowlist bypass.
-- OTP/reset expiry, attempt, resend, supersession, replay, concurrency, immediate secret-delivery uncertainty, and provider failures; verify no secret enters the ordinary outbox.
+- Reset-OTP expiry, per-challenge attempts, the cumulative cross-challenge budget, resend supersession without budget reset, replay, concurrency, immediate secret-delivery uncertainty, and provider failures; verify no secret enters the ordinary outbox, logs, or analytics, and that registration sends no OTP at all.
 - Argon2id parameter benchmark and maximum concurrent hashing behavior.
-- Password reset/change session invalidation.
+- Password reset revokes every session and issues none, invalidates the account's other challenges, and requires explicit sign-in; password change follows the approved current/other-session policy.
+- Unverified-address representation: no path sets a verified state, and no API response or screen presents an unverified address as verified.
 
 #### Session, browser, and client
 
@@ -359,9 +387,9 @@ Playwright (or selected equivalent) runs through the deployed browser/UI/API/dat
 
 Critical journeys:
 
-1. Single-use invite → registration/atomic consume → OTP verify → selected post-verification sign-in/session behavior → Vietnamese-first onboarding → aggregate account/initial snapshot.
+1. Single-use invite → registration/atomic consume with no OTP, no email and no session → sign in with the chosen credentials → Vietnamese-first onboarding → aggregate account/initial snapshot.
 2. Sign in → close/reopen context → resume session → logout/replay rejected.
-3. Forgot/reset password → all old sessions rejected.
+3. Forgot/reset password by emailed OTP → OTP expiry/attempt-exhaustion/resend paths behave generically → new password accepted → all old sessions rejected and no session issued → explicit sign-in.
 4. Global Add current expense on compact viewport → retry after simulated timeout → one current-impact record.
 5. Add pre-snapshot historical expense → selected month changes but current balance remains fixed and labelled.
 6. After `snapshot_correction.v1` is approved and the `SPEC-FIN-02` mechanism is evidenced, race a correction with a manual known-balance snapshot → exactly one winner; losing snapshot returns `FIN_SNAPSHOT_STALE_STATE` or losing correction returns `FIN_CORRECTION_STALE_STATE`, with no auto-reanchor/partial effect.
@@ -603,7 +631,7 @@ Round 3 defines the required suites in §3.5, but no suite has been executed and
 
 | Priority | Blocker(s) | Test-strategy exit condition | Status |
 |---|---|---|---|
-| AUTH | `SPEC-AUTH-01`, `SPEC-AUTH-02` | Approved outcomes/values plus complete applicable `AUTH-VRF` and `AUTH-POL` evidence | OPEN |
+| AUTH | `SPEC-AUTH-02` (and the `SPEC-AUTH-01` retirement under OQ-20) | Approved reset-OTP/invitation/password/session values plus complete applicable `AUTH-REG`, `AUTH-RST`, `AUTH-UNV` and `AUTH-POL` evidence; `AUTH-VRF` only if a verification flow is later approved | OPEN |
 | FIN | `SPEC-FIN-01`, `SPEC-FIN-02` | Owners approve `snapshot_correction.v1`, exclusive-domain-claim matrix, occurrence terminology, and `account_financial_serialization.v1`; H–J/`FIN-COR`/`FIN-LINK`/`FIN-OCC` remain reproducible; real-PostgreSQL `FIN-RACE-01`–`08` evidence on Supabase proves ADR-009, idle-confirmed cleanup, deterministic clean reuse, and eviction/no-retry for unconfirmed cleanup | OPEN |
 | DEBT | `SPEC-DEBT-01` | DCT-08/09 and `DEBT-HIST` outcomes are exact and preserve no-inference | OPEN |
 | SCHEDULE | `SPEC-SCH-01` | `SCH-BND` results cover all approved boundary/edit/race choices | OPEN |

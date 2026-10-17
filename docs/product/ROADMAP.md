@@ -62,7 +62,7 @@
 
 **Candidate deliverables after approval**
 
-- Invite/registration and email verification.
+- Invite-admitted registration without email verification (OQ-20), plus password reset by emailed OTP.
 - Login, persistent opaque sessions, logout, session management.
 - Forgot/reset/change password.
 - Security history and abuse protections.

@@ -181,7 +181,7 @@ Rules:
 - Focus ring: at least 2 px visible outline with offset against both canvas and surface.
 - Prefix/suffix for currency is visually clear but not part of the editable amount.
 - Password controls support manager/autofill, reveal action, and visible policy.
-- OTP may use one semantic input styled as cells; paste and autofill must work.
+- The password-reset OTP may use one semantic input styled as cells; paste and autofill (`autocomplete="one-time-code"`) must work. MVP has no email-verification OTP input (OQ-20).
 
 ### 4.3 Selectors
 

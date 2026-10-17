@@ -9,7 +9,10 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # Pinned: the PGDG apt repository used by the backup drill and the
+    # postgres:17 service must match the runner image. `ubuntu-latest` migrates
+    # to Ubuntu 26 on 2026-10-19.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
@@ -27,6 +30,13 @@ jobs:
           --health-retries 10
     env:
       TEST_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_test
+      TEST_APP_DATABASE_URL: postgresql://kfin_app:kfin_synthetic_app_only@127.0.0.1:5432/kfin_test
+      TEST_MIGRATION_DATABASE_URL: postgresql://kfin_migrator:kfin_synthetic_migrator_only@127.0.0.1:5432/kfin_test
+      TEST_OPERATOR_DATABASE_URL: postgresql://kfin_operator:kfin_synthetic_operator_only@127.0.0.1:5432/kfin_test
+      ROLE_ADMIN_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_test
+      KFIN_APP_PASSWORD: kfin_synthetic_app_only
+      KFIN_MIGRATOR_PASSWORD: kfin_synthetic_migrator_only
+      KFIN_OPERATOR_PASSWORD: kfin_synthetic_operator_only
       KFIN_INTEGRATION_TARGET: non-production
     steps:
       - name: Check out source
@@ -41,13 +51,153 @@ jobs:
         run: corepack enable
       - name: Install locked dependencies
         run: corepack pnpm install --frozen-lockfile
+      - name: Provision least-privilege database roles
+        run: corepack pnpm run db:provision-roles
+      - name: Apply migrations as the migration role
+        run: |
+          MIGRATION_DATABASE_URL="$TEST_MIGRATION_DATABASE_URL" DATABASE_SSL_MODE=disable corepack pnpm run db:migrate
+      - name: Verify the application role cannot administer the database
+        run: DATABASE_URL="$TEST_APP_DATABASE_URL" corepack pnpm run db:verify-app-role
       - name: Validate evidence harness
         run: |
           corepack pnpm run evidence:check
           corepack pnpm run evidence:test
+      - name: Enforce the static SQL guard
+        run: |
+          corepack pnpm run sqlguard
+          corepack pnpm run sqlguard:test
       - name: Typecheck application and tests
         run: corepack pnpm run typecheck
+      - name: Build the production artifact
+        run: corepack pnpm run build
+      - name: Smoke test the production artifact
+        run: |
+          DATABASE_URL="$TEST_APP_DATABASE_URL" \
+          DATABASE_SSL_MODE=disable \
+          AUTH_SECRET="$(openssl rand -hex 32)" \
+          FINANCIAL_PREVIEW_SIGNING_KEY="$(openssl rand -hex 32)" \
+          IDEMPOTENCY_RETENTION_HOURS=24 \
+            corepack pnpm run smoke:production
+      - name: Run the artifact behind a TLS-terminating proxy
+        run: |
+          DATABASE_URL="$TEST_APP_DATABASE_URL" \
+          DATABASE_SSL_MODE=disable \
+          AUTH_SECRET="$(openssl rand -hex 32)" \
+          FINANCIAL_PREVIEW_SIGNING_KEY="$(openssl rand -hex 32)" \
+          IDEMPOTENCY_RETENTION_HOURS=24 \
+          OPERATOR_DATABASE_URL="$TEST_OPERATOR_DATABASE_URL" \
+            corepack pnpm run smoke:https
+      - name: Verify a production-only install of the artifact
+        run: |
+          DATABASE_URL="$TEST_APP_DATABASE_URL" \
+          DATABASE_SSL_MODE=disable \
+          AUTH_SECRET="$(openssl rand -hex 32)" \
+          FINANCIAL_PREVIEW_SIGNING_KEY="$(openssl rand -hex 32)" \
+          IDEMPOTENCY_RETENTION_HOURS=24 \
+            corepack pnpm run verify:production-install
       - name: Run credential-free unit and API tests
         run: corepack pnpm run test:unit
       - name: Run isolated real-PostgreSQL integration test
         run: corepack pnpm run test:integration
+      # The service container is postgres:17, so a newer client is required;
+      # Ubuntu's bundled pg_dump (16) refuses to dump a 17 server.
+      - name: Install PostgreSQL 17 client tools
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+      - name: Backup and restore drill
+        run: |
+          ADMIN_DATABASE_URL="$TEST_DATABASE_URL" \
+          MIGRATION_DATABASE_URL="$TEST_MIGRATION_DATABASE_URL" \
+          APP_DATABASE_URL="$TEST_APP_DATABASE_URL" \
+          DATABASE_SSL_MODE=disable \
+          PG_DUMP=/usr/lib/postgresql/17/bin/pg_dump \
+          PG_RESTORE=/usr/lib/postgresql/17/bin/pg_restore \
+          PSQL=/usr/lib/postgresql/17/bin/psql \
+            corepack pnpm run backup:drill
+
+  # The deployable unit is the container image. It is built and started here so
+  # the artifact is proven beyond the repository's own checkout: production-only
+  # dependencies, no `tsx`, client and API on one origin.
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_DB: kfin_image
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: kfin_synthetic_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d kfin_image"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_image
+      TEST_APP_DATABASE_URL: postgresql://kfin_app:kfin_synthetic_app_only@127.0.0.1:5432/kfin_image
+      TEST_MIGRATION_DATABASE_URL: postgresql://kfin_migrator:kfin_synthetic_migrator_only@127.0.0.1:5432/kfin_image
+      ROLE_ADMIN_DATABASE_URL: postgresql://postgres:kfin_synthetic_test_only@127.0.0.1:5432/kfin_image
+      KFIN_APP_PASSWORD: kfin_synthetic_app_only
+      KFIN_MIGRATOR_PASSWORD: kfin_synthetic_migrator_only
+      KFIN_OPERATOR_PASSWORD: kfin_synthetic_operator_only
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+      - name: Enable pinned pnpm
+        run: corepack enable
+      - name: Install locked dependencies
+        run: corepack pnpm install --frozen-lockfile
+      - name: Provision least-privilege database roles
+        run: corepack pnpm run db:provision-roles
+      - name: Build the runtime image
+        run: docker build --build-arg GIT_COMMIT="$GITHUB_SHA" --tag kfin-runtime:ci .
+      - name: Apply migrations with the image artifact
+        run: |
+          docker run --rm --network host \
+            -e MIGRATION_DATABASE_URL="$TEST_MIGRATION_DATABASE_URL" \
+            -e DATABASE_SSL_MODE=disable \
+            kfin-runtime:ci node migrate.bundle.mjs
+      - name: Start the image and check the client and API
+        run: |
+          set -euo pipefail
+          docker run --detach --name kfin-runtime --network host \
+            -e DATABASE_URL="$TEST_APP_DATABASE_URL" \
+            -e DATABASE_SSL_MODE=disable \
+            -e AUTH_COOKIE_SECURE=true \
+            -e AUTH_SECRET="$(openssl rand -hex 32)" \
+            -e FINANCIAL_PREVIEW_SIGNING_KEY="$(openssl rand -hex 32)" \
+            -e IDEMPOTENCY_RETENTION_HOURS=24 \
+            -e EMAIL_DELIVERY_ADAPTER=resend \
+            -e RESEND_API_KEY=re_ci_not_a_real_key \
+            -e EMAIL_FROM_ADDRESS="KFin CI <ci@kfin.invalid>" \
+            -e EMAIL_PROVIDER_BASE_URL=http://127.0.0.1:1 \
+            kfin-runtime:ci
+          trap 'docker logs kfin-runtime || true; docker stop kfin-runtime || true' ERR
+          ready=no
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3000/health/ready >/dev/null 2>&1; then ready=yes; break; fi
+            sleep 2
+          done
+          test "$ready" = yes
+          curl -fsS http://127.0.0.1:3000/health/ready
+          curl -fsS http://127.0.0.1:3000/ | grep -q 'id="app"'
+          curl -fsSI http://127.0.0.1:3000/src/main.js | grep -qi 'content-type: text/javascript'
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi 'strict-transport-security: max-age='
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi "content-security-policy: .*frame-ancestors 'none'"
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi 'x-content-type-options: nosniff'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/v1/auth/me)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/v1/does-not-exist)" = 404
+          docker run --rm --entrypoint sh kfin-runtime:ci -c 'test ! -e node_modules/tsx && test ! -e node_modules/.bin/tsx'
+          docker stop kfin-runtime

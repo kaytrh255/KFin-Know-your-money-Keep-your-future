@@ -1,0 +1,38 @@
+# Rehearsal overlay: runs the staging topology with CI-generated secrets and a
+# locally issued certificate, so CI exercises exactly the same Compose stack the
+# staging host runs. Never used on a real host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.database.yml \
+#                  -f docker-compose.rehearsal.yml up -d
+#
+# The kfin service is built from the repository Dockerfile instead of pulled,
+# and the certificate comes from Caddy's internal CA (exported afterwards and
+# passed to the smoke test as STAGING_CA_FILE, so TLS is verified, not skipped).
+#
+# The database comes from docker-compose.database.yml; the CI job supplies the
+# same variables a real staging.env would.
+
+services:
+  kfin:
+    image: kfin-runtime:rehearsal
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-rehearsal}
+    environment:
+      # Generated per run by the workflow; nothing is committed.
+      AUTH_SECRET: ${REHEARSAL_AUTH_SECRET:?set REHEARSAL_AUTH_SECRET}
+      FINANCIAL_PREVIEW_SIGNING_KEY: ${REHEARSAL_PREVIEW_KEY:?set REHEARSAL_PREVIEW_KEY}
+      IDEMPOTENCY_RETENTION_HOURS: "24"
+      AUTH_COOKIE_SECURE: "true"
+      # No mail provider yet: staging mode is the explicit, tested exception.
+      EMAIL_DELIVERY_ADAPTER: none
+      STAGING_MODE: "true"
+      # Short, but not zero: the smoke test asserts the header end to end.
+      HSTS_MAX_AGE_SECONDS: "300"
+
+  caddy:
+    environment:
+      STAGING_SITE_ADDRESS: localhost
+      STAGING_TLS_ARGS: internal

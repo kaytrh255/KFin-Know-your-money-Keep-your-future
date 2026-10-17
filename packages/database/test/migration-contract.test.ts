@@ -157,6 +157,81 @@ describe('trusted private beta access migration', () => {
   });
 });
 
+const otpResetMigrationUrl = new URL(
+  '../migrations/0007_otp_only_for_password_reset.sql',
+  import.meta.url,
+);
+
+describe('OTP reserved for password reset migration (OQ-20, 2026-10-12)', () => {
+  it('retires pending_verification and makes the verification state explicit', async () => {
+    const sql = await readFile(otpResetMigrationUrl, 'utf8');
+    expect(sql).toContain("status IN ('active', 'locked', 'disabled', 'deletion_pending')");
+    expect(sql).not.toMatch(/ADD CONSTRAINT users_status_check[\s\S]*?pending_verification/);
+    expect(sql).toContain('ALTER TABLE users ADD COLUMN email_verification_state TEXT;');
+    expect(sql).toContain('ALTER TABLE users ALTER COLUMN email_verification_state SET NOT NULL');
+    expect(sql).toContain('users_email_verification_state_ck');
+    // The two representations may never disagree, so no future caller can claim a
+    // verification that never happened (SEC-AUTH-19).
+    expect(sql).toContain("(email_verification_state = 'verified') = (email_verified_at IS NOT NULL)");
+  });
+
+  it('backfills from evidence alone: unverified unless a verification instant exists', async () => {
+    const sql = await readFile(otpResetMigrationUrl, 'utf8');
+    expect(sql).toContain("WHEN email_verified_at IS NULL THEN 'unverified'");
+    expect(sql).toContain("ELSE 'verified'");
+    // A pending account becomes usable, and the invitation stays the admission record.
+    expect(sql).toContain("UPDATE users SET status = 'active' WHERE status = 'pending_verification'");
+    expect(sql).not.toMatch(/SET\s+email_verified_at\s*=/);
+    expect(sql).not.toMatch(/UPDATE beta_invitations/);
+  });
+
+  it('supersedes outstanding verification challenges instead of re-purposing them', async () => {
+    const sql = await readFile(otpResetMigrationUrl, 'utf8');
+    expect(sql).toContain('SET superseded_at = clock_timestamp()');
+    expect(sql).toContain("WHERE purpose <> 'password_reset'");
+    // A verification code must never become a reset code, and history is append-only.
+    expect(sql).not.toMatch(/SET[^;]*\bpurpose\s*=/i);
+    expect(sql).not.toMatch(/DELETE\s+FROM\s+auth_challenges/i);
+    expect(sql).not.toMatch(/DROP\s+TRIGGER\s+auth_challenges_guard_trg/i);
+  });
+
+  it('refuses to issue any new challenge that is not a password reset', async () => {
+    const sql = await readFile(otpResetMigrationUrl, 'utf8');
+    expect(sql).toContain('CREATE FUNCTION kfin_auth_challenges_issuance_guard()');
+    expect(sql).toContain('CREATE TRIGGER auth_challenges_issuance_guard_trg');
+    expect(sql).toContain('BEFORE INSERT ON auth_challenges');
+    expect(sql).toContain("IF NEW.purpose <> 'password_reset' THEN");
+    expect(sql).toContain('OTP challenges are reserved for password reset');
+    expect(sql).toContain("ERRCODE = '23514'");
+  });
+
+  it('stays inside the migration runner budgets: bounded DDL, no table rewrite', async () => {
+    const sql = await readFile(otpResetMigrationUrl, 'utf8');
+    const statements = sql
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('--'))
+      .join('\n');
+    expect(statements).not.toMatch(/\bVACUUM\b|\bCLUSTER\b|\bREINDEX\b|CREATE INDEX CONCURRENTLY/i);
+    expect(statements.length).toBeLessThan(8_000);
+    // Every column addition is nullable at add time; the backfill and the SET NOT NULL
+    // run separately, so no statement has to hold a lock while it rewrites the table.
+    const additions = statements.match(/ADD COLUMN[^;]*/gi) ?? [];
+    expect(additions.length).toBeGreaterThan(0);
+    for (const addition of additions) {
+      expect(addition).not.toMatch(/NOT NULL DEFAULT (?!')/i);
+      expect(addition).not.toMatch(/DEFAULT.*(nextval|gen_random_uuid|clock_timestamp|now)\b/i);
+    }
+  });
+
+  it('is frozen: migration 0007 keeps the exact reviewed checksum', async () => {
+    const { createHash } = await import('node:crypto');
+    const sql = await readFile(otpResetMigrationUrl, 'utf8');
+    expect(createHash('sha256').update(sql, 'utf8').digest('hex')).toBe(
+      'fc97f6974f718b5deba7daeada0ef017a04635531513b48b4a40365f18905cc4',
+    );
+  });
+});
+
 const savingsMigrationUrl = new URL('../migrations/0005_savings_goals.sql', import.meta.url);
 const savingsHistoryChainMigrationUrl = new URL(
   '../migrations/0006_savings_history_chain.sql',
