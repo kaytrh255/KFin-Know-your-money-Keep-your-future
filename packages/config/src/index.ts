@@ -155,6 +155,11 @@ const environmentSchema = z.object({
   // HSTS is only emitted in production, after TLS termination. `0` disables it
   // (for example while a staging hostname is still plain HTTP behind a tunnel).
   HSTS_MAX_AGE_SECONDS: z.coerce.number().int().min(0).max(630_720_000).default(31_536_000),
+  // Staging runs the production build and the production guards, with one
+  // explicit exception: no mail provider is configured yet, so password reset
+  // cannot complete. This is opt-in, never a default, and it does not relax any
+  // other production refusal (secure cookies, secrets, static artifact).
+  STAGING_MODE: z.string().default('false').transform((value) => value === 'true'),
 }).superRefine((value, ctx) => {
   if (value.EMAIL_DELIVERY_ADAPTER === 'file') {
     if (value.NODE_ENV === 'production') {
@@ -191,11 +196,12 @@ const environmentSchema = z.object({
   // A production deployment that cannot deliver mail cannot run the Private Beta:
   // invitation, reset and security notices all depend on it. Refusing the boot is
   // the only way this gap cannot silently return.
-  if (value.NODE_ENV === 'production' && value.EMAIL_DELIVERY_ADAPTER !== 'resend') {
+  if (value.NODE_ENV === 'production' && value.EMAIL_DELIVERY_ADAPTER !== 'resend' && !value.STAGING_MODE) {
     ctx.addIssue({
       code: 'custom',
       path: ['EMAIL_DELIVERY_ADAPTER'],
-      message: 'must be "resend" when NODE_ENV=production: the beta requires real email delivery',
+      message: 'must be "resend" when NODE_ENV=production: the beta requires real email delivery '
+        + '(set STAGING_MODE=true only on a staging host that is not serving beta users)',
     });
   }
   // A clear-cookie session flag in production would put the bearer token on the
@@ -237,6 +243,8 @@ export interface ApiConfig {
   readonly trustedProxies: readonly string[];
   /** HSTS lifetime sent in production; `0` disables the header. */
   readonly hstsMaxAgeSeconds: number;
+  /** Staging host without a mail provider; never a production default. */
+  readonly stagingMode: boolean;
 }
 
 export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): ApiConfig {
@@ -273,6 +281,7 @@ export function loadApiConfig(environment: NodeJS.ProcessEnv = process.env): Api
       parsed.data.TRUST_PROXY.split(',').map((entry) => entry.trim()).filter((entry) => entry !== ''),
     ),
     hstsMaxAgeSeconds: parsed.data.HSTS_MAX_AGE_SECONDS,
+    stagingMode: parsed.data.STAGING_MODE,
   });
 }
 

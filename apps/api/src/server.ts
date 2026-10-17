@@ -94,6 +94,14 @@ const app = await buildApp({
   ...(staticSite ? { staticSite } : {}),
 });
 
+if (config.stagingMode && config.emailDeliveryAdapter !== 'resend') {
+  app.log.warn(
+    `STAGING MODE: email adapter is "${config.emailDeliveryAdapter}", so password reset cannot complete. `
+    + 'Registration, sign-in and every financial route are unaffected. '
+    + 'This process must never serve beta users.',
+  );
+}
+
 if (config.environment === 'production' && config.trustedProxies.length === 0) {
   // Not fatal: a directly reachable API is a valid (if unusual) deployment.
   // But behind a proxy the audit trail would record the proxy address.

@@ -162,6 +162,37 @@ describe('configuration', () => {
     })).toThrow(/EMAIL_DELIVERY_ADAPTER/);
   });
 
+  it('refuses a mail-less production boot unless staging mode is explicit', () => {
+    const base = {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+      EMAIL_DELIVERY_ADAPTER: 'none',
+    } as const;
+    expect(() => loadApiConfig({ ...base })).toThrow(/EMAIL_DELIVERY_ADAPTER/);
+
+    const staging = loadApiConfig({ ...base, STAGING_MODE: 'true' });
+    expect(staging.stagingMode).toBe(true);
+    expect(staging.emailDeliveryAdapter).toBe('none');
+    // The exception is scoped to mail: every other production guard still holds.
+    expect(() => loadApiConfig({ ...base, STAGING_MODE: 'true', AUTH_COOKIE_SECURE: 'false' }))
+      .toThrow(/AUTH_COOKIE_SECURE/);
+    expect(() => loadApiConfig({ ...base, STAGING_MODE: 'true', AUTH_ALLOWED_ORIGINS: 'https://x.example' }))
+      .toThrow(/AUTH_ALLOWED_ORIGINS/);
+  });
+
+  it('does not enable staging mode by default', () => {
+    const config = loadApiConfig({
+      DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
+      IDEMPOTENCY_RETENTION_HOURS: '24',
+      FINANCIAL_PREVIEW_SIGNING_KEY: 'ab'.repeat(32),
+      AUTH_SECRET,
+    });
+    expect(config.stagingMode).toBe(false);
+  });
+
   it('trusts no proxy unless one is named explicitly', () => {
     const config = loadApiConfig({
       DATABASE_URL: 'postgresql://user:secret@database.invalid/kfin',
